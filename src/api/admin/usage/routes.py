@@ -800,3 +800,184 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "tiers": tiers,
             "source": pricing_source,  # 定价来源: 'provider' 或 'global'
         }
+
+
+# ==================== 缓存亲和性分析 ====================
+
+
+@router.get("/cache-affinity/ttl-analysis")
+async def analyze_cache_affinity_ttl(
+    request: Request,
+    user_id: Optional[str] = Query(None, description="指定用户 ID"),
+    api_key_id: Optional[str] = Query(None, description="指定 API Key ID"),
+    hours: int = Query(168, ge=1, le=720, description="分析最近多少小时的数据"),
+    db: Session = Depends(get_db),
+):
+    """
+    分析用户请求间隔分布，推荐合适的缓存亲和性 TTL。
+
+    通过分析同一用户连续请求之间的时间间隔，判断用户的使用模式：
+    - 高频用户（间隔短）：5 分钟 TTL 足够
+    - 中频用户：15-30 分钟 TTL
+    - 低频用户（间隔长）：需要 60 分钟 TTL
+    """
+    adapter = CacheAffinityTTLAnalysisAdapter(
+        user_id=user_id,
+        api_key_id=api_key_id,
+        hours=hours,
+    )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.get("/cache-affinity/hit-analysis")
+async def analyze_cache_hit(
+    request: Request,
+    user_id: Optional[str] = Query(None, description="指定用户 ID"),
+    api_key_id: Optional[str] = Query(None, description="指定 API Key ID"),
+    hours: int = Query(168, ge=1, le=720, description="分析最近多少小时的数据"),
+    db: Session = Depends(get_db),
+):
+    """
+    分析缓存命中情况。
+
+    返回缓存命中率、节省的费用等统计信息。
+    """
+    adapter = CacheHitAnalysisAdapter(
+        user_id=user_id,
+        api_key_id=api_key_id,
+        hours=hours,
+    )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+class CacheAffinityTTLAnalysisAdapter(AdminApiAdapter):
+    """缓存亲和性 TTL 分析适配器"""
+
+    def __init__(
+        self,
+        user_id: Optional[str],
+        api_key_id: Optional[str],
+        hours: int,
+    ):
+        self.user_id = user_id
+        self.api_key_id = api_key_id
+        self.hours = hours
+
+    async def handle(self, context):  # type: ignore[override]
+        db = context.db
+
+        result = UsageService.analyze_cache_affinity_ttl(
+            db=db,
+            user_id=self.user_id,
+            api_key_id=self.api_key_id,
+            hours=self.hours,
+        )
+
+        context.add_audit_metadata(
+            action="cache_affinity_ttl_analysis",
+            user_id=self.user_id,
+            api_key_id=self.api_key_id,
+            hours=self.hours,
+            total_users_analyzed=result.get("total_users_analyzed", 0),
+        )
+
+        return result
+
+
+class CacheHitAnalysisAdapter(AdminApiAdapter):
+    """缓存命中分析适配器"""
+
+    def __init__(
+        self,
+        user_id: Optional[str],
+        api_key_id: Optional[str],
+        hours: int,
+    ):
+        self.user_id = user_id
+        self.api_key_id = api_key_id
+        self.hours = hours
+
+    async def handle(self, context):  # type: ignore[override]
+        db = context.db
+
+        result = UsageService.get_cache_hit_analysis(
+            db=db,
+            user_id=self.user_id,
+            api_key_id=self.api_key_id,
+            hours=self.hours,
+        )
+
+        context.add_audit_metadata(
+            action="cache_hit_analysis",
+            user_id=self.user_id,
+            api_key_id=self.api_key_id,
+            hours=self.hours,
+        )
+
+        return result
+
+
+@router.get("/cache-affinity/interval-timeline")
+async def get_interval_timeline(
+    request: Request,
+    hours: int = Query(168, ge=1, le=720, description="分析最近多少小时的数据"),
+    limit: int = Query(1000, ge=100, le=5000, description="最大返回数据点数量"),
+    user_id: Optional[str] = Query(None, description="指定用户 ID"),
+    include_user_info: bool = Query(False, description="是否包含用户信息（用于管理员多用户视图）"),
+    db: Session = Depends(get_db),
+):
+    """
+    获取请求间隔时间线数据，用于散点图展示。
+
+    返回每个请求的时间点和与上一个请求的间隔（分钟），
+    可用于可视化用户请求模式。
+
+    当 include_user_info=true 且未指定 user_id 时，返回数据会包含:
+    - points 中每个点包含 user_id 字段
+    - users 字段包含 user_id -> username 的映射
+    """
+    adapter = IntervalTimelineAdapter(
+        hours=hours,
+        limit=limit,
+        user_id=user_id,
+        include_user_info=include_user_info,
+    )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+class IntervalTimelineAdapter(AdminApiAdapter):
+    """请求间隔时间线适配器"""
+
+    def __init__(
+        self,
+        hours: int,
+        limit: int,
+        user_id: Optional[str] = None,
+        include_user_info: bool = False,
+    ):
+        self.hours = hours
+        self.limit = limit
+        self.user_id = user_id
+        self.include_user_info = include_user_info
+
+    async def handle(self, context):  # type: ignore[override]
+        db = context.db
+
+        result = UsageService.get_interval_timeline(
+            db=db,
+            hours=self.hours,
+            limit=self.limit,
+            user_id=self.user_id,
+            include_user_info=self.include_user_info,
+        )
+
+        context.add_audit_metadata(
+            action="interval_timeline",
+            hours=self.hours,
+            limit=self.limit,
+            user_id=self.user_id,
+            include_user_info=self.include_user_info,
+            total_points=result.get("total_points", 0),
+        )
+
+        return result

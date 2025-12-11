@@ -67,12 +67,13 @@ class ErrorClassifier:
 
     # 表示客户端请求错误的关键词（不区分大小写）
     # 这些错误是由用户请求本身导致的，换 Provider 也无济于事
+    # 注意：标准 API 返回的 error.type 已在 CLIENT_ERROR_TYPES 中处理
+    # 这里主要用于匹配非标准格式或第三方代理的错误消息
     CLIENT_ERROR_PATTERNS: Tuple[str, ...] = (
         "could not process image",  # 图片处理失败
         "image too large",  # 图片过大
         "invalid image",  # 无效图片
         "unsupported image",  # 不支持的图片格式
-        "invalid_request_error",  # OpenAI/Claude 通用客户端错误类型
         "content_policy_violation",  # 内容违规
         "invalid_api_key",  # 无效的 API Key（不同于认证失败）
         "context_length_exceeded",  # 上下文长度超限
@@ -85,6 +86,7 @@ class ErrorClassifier:
         "image exceeds",  # 图片超出限制
         "pdf too large",  # PDF 过大
         "file too large",  # 文件过大
+        "tool_use_id",  # tool_result 引用了不存在的 tool_use（兼容非标准代理）
     )
 
     def __init__(
@@ -105,9 +107,21 @@ class ErrorClassifier:
         self.adaptive_manager = adaptive_manager or get_adaptive_manager()
         self.cache_scheduler = cache_scheduler
 
+    # 表示客户端错误的 error type（不区分大小写）
+    # 这些 type 表明是请求本身的问题，不应重试
+    CLIENT_ERROR_TYPES: Tuple[str, ...] = (
+        "invalid_request_error",  # Claude/OpenAI 标准客户端错误类型
+        "invalid_argument",  # Gemini 参数错误
+        "failed_precondition",  # Gemini 前置条件错误
+    )
+
     def _is_client_error(self, error_text: Optional[str]) -> bool:
         """
         检测错误响应是否为客户端错误（不应重试）
+
+        判断逻辑：
+        1. 检查 error.type 是否为已知的客户端错误类型
+        2. 检查错误文本是否包含已知的客户端错误模式
 
         Args:
             error_text: 错误响应文本
@@ -118,6 +132,19 @@ class ErrorClassifier:
         if not error_text:
             return False
 
+        # 尝试解析 JSON 并检查 error type
+        try:
+            data = json.loads(error_text)
+            if isinstance(data.get("error"), dict):
+                error_type = data["error"].get("type", "")
+                if error_type and any(
+                    t.lower() in error_type.lower() for t in self.CLIENT_ERROR_TYPES
+                ):
+                    return True
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
+        # 回退到关键词匹配
         error_lower = error_text.lower()
         return any(pattern.lower() in error_lower for pattern in self.CLIENT_ERROR_PATTERNS)
 

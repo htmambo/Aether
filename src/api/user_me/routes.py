@@ -121,6 +121,18 @@ async def get_my_active_requests(
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.get("/usage/interval-timeline")
+async def get_my_interval_timeline(
+    request: Request,
+    hours: int = Query(168, ge=1, le=720, description="分析最近多少小时的数据"),
+    limit: int = Query(1000, ge=100, le=5000, description="最大返回数据点数量"),
+    db: Session = Depends(get_db),
+):
+    """获取当前用户的请求间隔时间线数据，用于散点图展示"""
+    adapter = GetMyIntervalTimelineAdapter(hours=hours, limit=limit)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 @router.get("/providers")
 async def list_available_providers(request: Request, db: Session = Depends(get_db)):
     adapter = ListAvailableProvidersAdapter()
@@ -674,6 +686,27 @@ class GetActiveRequestsAdapter(AuthenticatedApiAdapter):
 
         requests = UsageService.get_active_requests_status(db=db, ids=id_list, user_id=user.id)
         return {"requests": requests}
+
+
+@dataclass
+class GetMyIntervalTimelineAdapter(AuthenticatedApiAdapter):
+    """获取当前用户的请求间隔时间线适配器"""
+
+    hours: int
+    limit: int
+
+    async def handle(self, context):  # type: ignore[override]
+        db = context.db
+        user = context.user
+
+        result = UsageService.get_interval_timeline(
+            db=db,
+            hours=self.hours,
+            limit=self.limit,
+            user_id=str(user.id),
+        )
+
+        return result
 
 
 class ListAvailableProvidersAdapter(AuthenticatedApiAdapter):

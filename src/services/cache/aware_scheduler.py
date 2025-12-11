@@ -862,13 +862,14 @@ class CacheAwareScheduler:
 
         # Key 级别的能力匹配检查
         # 注意：模型级别的能力检查已在 _check_model_support 中完成
-        if capability_requirements:
-            from src.core.key_capabilities import check_capability_match
+        # 始终执行检查，即使 capability_requirements 为空
+        # 因为 check_capability_match 会检查 Key 的 EXCLUSIVE 能力是否被浪费
+        from src.core.key_capabilities import check_capability_match
 
-            key_caps: Dict[str, bool] = dict(key.capabilities or {})
-            is_match, skip_reason = check_capability_match(key_caps, capability_requirements)
-            if not is_match:
-                return False, skip_reason
+        key_caps: Dict[str, bool] = dict(key.capabilities or {})
+        is_match, skip_reason = check_capability_match(key_caps, capability_requirements)
+        if not is_match:
+            return False, skip_reason
 
         return True, None
 
