@@ -330,6 +330,7 @@ import { useFormDialog } from '@/composables/useFormDialog'
 import { getProvidersSummary } from '@/api/endpoints/providers'
 import { getGlobalModels } from '@/api/global-models'
 import { adminApi } from '@/api/admin'
+import { log } from '@/utils/logger'
 import { parseNumberInput } from '@/utils/form'
 import type { ProviderWithEndpointsSummary, GlobalModelResponse } from '@/api/endpoints/types'
 
@@ -436,7 +437,7 @@ async function loadAccessRestrictionOptions() {
     globalModels.value = modelsData.models || []
     allApiFormats.value = formatsData.formats?.map((f: any) => f.value) || []
   } catch (err) {
-    console.error('加载访问限制选项失败:', err)
+    log.error('加载访问限制选项失败:', err)
   }
 }
 
