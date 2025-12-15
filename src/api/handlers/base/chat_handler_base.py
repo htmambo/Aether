@@ -34,6 +34,7 @@ from src.api.handlers.base.response_parser import ResponseParser
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.stream_processor import StreamProcessor
 from src.api.handlers.base.stream_telemetry import StreamTelemetryRecorder
+from src.api.handlers.base.utils import build_sse_headers
 from src.config.settings import config
 from src.core.exceptions import (
     EmbeddedErrorException,
@@ -365,7 +366,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 ctx,
                 original_headers,
                 original_request_body,
-                self.elapsed_ms(),
+                self.start_time,  # 传入开始时间，让 telemetry 在流结束后计算响应时间
             )
 
             # 创建监控流
@@ -378,6 +379,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             return StreamingResponse(
                 monitored_stream,
                 media_type="text/event-stream",
+                headers=build_sse_headers(),
                 background=background_tasks,
             )
 
@@ -473,12 +475,13 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             stream_response.raise_for_status()
 
-            # 创建行迭代器
-            line_iterator = stream_response.aiter_lines()
+            # 使用字节流迭代器（避免 aiter_lines 的性能问题）
+            # aiter_raw() 返回原始数据块，无缓冲，实现真正的流式传输
+            byte_iterator = stream_response.aiter_raw()
 
             # 预读检测嵌套错误
-            prefetched_lines = await stream_processor.prefetch_and_check_error(
-                line_iterator,
+            prefetched_chunks = await stream_processor.prefetch_and_check_error(
+                byte_iterator,
                 provider,
                 endpoint,
                 ctx,
@@ -503,13 +506,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             await http_client.aclose()
             raise
 
-        # 创建流生成器
+        # 创建流生成器（传入字节流迭代器）
         return stream_processor.create_response_stream(
             ctx,
-            line_iterator,
+            byte_iterator,
             response_ctx,
             http_client,
-            prefetched_lines,
+            prefetched_chunks,
+            start_time=self.start_time,
         )
 
     async def _record_stream_failure(

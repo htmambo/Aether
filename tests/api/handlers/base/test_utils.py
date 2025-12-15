@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.api.handlers.base.utils import extract_cache_creation_tokens
+from src.api.handlers.base.utils import build_sse_headers, extract_cache_creation_tokens
 
 
 class TestExtractCacheCreationTokens:
@@ -69,14 +69,16 @@ class TestExtractCacheCreationTokens:
         }
         assert extract_cache_creation_tokens(usage) == 123
 
-    def test_new_format_zero_fallback_to_old(self) -> None:
-        """测试新格式为 0 时回退到旧格式"""
+    def test_new_format_zero_should_not_fallback(self) -> None:
+        """测试新格式字段存在但为 0 时，不应 fallback 到旧格式"""
         usage = {
             "claude_cache_creation_5_m_tokens": 0,
             "claude_cache_creation_1_h_tokens": 0,
             "cache_creation_input_tokens": 456,
         }
-        assert extract_cache_creation_tokens(usage) == 456
+        # 新格式字段存在，即使值为 0 也应该使用新格式（返回 0）
+        # 而不是 fallback 到旧格式（返回 456）
+        assert extract_cache_creation_tokens(usage) == 0
 
     def test_unrelated_fields_ignored(self) -> None:
         """测试忽略无关字段"""
@@ -88,3 +90,15 @@ class TestExtractCacheCreationTokens:
             "claude_cache_creation_1_h_tokens": 75,
         }
         assert extract_cache_creation_tokens(usage) == 125
+
+
+class TestBuildSSEHeaders:
+    def test_default_headers(self) -> None:
+        headers = build_sse_headers()
+        assert headers["Cache-Control"] == "no-cache, no-transform"
+        assert headers["X-Accel-Buffering"] == "no"
+
+    def test_merge_extra_headers(self) -> None:
+        headers = build_sse_headers({"X-Test": "1", "Cache-Control": "custom"})
+        assert headers["X-Test"] == "1"
+        assert headers["Cache-Control"] == "custom"

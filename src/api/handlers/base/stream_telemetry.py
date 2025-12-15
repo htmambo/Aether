@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import time
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -57,7 +58,7 @@ class StreamTelemetryRecorder:
         ctx: StreamContext,
         original_headers: Dict[str, str],
         original_request_body: Dict[str, Any],
-        response_time_ms: int,
+        start_time: float,
     ) -> None:
         """
         记录流式统计信息
@@ -66,11 +67,15 @@ class StreamTelemetryRecorder:
             ctx: 流式上下文
             original_headers: 原始请求头
             original_request_body: 原始请求体
-            response_time_ms: 响应时间（毫秒）
+            start_time: 请求开始时间 (time.time())
         """
         bg_db = None
 
         try:
+            # 在流结束后计算响应时间，与首字时间使用相同的时间基准
+            # 注意：不要把统计延迟（stream_stats_delay）算进响应时间里
+            response_time_ms = int((time.time() - start_time) * 1000)
+
             await asyncio.sleep(config.stream_stats_delay)  # 等待流完全关闭
 
             if not ctx.provider_name:
@@ -155,6 +160,7 @@ class StreamTelemetryRecorder:
             input_tokens=ctx.input_tokens,
             output_tokens=ctx.output_tokens,
             response_time_ms=response_time_ms,
+            first_byte_time_ms=ctx.first_byte_time_ms,  # 传递首字时间
             status_code=ctx.status_code,
             request_headers=original_headers,
             request_body=actual_request_body,

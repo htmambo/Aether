@@ -8,6 +8,7 @@
 - 请求/响应数据
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -25,12 +26,18 @@ class StreamContext:
     model: str
     api_format: str
 
+    # 请求标识信息（CLI handler 需要）
+    request_id: str = ""
+    user_id: int = 0
+    api_key_id: int = 0
+
     # Provider 信息（在请求执行时填充）
     provider_name: Optional[str] = None
     provider_id: Optional[str] = None
     endpoint_id: Optional[str] = None
     key_id: Optional[str] = None
     attempt_id: Optional[str] = None
+    attempt_synced: bool = False
     provider_api_format: Optional[str] = None  # Provider 的响应格式
 
     # 模型映射
@@ -43,7 +50,14 @@ class StreamContext:
     cache_creation_tokens: int = 0
 
     # 响应内容
-    collected_text: str = ""
+    _collected_text_parts: List[str] = field(default_factory=list, repr=False)
+    response_id: Optional[str] = None
+    final_usage: Optional[Dict[str, Any]] = None
+    final_response: Optional[Dict[str, Any]] = None
+
+    # 时间指标
+    first_byte_time_ms: Optional[int] = None  # 首字时间 (TTFB - Time To First Byte)
+    start_time: float = field(default_factory=time.time)
 
     # 响应状态
     status_code: int = 200
@@ -54,6 +68,12 @@ class StreamContext:
     response_headers: Dict[str, str] = field(default_factory=dict)
     provider_request_headers: Dict[str, str] = field(default_factory=dict)
     provider_request_body: Optional[Dict[str, Any]] = None
+
+    # 格式转换信息（CLI handler 需要）
+    client_api_format: str = ""
+
+    # Provider 响应元数据（CLI handler 需要）
+    response_metadata: Dict[str, Any] = field(default_factory=dict)
 
     # 流式处理统计
     data_count: int = 0
@@ -71,16 +91,30 @@ class StreamContext:
         self.chunk_count = 0
         self.data_count = 0
         self.has_completion = False
-        self.collected_text = ""
+        self._collected_text_parts = []
         self.input_tokens = 0
         self.output_tokens = 0
         self.cached_tokens = 0
         self.cache_creation_tokens = 0
         self.error_message = None
         self.status_code = 200
+        self.first_byte_time_ms = None
         self.response_headers = {}
         self.provider_request_headers = {}
         self.provider_request_body = None
+        self.response_id = None
+        self.final_usage = None
+        self.final_response = None
+
+    @property
+    def collected_text(self) -> str:
+        """已收集的文本内容（按需拼接，避免在流式过程中频繁做字符串拷贝）"""
+        return "".join(self._collected_text_parts)
+
+    def append_text(self, text: str) -> None:
+        """追加文本内容（仅在需要收集文本时调用）"""
+        if text:
+            self._collected_text_parts.append(text)
 
     def update_provider_info(
         self,
@@ -145,6 +179,19 @@ class StreamContext:
         self.status_code = status_code
         self.error_message = error_message
 
+    def record_first_byte_time(self, start_time: float) -> None:
+        """
+        记录首字时间 (TTFB - Time To First Byte)
+
+        应在第一次向客户端发送数据时调用。
+        如果已记录过,则不会覆盖(避免重试时重复记录)。
+
+        Args:
+            start_time: 请求开始时间 (time.time())
+        """
+        if self.first_byte_time_ms is None:
+            self.first_byte_time_ms = int((time.time() - start_time) * 1000)
+
     def is_success(self) -> bool:
         """检查请求是否成功"""
         return self.status_code < 400
@@ -171,10 +218,22 @@ class StreamContext:
         获取日志摘要
 
         用于请求完成/失败时的日志输出。
+        包含首字时间 (TTFB) 和总响应时间,分两行显示。
         """
         status = "OK" if self.is_success() else "FAIL"
-        return (
+
+        # 第一行:基本信息 + 首字时间
+        line1 = (
             f"[{status}] {request_id[:8]} | {self.model} | "
-            f"{self.provider_name or 'unknown'} | {response_time_ms}ms | "
+            f"{self.provider_name or 'unknown'}"
+        )
+        if self.first_byte_time_ms is not None:
+            line1 += f" | TTFB: {self.first_byte_time_ms}ms"
+
+        # 第二行:总响应时间 + tokens
+        line2 = (
+            f"      Total: {response_time_ms}ms | "
             f"in:{self.input_tokens} out:{self.output_tokens}"
         )
+
+        return f"{line1}\n{line2}"

@@ -100,6 +100,8 @@ class MessageTelemetry:
         cache_read_tokens: int = 0,
         is_stream: bool = False,
         provider_request_headers: Optional[Dict[str, Any]] = None,
+        # 时间指标
+        first_byte_time_ms: Optional[int] = None,  # 首字时间/TTFB
         # Provider 侧追踪信息（用于记录真实成本）
         provider_id: Optional[str] = None,
         provider_endpoint_id: Optional[str] = None,
@@ -133,6 +135,7 @@ class MessageTelemetry:
             api_format=api_format,
             is_stream=is_stream,
             response_time_ms=response_time_ms,
+            first_byte_time_ms=first_byte_time_ms,  # 传递首字时间
             status_code=status_code,
             request_headers=request_headers,
             request_body=request_body,
