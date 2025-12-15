@@ -599,7 +599,7 @@ class CacheAwareScheduler:
         allowed_models = restrictions["allowed_models"]
 
         # 0.1 检查 API 格式是否被允许
-        if allowed_api_formats:
+        if allowed_api_formats is not None:
             if target_format.value not in allowed_api_formats:
                 logger.debug(
                     f"API Key {user_api_key.id[:8] if user_api_key else 'N/A'}... 不允许使用 API 格式 {target_format.value}, "
@@ -608,7 +608,7 @@ class CacheAwareScheduler:
                 return [], global_model_id
 
         # 0.2 检查模型是否被允许
-        if allowed_models:
+        if allowed_models is not None:
             if (
                 requested_model_name not in allowed_models
                 and resolved_model_name not in allowed_models
@@ -635,7 +635,7 @@ class CacheAwareScheduler:
             return [], global_model_id
 
         # 1.5 根据 allowed_providers 过滤（合并 ApiKey 和 User 的限制）
-        if allowed_providers:
+        if allowed_providers is not None:
             original_count = len(providers)
             # 同时支持 provider id 和 name 匹配
             providers = [
@@ -928,7 +928,7 @@ class CacheAwareScheduler:
                     continue
 
                 # 检查 Endpoint 是否在允许列表中
-                if allowed_endpoints and endpoint.id not in allowed_endpoints:
+                if allowed_endpoints is not None and endpoint.id not in allowed_endpoints:
                     logger.debug(
                         f"Endpoint {endpoint.id[:8]}... 不在用户/API Key 的允许列表中，跳过"
                     )
