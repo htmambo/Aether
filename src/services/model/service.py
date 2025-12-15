@@ -170,6 +170,8 @@ class ModelService:
                     model_id=model.id,
                     provider_id=model.provider_id,
                     global_model_id=model.global_model_id,
+                    provider_model_name=model.provider_model_name,
+                    provider_model_aliases=model.provider_model_aliases,
                 )
             )
 
@@ -240,6 +242,8 @@ class ModelService:
                 model_id=model.id,
                 provider_id=model.provider_id,
                 global_model_id=model.global_model_id,
+                provider_model_name=model.provider_model_name,
+                provider_model_aliases=model.provider_model_aliases,
             )
         )
 
