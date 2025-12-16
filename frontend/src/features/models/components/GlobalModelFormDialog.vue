@@ -68,13 +68,19 @@
                 <div
                   v-for="model in group.models"
                   :key="model.modelId"
-                  class="flex items-center gap-2 pl-7 pr-2.5 py-1.5 cursor-pointer text-xs border-t"
+                  class="flex flex-col gap-0.5 pl-7 pr-2.5 py-1.5 cursor-pointer text-xs border-t"
                   :class="selectedModel?.modelId === model.modelId && selectedModel?.providerId === model.providerId
                     ? 'bg-primary text-primary-foreground'
                     : 'hover:bg-muted'"
                   @click="selectModel(model)"
                 >
-                  <span class="truncate">{{ model.modelName }}</span>
+                  <span class="truncate font-medium">{{ model.modelName }}</span>
+                  <span
+                    class="truncate text-[10px]"
+                    :class="selectedModel?.modelId === model.modelId && selectedModel?.providerId === model.providerId
+                      ? 'text-primary-foreground/70'
+                      : 'text-muted-foreground'"
+                  >{{ model.modelId }}</span>
                 </div>
               </div>
             </div>
