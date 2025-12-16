@@ -14,7 +14,7 @@
       <!-- 左侧：模型选择（仅创建模式） -->
       <div
         v-if="!isEditMode"
-        class="w-[200px] shrink-0 flex flex-col h-full"
+        class="w-[260px] shrink-0 flex flex-col h-full"
       >
         <!-- 搜索框 -->
         <div class="relative mb-3">
@@ -22,13 +22,13 @@
           <Input
             v-model="searchQuery"
             type="text"
-            placeholder="搜索模型..."
+            placeholder="搜索模型、提供商..."
             class="pl-8 h-8 text-sm"
           />
         </div>
 
         <!-- 模型列表（两级结构） -->
-        <div class="flex-1 overflow-y-auto border rounded-lg min-h-0">
+        <div class="flex-1 overflow-y-auto border rounded-lg min-h-0 scrollbar-thin">
           <div
             v-if="loading"
             class="flex items-center justify-center h-32"
@@ -54,7 +54,7 @@
                 <img
                   :src="getProviderLogoUrl(group.providerId)"
                   :alt="group.providerName"
-                  class="w-4 h-4 rounded shrink-0"
+                  class="w-4 h-4 rounded shrink-0 dark:invert dark:brightness-90"
                   @error="handleLogoError"
                 >
                 <span class="truncate font-medium text-xs flex-1">{{ group.providerName }}</span>
@@ -90,7 +90,7 @@
 
       <!-- 右侧：表单 -->
       <div
-        class="flex-1 overflow-y-auto h-full"
+        class="flex-1 overflow-y-auto h-full scrollbar-thin"
         :class="isEditMode ? 'max-h-[70vh]' : ''"
       >
         <form
@@ -140,6 +140,46 @@
                 placeholder="简短描述此模型的特点"
                 @update:model-value="(v) => setConfigField('description', v || undefined)"
               />
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+              <div class="space-y-1.5">
+                <Label
+                  for="model-family"
+                  class="text-xs"
+                >模型系列</Label>
+                <Input
+                  id="model-family"
+                  :model-value="form.config?.family || ''"
+                  placeholder="如 GPT-4、Claude 3"
+                  @update:model-value="(v) => setConfigField('family', v || undefined)"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label
+                  for="model-context-limit"
+                  class="text-xs"
+                >上下文限制</Label>
+                <Input
+                  id="model-context-limit"
+                  type="number"
+                  :model-value="form.config?.context_limit ?? ''"
+                  placeholder="如 128000"
+                  @update:model-value="(v) => setConfigField('context_limit', v ? Number(v) : undefined)"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label
+                  for="model-output-limit"
+                  class="text-xs"
+                >输出限制</Label>
+                <Input
+                  id="model-output-limit"
+                  type="number"
+                  :model-value="form.config?.output_limit ?? ''"
+                  placeholder="如 8192"
+                  @update:model-value="(v) => setConfigField('output_limit', v ? Number(v) : undefined)"
+                />
+              </div>
             </div>
           </section>
 
@@ -329,9 +369,17 @@ const tieredPricingEditorRef = ref<InstanceType<typeof TieredPricingEditor> | nu
 // 模型列表相关
 const loading = ref(false)
 const searchQuery = ref('')
-const allModels = ref<ModelsDevModelItem[]>([])
+const allModelsCache = ref<ModelsDevModelItem[]>([]) // 全部模型（缓存）
 const selectedModel = ref<ModelsDevModelItem | null>(null)
 const expandedProvider = ref<string | null>(null)
+
+// 当前显示的模型列表：有搜索词时用全部，否则只用官方
+const allModels = computed(() => {
+  if (searchQuery.value) {
+    return allModelsCache.value
+  }
+  return allModelsCache.value.filter(m => m.official)
+})
 
 // 按提供商分组的模型
 interface ProviderGroup {
@@ -440,10 +488,11 @@ const availableCapabilities = ref<CapabilityDefinition[]>([])
 
 // 加载模型列表
 async function loadModels() {
-  if (allModels.value.length > 0) return
+  if (allModelsCache.value.length > 0) return
   loading.value = true
   try {
-    allModels.value = await getModelsDevList()
+    // 只加载一次全部模型，过滤在 computed 中完成
+    allModelsCache.value = await getModelsDevList(false)
   } catch (err) {
     log.error('Failed to load models:', err)
   } finally {
@@ -498,6 +547,10 @@ function selectModel(model: ModelsDevModelItem) {
   if (model.supportsVision) config.vision = true
   if (model.supportsToolCall) config.function_calling = true
   if (model.supportsReasoning) config.extended_thinking = true
+  if (model.supportsStructuredOutput) config.structured_output = true
+  if (model.supportsTemperature !== false) config.temperature = model.supportsTemperature
+  if (model.supportsAttachment) config.attachment = true
+  if (model.openWeights) config.open_weights = true
   if (model.contextLimit) config.context_limit = model.contextLimit
   if (model.outputLimit) config.output_limit = model.outputLimit
   if (model.knowledgeCutoff) config.knowledge_cutoff = model.knowledgeCutoff

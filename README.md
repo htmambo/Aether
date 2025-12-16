@@ -60,11 +60,11 @@ python generate_keys.py  # 生成密钥, 并将生成的密钥填入 .env
 # 3. 部署
 docker-compose up -d
 
-# 4. 更新
-docker-compose pull && docker-compose up -d
-
-# 5. 数据库迁移 - 更新后执行
+# 4. 首次部署时, 初始化数据库
 ./migrate.sh
+
+# 5. 更新
+docker-compose pull && docker-compose up -d && ./migrate.sh
 ```
 
 ### Docker Compose（本地构建镜像）

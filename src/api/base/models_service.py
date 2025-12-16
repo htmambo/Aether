@@ -65,6 +65,21 @@ class ModelInfo:
     created_at: Optional[str]  # ISO 格式
     created_timestamp: int  # Unix 时间戳
     provider_name: str
+    # 能力配置
+    streaming: bool = True
+    vision: bool = False
+    function_calling: bool = False
+    extended_thinking: bool = False
+    image_generation: bool = False
+    structured_output: bool = False
+    # 规格参数
+    context_limit: Optional[int] = None
+    output_limit: Optional[int] = None
+    # 元信息
+    family: Optional[str] = None
+    knowledge_cutoff: Optional[str] = None
+    input_modalities: Optional[list[str]] = None
+    output_modalities: Optional[list[str]] = None
 
 
 def get_available_provider_ids(db: Session, api_formats: list[str]) -> set[str]:
@@ -181,12 +196,18 @@ def _extract_model_info(model: Any) -> ModelInfo:
     global_model = model.global_model
     model_id: str = global_model.name if global_model else model.provider_model_name
     display_name: str = global_model.display_name if global_model else model.provider_model_name
-    description: Optional[str] = global_model.description if global_model else None
     created_at: Optional[str] = (
         model.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if model.created_at else None
     )
     created_timestamp: int = int(model.created_at.timestamp()) if model.created_at else 0
     provider_name: str = model.provider.name if model.provider else "unknown"
+
+    # 从 GlobalModel.config 提取配置信息
+    config: dict = {}
+    description: Optional[str] = None
+    if global_model:
+        config = global_model.config or {}
+        description = config.get("description")
 
     return ModelInfo(
         id=model_id,
@@ -195,6 +216,21 @@ def _extract_model_info(model: Any) -> ModelInfo:
         created_at=created_at,
         created_timestamp=created_timestamp,
         provider_name=provider_name,
+        # 能力配置
+        streaming=config.get("streaming", True),
+        vision=config.get("vision", False),
+        function_calling=config.get("function_calling", False),
+        extended_thinking=config.get("extended_thinking", False),
+        image_generation=config.get("image_generation", False),
+        structured_output=config.get("structured_output", False),
+        # 规格参数
+        context_limit=config.get("context_limit"),
+        output_limit=config.get("output_limit"),
+        # 元信息
+        family=config.get("family"),
+        knowledge_cutoff=config.get("knowledge_cutoff"),
+        input_modalities=config.get("input_modalities"),
+        output_modalities=config.get("output_modalities"),
     )
 
 

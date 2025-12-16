@@ -50,6 +50,7 @@ export interface ModelsDevProvider {
   name: string
   doc?: string
   models: Record<string, ModelsDevModel>
+  official?: boolean // 是否为官方提供商
 }
 
 export type ModelsDevData = Record<string, ModelsDevProvider>
@@ -68,7 +69,12 @@ export interface ModelsDevModelItem {
   supportsVision?: boolean
   supportsToolCall?: boolean
   supportsReasoning?: boolean
+  supportsStructuredOutput?: boolean
+  supportsTemperature?: boolean
+  supportsAttachment?: boolean
+  openWeights?: boolean
   deprecated?: boolean
+  official?: boolean // 是否来自官方提供商
   // 用于 display_metadata 的额外字段
   knowledgeCutoff?: string
   releaseDate?: string
@@ -84,13 +90,21 @@ interface CacheData {
 // 内存缓存
 let memoryCache: CacheData | null = null
 
+function hasOfficialFlag(data: ModelsDevData): boolean {
+  return Object.values(data).some(provider => typeof provider?.official === 'boolean')
+}
+
 /**
  * 获取 models.dev 数据（带缓存）
  */
 export async function getModelsDevData(): Promise<ModelsDevData> {
   // 1. 检查内存缓存
   if (memoryCache && Date.now() - memoryCache.timestamp < CACHE_DURATION) {
-    return memoryCache.data
+    // 兼容旧缓存：没有 official 字段时丢弃，强制刷新一次
+    if (hasOfficialFlag(memoryCache.data)) {
+      return memoryCache.data
+    }
+    memoryCache = null
   }
 
   // 2. 检查 localStorage 缓存
@@ -99,8 +113,12 @@ export async function getModelsDevData(): Promise<ModelsDevData> {
     if (cached) {
       const cacheData: CacheData = JSON.parse(cached)
       if (Date.now() - cacheData.timestamp < CACHE_DURATION) {
-        memoryCache = cacheData
-        return cacheData.data
+        // 兼容旧缓存：没有 official 字段时丢弃，强制刷新一次
+        if (hasOfficialFlag(cacheData.data)) {
+          memoryCache = cacheData
+          return cacheData.data
+        }
+        localStorage.removeItem(CACHE_KEY)
       }
     }
   } catch {
@@ -126,52 +144,75 @@ export async function getModelsDevData(): Promise<ModelsDevData> {
   return data
 }
 
+// 模型列表缓存（避免重复转换）
+let modelsListCache: ModelsDevModelItem[] | null = null
+let modelsListCacheTimestamp: number | null = null
+
 /**
  * 获取扁平化的模型列表
+ * 数据只加载一次，通过参数过滤官方/全部
  */
-export async function getModelsDevList(): Promise<ModelsDevModelItem[]> {
+export async function getModelsDevList(officialOnly: boolean = true): Promise<ModelsDevModelItem[]> {
   const data = await getModelsDevData()
-  const items: ModelsDevModelItem[] = []
+  const currentTimestamp = memoryCache?.timestamp ?? 0
 
-  for (const [providerId, provider] of Object.entries(data)) {
-    if (!provider.models) continue
+  // 如果缓存为空或数据已刷新，构建一次
+  if (!modelsListCache || modelsListCacheTimestamp !== currentTimestamp) {
+    const items: ModelsDevModelItem[] = []
 
-    for (const [modelId, model] of Object.entries(provider.models)) {
-      items.push({
-        providerId,
-        providerName: provider.name,
-        modelId,
-        modelName: model.name || modelId,
-        family: model.family,
-        inputPrice: model.cost?.input,
-        outputPrice: model.cost?.output,
-        contextLimit: model.limit?.context,
-        outputLimit: model.limit?.output,
-        supportsVision: model.input?.includes('image'),
-        supportsToolCall: model.tool_call,
-        supportsReasoning: model.reasoning,
-        deprecated: model.deprecated,
-        // display_metadata 相关字段
-        knowledgeCutoff: model.knowledge,
-        releaseDate: model.release_date,
-        inputModalities: model.input,
-        outputModalities: model.output,
-      })
+    for (const [providerId, provider] of Object.entries(data)) {
+      if (!provider.models) continue
+
+      for (const [modelId, model] of Object.entries(provider.models)) {
+        items.push({
+          providerId,
+          providerName: provider.name,
+          modelId,
+          modelName: model.name || modelId,
+          family: model.family,
+          inputPrice: model.cost?.input,
+          outputPrice: model.cost?.output,
+          contextLimit: model.limit?.context,
+          outputLimit: model.limit?.output,
+          supportsVision: model.input?.includes('image'),
+          supportsToolCall: model.tool_call,
+          supportsReasoning: model.reasoning,
+          supportsStructuredOutput: model.structured_output,
+          supportsTemperature: model.temperature,
+          supportsAttachment: model.attachment,
+          openWeights: model.open_weights,
+          deprecated: model.deprecated,
+          official: provider.official,
+          // display_metadata 相关字段
+          knowledgeCutoff: model.knowledge,
+          releaseDate: model.release_date,
+          inputModalities: model.input,
+          outputModalities: model.output,
+        })
+      }
     }
+
+    // 按 provider 名称和模型名称排序
+    items.sort((a, b) => {
+      const providerCompare = a.providerName.localeCompare(b.providerName)
+      if (providerCompare !== 0) return providerCompare
+      return a.modelName.localeCompare(b.modelName)
+    })
+
+    modelsListCache = items
+    modelsListCacheTimestamp = currentTimestamp
   }
 
-  // 按 provider 名称和模型名称排序
-  items.sort((a, b) => {
-    const providerCompare = a.providerName.localeCompare(b.providerName)
-    if (providerCompare !== 0) return providerCompare
-    return a.modelName.localeCompare(b.modelName)
-  })
-
-  return items
+  // 根据参数过滤
+  if (officialOnly) {
+    return modelsListCache.filter(m => m.official)
+  }
+  return modelsListCache
 }
 
 /**
  * 搜索模型
+ * 搜索时包含所有提供商（包括第三方）
  */
 export async function searchModelsDevModels(
   query: string,
@@ -180,7 +221,8 @@ export async function searchModelsDevModels(
     excludeDeprecated?: boolean
   }
 ): Promise<ModelsDevModelItem[]> {
-  const allModels = await getModelsDevList()
+  // 搜索时包含全部提供商
+  const allModels = await getModelsDevList(false)
   const { limit = 50, excludeDeprecated = true } = options || {}
 
   const queryLower = query.toLowerCase()
@@ -236,6 +278,8 @@ export function getProviderLogoUrl(providerId: string): string {
  */
 export function clearModelsDevCache(): void {
   memoryCache = null
+  modelsListCache = null
+  modelsListCacheTimestamp = null
   try {
     localStorage.removeItem(CACHE_KEY)
   } catch {

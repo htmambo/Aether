@@ -20,6 +20,27 @@ router = APIRouter()
 CACHE_KEY = "aether:external:models_dev"
 CACHE_TTL = 15 * 60  # 15 分钟
 
+# 标记官方/一手提供商，前端可据此过滤第三方转售商
+OFFICIAL_PROVIDERS = {
+    "anthropic",  # Claude 官方
+    "openai",  # OpenAI 官方
+    "google",  # Gemini 官方
+    "google-vertex",  # Google Vertex AI
+    "azure",  # Azure OpenAI
+    "amazon-bedrock",  # AWS Bedrock
+    "xai",  # Grok 官方
+    "meta",  # Llama 官方
+    "deepseek",  # DeepSeek 官方
+    "mistral",  # Mistral 官方
+    "cohere",  # Cohere 官方
+    "zhipuai",  # 智谱 AI 官方
+    "alibaba",  # 阿里云（通义千问）
+    "minimax",  # MiniMax 官方
+    "moonshot",  # 月之暗面（Kimi）
+    "baichuan",  # 百川智能
+    "ai21",  # AI21 Labs
+}
+
 
 async def _get_cached_data() -> Optional[dict[str, Any]]:
     """从 Redis 获取缓存数据"""
@@ -47,15 +68,40 @@ async def _set_cached_data(data: dict) -> None:
         logger.warning(f"写入 models.dev 缓存失败: {e}")
 
 
+def _mark_official_providers(data: dict[str, Any]) -> dict[str, Any]:
+    """为每个提供商标记是否为官方"""
+    result = {}
+    for provider_id, provider_data in data.items():
+        result[provider_id] = {
+            **provider_data,
+            "official": provider_id in OFFICIAL_PROVIDERS,
+        }
+    return result
+
+
 @router.get("/external")
 async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
     """
     获取 models.dev 的模型数据（代理请求，解决跨域问题）
     数据缓存 15 分钟（使用 Redis，多 worker 共享）
+    每个提供商会标记 official 字段，前端可据此过滤
     """
     # 检查缓存
     cached = await _get_cached_data()
     if cached is not None:
+        # 兼容旧缓存：如果没有 official 字段则补全并回写
+        try:
+            needs_mark = False
+            for provider_data in cached.values():
+                if not isinstance(provider_data, dict) or "official" not in provider_data:
+                    needs_mark = True
+                    break
+            if needs_mark:
+                marked_cached = _mark_official_providers(cached)
+                await _set_cached_data(marked_cached)
+                return JSONResponse(content=marked_cached)
+        except Exception as e:
+            logger.warning(f"处理 models.dev 缓存数据失败，将直接返回原缓存: {e}")
         return JSONResponse(content=cached)
 
     # 从 models.dev 获取数据
@@ -65,10 +111,13 @@ async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
             response.raise_for_status()
             data = response.json()
 
-            # 写入缓存
-            await _set_cached_data(data)
+            # 标记官方提供商
+            marked_data = _mark_official_providers(data)
 
-            return JSONResponse(content=data)
+            # 写入缓存
+            await _set_cached_data(marked_data)
+
+            return JSONResponse(content=marked_data)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="请求 models.dev 超时")
     except httpx.HTTPStatusError as e:
@@ -77,3 +126,16 @@ async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"获取外部模型数据失败: {str(e)}")
+
+
+@router.delete("/external/cache")
+async def clear_external_models_cache(_: User = Depends(require_admin)) -> dict:
+    """清除 models.dev 缓存"""
+    redis = await get_redis_client()
+    if redis is None:
+        return {"cleared": False, "message": "Redis 未启用"}
+    try:
+        await redis.delete(CACHE_KEY)
+        return {"cleared": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")

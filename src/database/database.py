@@ -273,16 +273,17 @@ def get_db_url() -> str:
 
 
 def init_db():
-    """初始化数据库"""
+    """初始化数据库
+
+    注意：数据库表结构由 Alembic 管理，部署时请运行 ./migrate.sh
+    """
     logger.info("初始化数据库...")
 
     # 确保引擎已创建
-    engine = _ensure_engine()
+    _ensure_engine()
 
-    # 创建所有表
-    Base.metadata.create_all(bind=engine)
-
-    # 数据库表已通过SQLAlchemy自动创建
+    # 数据库表结构由 Alembic 迁移管理
+    # 首次部署或更新后请运行: ./migrate.sh
 
     db = _SessionLocal()
     try:
