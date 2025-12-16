@@ -9,20 +9,14 @@ export interface PublicGlobalModel {
   id: string
   name: string
   display_name: string | null
-  description: string | null
-  icon_url: string | null
   is_active: boolean
   // 阶梯计费配置
   default_tiered_pricing: TieredPricingConfig
   default_price_per_request: number | null  // 按次计费价格
-  // 能力
-  default_supports_vision: boolean
-  default_supports_function_calling: boolean
-  default_supports_streaming: boolean
-  default_supports_extended_thinking: boolean
-  default_supports_image_generation: boolean
   // Key 能力支持
   supported_capabilities: string[] | null
+  // 模型配置（JSON）
+  config: Record<string, any> | null
 }
 
 export interface PublicGlobalModelListResponse {

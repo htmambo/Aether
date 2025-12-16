@@ -2,174 +2,258 @@
   <Dialog
     :model-value="open"
     :title="isEditMode ? '编辑模型' : '创建统一模型'"
-    :description="isEditMode ? '修改模型配置和价格信息' : '添加一个新的全局模型定义'"
+    :description="isEditMode ? '修改模型配置和价格信息' : ''"
     :icon="isEditMode ? SquarePen : Layers"
-    size="xl"
+    size="3xl"
     @update:model-value="handleDialogUpdate"
   >
-    <form
-      class="space-y-5 max-h-[70vh] overflow-y-auto pr-1"
-      @submit.prevent="handleSubmit"
+    <div
+      class="flex gap-4"
+      :class="isEditMode ? '' : 'h-[500px]'"
     >
-      <!-- 基本信息 -->
-      <section class="space-y-3">
-        <h4 class="font-medium text-sm">
-          基本信息
-        </h4>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div class="space-y-1.5">
-            <Label
-              for="model-name"
-              class="text-xs"
-            >模型名称 *</Label>
-            <Input
-              id="model-name"
-              v-model="form.name"
-              placeholder="claude-3-5-sonnet-20241022"
-              :disabled="isEditMode"
-              required
-            />
-            <p
-              v-if="!isEditMode"
-              class="text-xs text-muted-foreground"
-            >
-              创建后不可修改
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <Label
-              for="model-display-name"
-              class="text-xs"
-            >显示名称 *</Label>
-            <Input
-              id="model-display-name"
-              v-model="form.display_name"
-              placeholder="Claude 3.5 Sonnet"
-              required
-            />
-          </div>
-        </div>
-
-        <div class="space-y-1.5">
-          <Label
-            for="model-description"
-            class="text-xs"
-          >描述</Label>
-          <Input
-            id="model-description"
-            v-model="form.description"
-            placeholder="简短描述此模型的特点"
-          />
-        </div>
-      </section>
-
-      <!-- 能力配置 -->
-      <section class="space-y-2">
-        <h4 class="font-medium text-sm">
-          默认能力
-        </h4>
-        <div class="flex flex-wrap gap-2">
-          <label class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 cursor-pointer text-sm">
-            <input
-              v-model="form.default_supports_streaming"
-              type="checkbox"
-              class="rounded"
-            >
-            <Zap class="w-3.5 h-3.5 text-muted-foreground" />
-            <span>流式输出</span>
-          </label>
-          <label class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 cursor-pointer text-sm">
-            <input
-              v-model="form.default_supports_vision"
-              type="checkbox"
-              class="rounded"
-            >
-            <Eye class="w-3.5 h-3.5 text-muted-foreground" />
-            <span>视觉理解</span>
-          </label>
-          <label class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 cursor-pointer text-sm">
-            <input
-              v-model="form.default_supports_function_calling"
-              type="checkbox"
-              class="rounded"
-            >
-            <Wrench class="w-3.5 h-3.5 text-muted-foreground" />
-            <span>工具调用</span>
-          </label>
-          <label class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 cursor-pointer text-sm">
-            <input
-              v-model="form.default_supports_extended_thinking"
-              type="checkbox"
-              class="rounded"
-            >
-            <Brain class="w-3.5 h-3.5 text-muted-foreground" />
-            <span>深度思考</span>
-          </label>
-          <label class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 cursor-pointer text-sm">
-            <input
-              v-model="form.default_supports_image_generation"
-              type="checkbox"
-              class="rounded"
-            >
-            <Image class="w-3.5 h-3.5 text-muted-foreground" />
-            <span>图像生成</span>
-          </label>
-        </div>
-      </section>
-
-      <!-- Key 能力配置 -->
-      <section
-        v-if="availableCapabilities.length > 0"
-        class="space-y-2"
+      <!-- 左侧：模型选择（仅创建模式） -->
+      <div
+        v-if="!isEditMode"
+        class="w-[200px] shrink-0 flex flex-col h-full"
       >
-        <h4 class="font-medium text-sm">
-          Key 能力支持
-        </h4>
-        <div class="flex flex-wrap gap-2">
-          <label
-            v-for="cap in availableCapabilities"
-            :key="cap.name"
-            class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 cursor-pointer text-sm"
-          >
-            <input
-              type="checkbox"
-              :checked="form.supported_capabilities?.includes(cap.name)"
-              class="rounded"
-              @change="toggleCapability(cap.name)"
-            >
-            <span>{{ cap.display_name }}</span>
-          </label>
-        </div>
-      </section>
-
-      <!-- 价格配置 -->
-      <section class="space-y-3">
-        <h4 class="font-medium text-sm">
-          价格配置
-        </h4>
-        <TieredPricingEditor
-          ref="tieredPricingEditorRef"
-          v-model="tieredPricing"
-          :show-cache1h="form.supported_capabilities?.includes('cache_1h')"
-        />
-
-        <!-- 按次计费 -->
-        <div class="flex items-center gap-3 pt-2 border-t">
-          <Label class="text-xs whitespace-nowrap">按次计费 ($/次)</Label>
+        <!-- 搜索框 -->
+        <div class="relative mb-3">
+          <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            :model-value="form.default_price_per_request ?? ''"
-            type="number"
-            step="0.001"
-            min="0"
-            class="w-32"
-            placeholder="留空不启用"
-            @update:model-value="(v) => form.default_price_per_request = parseNumberInput(v, { allowFloat: true })"
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索模型..."
+            class="pl-8 h-8 text-sm"
           />
-          <span class="text-xs text-muted-foreground">每次请求固定费用，可与 Token 计费叠加</span>
         </div>
-      </section>
-    </form>
+
+        <!-- 模型列表（两级结构） -->
+        <div class="flex-1 overflow-y-auto border rounded-lg min-h-0">
+          <div
+            v-if="loading"
+            class="flex items-center justify-center h-32"
+          >
+            <Loader2 class="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+          <template v-else>
+            <!-- 提供商分组 -->
+            <div
+              v-for="group in groupedModels"
+              :key="group.providerId"
+              class="border-b last:border-b-0"
+            >
+              <!-- 提供商标题行 -->
+              <div
+                class="flex items-center gap-2 px-2.5 py-2 cursor-pointer hover:bg-muted text-sm"
+                @click="toggleProvider(group.providerId)"
+              >
+                <ChevronRight
+                  class="w-3.5 h-3.5 text-muted-foreground transition-transform shrink-0"
+                  :class="expandedProvider === group.providerId ? 'rotate-90' : ''"
+                />
+                <img
+                  :src="getProviderLogoUrl(group.providerId)"
+                  :alt="group.providerName"
+                  class="w-4 h-4 rounded shrink-0"
+                  @error="handleLogoError"
+                >
+                <span class="truncate font-medium text-xs flex-1">{{ group.providerName }}</span>
+                <span class="text-[10px] text-muted-foreground shrink-0">{{ group.models.length }}</span>
+              </div>
+              <!-- 模型列表 -->
+              <div
+                v-if="expandedProvider === group.providerId"
+                class="bg-muted/30"
+              >
+                <div
+                  v-for="model in group.models"
+                  :key="model.modelId"
+                  class="flex items-center gap-2 pl-7 pr-2.5 py-1.5 cursor-pointer text-xs border-t"
+                  :class="selectedModel?.modelId === model.modelId && selectedModel?.providerId === model.providerId
+                    ? 'bg-primary text-primary-foreground'
+                    : 'hover:bg-muted'"
+                  @click="selectModel(model)"
+                >
+                  <span class="truncate">{{ model.modelName }}</span>
+                </div>
+              </div>
+            </div>
+            <div
+              v-if="groupedModels.length === 0"
+              class="text-center py-8 text-sm text-muted-foreground"
+            >
+              {{ searchQuery ? '未找到模型' : '加载中...' }}
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 右侧：表单 -->
+      <div
+        class="flex-1 overflow-y-auto h-full"
+        :class="isEditMode ? 'max-h-[70vh]' : ''"
+      >
+        <form
+          class="space-y-5"
+          @submit.prevent="handleSubmit"
+        >
+          <!-- 基本信息 -->
+          <section class="space-y-3">
+            <h4 class="font-medium text-sm">
+              基本信息
+            </h4>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="space-y-1.5">
+                <Label
+                  for="model-name"
+                  class="text-xs"
+                >模型名称 *</Label>
+                <Input
+                  id="model-name"
+                  v-model="form.name"
+                  placeholder="claude-3-5-sonnet-20241022"
+                  :disabled="isEditMode"
+                  required
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label
+                  for="model-display-name"
+                  class="text-xs"
+                >显示名称 *</Label>
+                <Input
+                  id="model-display-name"
+                  v-model="form.display_name"
+                  placeholder="Claude 3.5 Sonnet"
+                  required
+                />
+              </div>
+            </div>
+            <div class="space-y-1.5">
+              <Label
+                for="model-description"
+                class="text-xs"
+              >描述</Label>
+              <Input
+                id="model-description"
+                :model-value="form.config?.description || ''"
+                placeholder="简短描述此模型的特点"
+                @update:model-value="(v) => setConfigField('description', v || undefined)"
+              />
+            </div>
+          </section>
+
+          <!-- 能力配置 -->
+          <section class="space-y-2">
+            <h4 class="font-medium text-sm">
+              默认能力
+            </h4>
+            <div class="flex flex-wrap gap-2">
+              <label class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  :checked="form.config?.streaming !== false"
+                  class="rounded"
+                  @change="setConfigField('streaming', ($event.target as HTMLInputElement).checked)"
+                >
+                <Zap class="w-3.5 h-3.5 text-muted-foreground" />
+                <span>流式</span>
+              </label>
+              <label class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  :checked="form.config?.vision === true"
+                  class="rounded"
+                  @change="setConfigField('vision', ($event.target as HTMLInputElement).checked)"
+                >
+                <Eye class="w-3.5 h-3.5 text-muted-foreground" />
+                <span>视觉</span>
+              </label>
+              <label class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  :checked="form.config?.function_calling === true"
+                  class="rounded"
+                  @change="setConfigField('function_calling', ($event.target as HTMLInputElement).checked)"
+                >
+                <Wrench class="w-3.5 h-3.5 text-muted-foreground" />
+                <span>工具</span>
+              </label>
+              <label class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  :checked="form.config?.extended_thinking === true"
+                  class="rounded"
+                  @change="setConfigField('extended_thinking', ($event.target as HTMLInputElement).checked)"
+                >
+                <Brain class="w-3.5 h-3.5 text-muted-foreground" />
+                <span>思考</span>
+              </label>
+              <label class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  :checked="form.config?.image_generation === true"
+                  class="rounded"
+                  @change="setConfigField('image_generation', ($event.target as HTMLInputElement).checked)"
+                >
+                <Image class="w-3.5 h-3.5 text-muted-foreground" />
+                <span>生图</span>
+              </label>
+            </div>
+          </section>
+
+          <!-- Key 能力配置 -->
+          <section
+            v-if="availableCapabilities.length > 0"
+            class="space-y-2"
+          >
+            <h4 class="font-medium text-sm">
+              Key 能力支持
+            </h4>
+            <div class="flex flex-wrap gap-2">
+              <label
+                v-for="cap in availableCapabilities"
+                :key="cap.name"
+                class="flex items-center gap-2 px-2.5 py-1 rounded-md border bg-muted/30 cursor-pointer text-sm"
+              >
+                <input
+                  type="checkbox"
+                  :checked="form.supported_capabilities?.includes(cap.name)"
+                  class="rounded"
+                  @change="toggleCapability(cap.name)"
+                >
+                <span>{{ cap.display_name }}</span>
+              </label>
+            </div>
+          </section>
+
+          <!-- 价格配置 -->
+          <section class="space-y-3">
+            <h4 class="font-medium text-sm">
+              价格配置
+            </h4>
+            <TieredPricingEditor
+              ref="tieredPricingEditorRef"
+              v-model="tieredPricing"
+              :show-cache1h="form.supported_capabilities?.includes('cache_1h')"
+            />
+            <div class="flex items-center gap-3 pt-2 border-t">
+              <Label class="text-xs whitespace-nowrap">按次计费</Label>
+              <Input
+                :model-value="form.default_price_per_request ?? ''"
+                type="number"
+                step="0.001"
+                min="0"
+                class="w-24"
+                placeholder="$/次"
+                @update:model-value="(v) => form.default_price_per_request = parseNumberInput(v, { allowFloat: true })"
+              />
+              <span class="text-xs text-muted-foreground">可与 Token 计费叠加</span>
+            </div>
+          </section>
+        </form>
+      </div>
+    </div>
 
     <template #footer>
       <Button
@@ -180,7 +264,7 @@
         取消
       </Button>
       <Button
-        :disabled="submitting"
+        :disabled="submitting || !form.name || !form.display_name"
         @click="handleSubmit"
       >
         <Loader2
@@ -189,19 +273,35 @@
         />
         {{ isEditMode ? '保存' : '创建' }}
       </Button>
+      <Button
+        v-if="selectedModel && !isEditMode"
+        type="button"
+        variant="ghost"
+        @click="clearSelection"
+      >
+        清空
+      </Button>
     </template>
   </Dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { Eye, Wrench, Brain, Zap, Image, Loader2, Layers, SquarePen } from 'lucide-vue-next'
+import { ref, computed, onMounted, watch } from 'vue'
+import {
+  Eye, Wrench, Brain, Zap, Image, Loader2, Layers, SquarePen,
+  Search, ChevronRight
+} from 'lucide-vue-next'
 import { Dialog, Button, Input, Label } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseNumberInput } from '@/utils/form'
 import { log } from '@/utils/logger'
 import TieredPricingEditor from './TieredPricingEditor.vue'
+import {
+  getModelsDevList,
+  getProviderLogoUrl,
+  type ModelsDevModelItem,
+} from '@/api/models-dev'
 import {
   createGlobalModel,
   updateGlobalModel,
@@ -226,41 +326,137 @@ const { success, error: showError } = useToast()
 const submitting = ref(false)
 const tieredPricingEditorRef = ref<InstanceType<typeof TieredPricingEditor> | null>(null)
 
-// 阶梯计费配置（统一使用，固定价格就是单阶梯）
+// 模型列表相关
+const loading = ref(false)
+const searchQuery = ref('')
+const allModels = ref<ModelsDevModelItem[]>([])
+const selectedModel = ref<ModelsDevModelItem | null>(null)
+const expandedProvider = ref<string | null>(null)
+
+// 按提供商分组的模型
+interface ProviderGroup {
+  providerId: string
+  providerName: string
+  models: ModelsDevModelItem[]
+}
+
+const groupedModels = computed(() => {
+  let models = allModels.value.filter(m => !m.deprecated)
+  if (searchQuery.value) {
+    const query = searchQuery.value.toLowerCase()
+    models = models.filter(model =>
+      model.providerId.toLowerCase().includes(query) ||
+      model.providerName.toLowerCase().includes(query) ||
+      model.modelId.toLowerCase().includes(query) ||
+      model.modelName.toLowerCase().includes(query) ||
+      model.family?.toLowerCase().includes(query)
+    )
+  }
+
+  // 按提供商分组
+  const groups = new Map<string, ProviderGroup>()
+  for (const model of models) {
+    if (!groups.has(model.providerId)) {
+      groups.set(model.providerId, {
+        providerId: model.providerId,
+        providerName: model.providerName,
+        models: []
+      })
+    }
+    groups.get(model.providerId)!.models.push(model)
+  }
+
+  // 转换为数组并排序
+  let result = Array.from(groups.values())
+
+  // 如果有搜索词，把提供商名称/ID匹配的排在前面
+  if (searchQuery.value) {
+    const query = searchQuery.value.toLowerCase()
+    result.sort((a, b) => {
+      const aProviderMatch = a.providerId.toLowerCase().includes(query) || a.providerName.toLowerCase().includes(query)
+      const bProviderMatch = b.providerId.toLowerCase().includes(query) || b.providerName.toLowerCase().includes(query)
+      if (aProviderMatch && !bProviderMatch) return -1
+      if (!aProviderMatch && bProviderMatch) return 1
+      return a.providerName.localeCompare(b.providerName)
+    })
+  } else {
+    result.sort((a, b) => a.providerName.localeCompare(b.providerName))
+  }
+
+  return result
+})
+
+// 搜索时如果只有一个提供商，自动展开
+watch(groupedModels, (groups) => {
+  if (searchQuery.value && groups.length === 1) {
+    expandedProvider.value = groups[0].providerId
+  }
+})
+
+// 切换提供商展开状态
+function toggleProvider(providerId: string) {
+  expandedProvider.value = expandedProvider.value === providerId ? null : providerId
+}
+
+// 阶梯计费配置
 const tieredPricing = ref<TieredPricingConfig | null>(null)
 
 interface FormData {
   name: string
   display_name: string
-  description?: string
   default_price_per_request?: number
-  default_supports_streaming?: boolean
-  default_supports_image_generation?: boolean
-  default_supports_vision?: boolean
-  default_supports_function_calling?: boolean
-  default_supports_extended_thinking?: boolean
   supported_capabilities?: string[]
+  config?: Record<string, any>
   is_active?: boolean
 }
 
 const defaultForm = (): FormData => ({
   name: '',
   display_name: '',
-  description: '',
   default_price_per_request: undefined,
-  default_supports_streaming: true,
-  default_supports_image_generation: false,
-  default_supports_vision: false,
-  default_supports_function_calling: false,
-  default_supports_extended_thinking: false,
   supported_capabilities: [],
+  config: { streaming: true },
   is_active: true,
 })
 
 const form = ref<FormData>(defaultForm())
 
+const KEEP_FALSE_CONFIG_KEYS = new Set(['streaming'])
+
+// 设置 config 字段
+function setConfigField(key: string, value: any) {
+  if (!form.value.config) {
+    form.value.config = {}
+  }
+  if (value === undefined || value === '' || (value === false && !KEEP_FALSE_CONFIG_KEYS.has(key))) {
+    delete form.value.config[key]
+  } else {
+    form.value.config[key] = value
+  }
+}
+
 // Key 能力选项
 const availableCapabilities = ref<CapabilityDefinition[]>([])
+
+// 加载模型列表
+async function loadModels() {
+  if (allModels.value.length > 0) return
+  loading.value = true
+  try {
+    allModels.value = await getModelsDevList()
+  } catch (err) {
+    log.error('Failed to load models:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 打开对话框时加载数据
+watch(() => props.open, (isOpen) => {
+  if (isOpen && !props.model) {
+    loadModels()
+  }
+})
 
 // 加载可用能力列表
 async function loadCapabilities() {
@@ -284,15 +480,66 @@ function toggleCapability(capName: string) {
   }
 }
 
-// 组件挂载时加载能力列表
 onMounted(() => {
   loadCapabilities()
 })
+
+// 选择模型并填充表单
+function selectModel(model: ModelsDevModelItem) {
+  selectedModel.value = model
+  expandedProvider.value = model.providerId
+  form.value.name = model.modelId
+  form.value.display_name = model.modelName
+
+  // 构建 config
+  const config: Record<string, any> = {
+    streaming: true,
+  }
+  if (model.supportsVision) config.vision = true
+  if (model.supportsToolCall) config.function_calling = true
+  if (model.supportsReasoning) config.extended_thinking = true
+  if (model.contextLimit) config.context_limit = model.contextLimit
+  if (model.outputLimit) config.output_limit = model.outputLimit
+  if (model.knowledgeCutoff) config.knowledge_cutoff = model.knowledgeCutoff
+  if (model.family) config.family = model.family
+  if (model.releaseDate) config.release_date = model.releaseDate
+  if (model.inputModalities?.length) config.input_modalities = model.inputModalities
+  if (model.outputModalities?.length) config.output_modalities = model.outputModalities
+  form.value.config = config
+
+  if (model.inputPrice !== undefined || model.outputPrice !== undefined) {
+    tieredPricing.value = {
+      tiers: [{
+        up_to: null,
+        input_price_per_1m: model.inputPrice || 0,
+        output_price_per_1m: model.outputPrice || 0,
+      }]
+    }
+  } else {
+    tieredPricing.value = null
+  }
+}
+
+// 清除选择（手动填写）
+function clearSelection() {
+  selectedModel.value = null
+  form.value = defaultForm()
+  tieredPricing.value = null
+}
+
+// Logo 加载失败处理
+function handleLogoError(event: Event) {
+  const img = event.target as HTMLImageElement
+  img.style.display = 'none'
+}
 
 // 重置表单
 function resetForm() {
   form.value = defaultForm()
   tieredPricing.value = null
+  searchQuery.value = ''
+  selectedModel.value = null
+  expandedProvider.value = null
 }
 
 // 加载模型数据（编辑模式）
@@ -301,18 +548,11 @@ function loadModelData() {
   form.value = {
     name: props.model.name,
     display_name: props.model.display_name,
-    description: props.model.description,
     default_price_per_request: props.model.default_price_per_request,
-    default_supports_streaming: props.model.default_supports_streaming,
-    default_supports_image_generation: props.model.default_supports_image_generation,
-    default_supports_vision: props.model.default_supports_vision,
-    default_supports_function_calling: props.model.default_supports_function_calling,
-    default_supports_extended_thinking: props.model.default_supports_extended_thinking,
     supported_capabilities: [...(props.model.supported_capabilities || [])],
+    config: props.model.config ? { ...props.model.config } : { streaming: true },
     is_active: props.model.is_active,
   }
-
-  // 加载阶梯计费配置（深拷贝）
   if (props.model.default_tiered_pricing) {
     tieredPricing.value = JSON.parse(JSON.stringify(props.model.default_tiered_pricing))
   }
@@ -339,24 +579,22 @@ async function handleSubmit() {
     return
   }
 
-  // 获取包含自动计算缓存价格的最终数据
   const finalTiers = tieredPricingEditorRef.value?.getFinalTiers()
   const finalTieredPricing = finalTiers ? { tiers: finalTiers } : tieredPricing.value
+
+  // 清理空的 config
+  const cleanConfig = form.value.config && Object.keys(form.value.config).length > 0
+    ? form.value.config
+    : undefined
 
   submitting.value = true
   try {
     if (isEditMode.value && props.model) {
       const updateData: GlobalModelUpdate = {
         display_name: form.value.display_name,
-        description: form.value.description,
-        // 使用 null 而不是 undefined 来显式清空字段
+        config: cleanConfig || null,
         default_price_per_request: form.value.default_price_per_request ?? null,
         default_tiered_pricing: finalTieredPricing,
-        default_supports_streaming: form.value.default_supports_streaming,
-        default_supports_image_generation: form.value.default_supports_image_generation,
-        default_supports_vision: form.value.default_supports_vision,
-        default_supports_function_calling: form.value.default_supports_function_calling,
-        default_supports_extended_thinking: form.value.default_supports_extended_thinking,
         supported_capabilities: form.value.supported_capabilities?.length ? form.value.supported_capabilities : null,
         is_active: form.value.is_active,
       }
@@ -366,14 +604,9 @@ async function handleSubmit() {
       const createData: GlobalModelCreate = {
         name: form.value.name!,
         display_name: form.value.display_name!,
-        description: form.value.description,
-        default_price_per_request: form.value.default_price_per_request || undefined,
+        config: cleanConfig,
+        default_price_per_request: form.value.default_price_per_request ?? undefined,
         default_tiered_pricing: finalTieredPricing,
-        default_supports_streaming: form.value.default_supports_streaming,
-        default_supports_image_generation: form.value.default_supports_image_generation,
-        default_supports_vision: form.value.default_supports_vision,
-        default_supports_function_calling: form.value.default_supports_function_calling,
-        default_supports_extended_thinking: form.value.default_supports_extended_thinking,
         supported_capabilities: form.value.supported_capabilities?.length ? form.value.supported_capabilities : undefined,
         is_active: form.value.is_active,
       }

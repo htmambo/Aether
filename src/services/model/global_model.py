@@ -62,7 +62,6 @@ class GlobalModelService:
             query = query.filter(
                 (GlobalModel.name.ilike(search_pattern))
                 | (GlobalModel.display_name.ilike(search_pattern))
-                | (GlobalModel.description.ilike(search_pattern))
             )
 
         # 按名称排序
@@ -75,21 +74,15 @@ class GlobalModelService:
         db: Session,
         name: str,
         display_name: str,
-        description: Optional[str] = None,
-        official_url: Optional[str] = None,
-        icon_url: Optional[str] = None,
         is_active: Optional[bool] = True,
         # 按次计费配置
         default_price_per_request: Optional[float] = None,
         # 阶梯计费配置（必填）
         default_tiered_pricing: dict = None,
-        # 默认能力配置
-        default_supports_vision: Optional[bool] = None,
-        default_supports_function_calling: Optional[bool] = None,
-        default_supports_streaming: Optional[bool] = None,
-        default_supports_extended_thinking: Optional[bool] = None,
         # Key 能力配置
         supported_capabilities: Optional[List[str]] = None,
+        # 模型配置（JSON）
+        config: Optional[dict] = None,
     ) -> GlobalModel:
         """创建 GlobalModel"""
         # 检查名称是否已存在
@@ -100,21 +93,15 @@ class GlobalModelService:
         global_model = GlobalModel(
             name=name,
             display_name=display_name,
-            description=description,
-            official_url=official_url,
-            icon_url=icon_url,
             is_active=is_active,
             # 按次计费配置
             default_price_per_request=default_price_per_request,
             # 阶梯计费配置
             default_tiered_pricing=default_tiered_pricing,
-            # 默认能力配置
-            default_supports_vision=default_supports_vision,
-            default_supports_function_calling=default_supports_function_calling,
-            default_supports_streaming=default_supports_streaming,
-            default_supports_extended_thinking=default_supports_extended_thinking,
             # Key 能力配置
             supported_capabilities=supported_capabilities,
+            # 模型配置（JSON）
+            config=config,
         )
 
         db.add(global_model)

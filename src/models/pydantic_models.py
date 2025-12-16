@@ -187,9 +187,6 @@ class GlobalModelCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="统一模型名（唯一）")
     display_name: str = Field(..., min_length=1, max_length=100, description="显示名称")
-    description: Optional[str] = Field(None, description="模型描述")
-    official_url: Optional[str] = Field(None, max_length=500, description="官方文档链接")
-    icon_url: Optional[str] = Field(None, max_length=500, description="图标 URL")
     # 按次计费配置（可选，与阶梯计费叠加）
     default_price_per_request: Optional[float] = Field(None, ge=0, description="每次请求固定费用")
     # 统一阶梯计费配置（必填）
@@ -197,21 +194,14 @@ class GlobalModelCreate(BaseModel):
     default_tiered_pricing: TieredPricingConfig = Field(
         ..., description="阶梯计费配置（固定价格用单阶梯表示）"
     )
-    # 默认能力配置
-    default_supports_vision: Optional[bool] = Field(False, description="默认是否支持视觉")
-    default_supports_function_calling: Optional[bool] = Field(
-        False, description="默认是否支持函数调用"
-    )
-    default_supports_streaming: Optional[bool] = Field(True, description="默认是否支持流式输出")
-    default_supports_extended_thinking: Optional[bool] = Field(
-        False, description="默认是否支持扩展思考"
-    )
-    default_supports_image_generation: Optional[bool] = Field(
-        False, description="默认是否支持图像生成"
-    )
     # Key 能力配置 - 模型支持的能力列表（如 ["cache_1h", "context_1m"]）
     supported_capabilities: Optional[List[str]] = Field(
         None, description="支持的 Key 能力列表"
+    )
+    # 模型配置（JSON格式）- 包含能力、规格、元信息等
+    config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="模型配置（streaming, vision, context_limit, description 等）"
     )
     is_active: Optional[bool] = Field(True, description="是否激活")
 
@@ -220,9 +210,6 @@ class GlobalModelUpdate(BaseModel):
     """更新 GlobalModel 请求"""
 
     display_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = None
-    official_url: Optional[str] = Field(None, max_length=500)
-    icon_url: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None
     # 按次计费配置
     default_price_per_request: Optional[float] = Field(None, ge=0, description="每次请求固定费用")
@@ -230,15 +217,14 @@ class GlobalModelUpdate(BaseModel):
     default_tiered_pricing: Optional[TieredPricingConfig] = Field(
         None, description="阶梯计费配置"
     )
-    # 默认能力配置
-    default_supports_vision: Optional[bool] = None
-    default_supports_function_calling: Optional[bool] = None
-    default_supports_streaming: Optional[bool] = None
-    default_supports_extended_thinking: Optional[bool] = None
-    default_supports_image_generation: Optional[bool] = None
     # Key 能力配置 - 模型支持的能力列表（如 ["cache_1h", "context_1m"]）
     supported_capabilities: Optional[List[str]] = Field(
         None, description="支持的 Key 能力列表"
+    )
+    # 模型配置（JSON格式）- 包含能力、规格、元信息等
+    config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="模型配置（streaming, vision, context_limit, description 等）"
     )
 
 
@@ -248,9 +234,6 @@ class GlobalModelResponse(BaseModel):
     id: str
     name: str
     display_name: str
-    description: Optional[str]
-    official_url: Optional[str]
-    icon_url: Optional[str]
     is_active: bool
     # 按次计费配置
     default_price_per_request: Optional[float] = Field(None, description="每次请求固定费用")
@@ -258,15 +241,14 @@ class GlobalModelResponse(BaseModel):
     default_tiered_pricing: TieredPricingConfig = Field(
         ..., description="阶梯计费配置"
     )
-    # 默认能力配置
-    default_supports_vision: Optional[bool]
-    default_supports_function_calling: Optional[bool]
-    default_supports_streaming: Optional[bool]
-    default_supports_extended_thinking: Optional[bool]
-    default_supports_image_generation: Optional[bool]
     # Key 能力配置 - 模型支持的能力列表
     supported_capabilities: Optional[List[str]] = Field(
         default=None, description="支持的 Key 能力列表"
+    )
+    # 模型配置（JSON格式）
+    config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="模型配置（streaming, vision, context_limit, description 等）"
     )
     # 统计数据（可选）
     provider_count: Optional[int] = Field(default=0, description="支持的 Provider 数量")

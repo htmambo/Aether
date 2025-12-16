@@ -562,20 +562,15 @@ class PublicGlobalModelResponse(BaseModel):
     id: str
     name: str
     display_name: Optional[str] = None
-    description: Optional[str] = None
-    icon_url: Optional[str] = None
     is_active: bool = True
     # 按次计费配置
     default_price_per_request: Optional[float] = None
     # 阶梯计费配置
     default_tiered_pricing: Optional[dict] = None
-    # 默认能力
-    default_supports_vision: bool = False
-    default_supports_function_calling: bool = False
-    default_supports_streaming: bool = True
-    default_supports_extended_thinking: bool = False
     # Key 能力配置
     supported_capabilities: Optional[List[str]] = None
+    # 模型配置（JSON）
+    config: Optional[dict] = None
 
 
 class PublicGlobalModelListResponse(BaseModel):

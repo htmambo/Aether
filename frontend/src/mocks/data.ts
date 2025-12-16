@@ -611,41 +611,42 @@ export const MOCK_GLOBAL_MODELS: GlobalModelResponse[] = [
     id: 'gm-001',
     name: 'claude-haiku-4-5-20251001',
     display_name: 'claude-haiku-4-5',
-    description: 'Anthropic 最快速的 Claude 4 系列模型',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 1.00, output_price_per_1m: 5.00, cache_creation_price_per_1m: 1.25, cache_read_price_per_1m: 0.1 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'Anthropic 最快速的 Claude 4 系列模型'
+    },
     provider_count: 3,
-    alias_count: 2,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-002',
     name: 'claude-opus-4-5-20251101',
     display_name: 'claude-opus-4-5',
-    description: 'Anthropic 最强大的模型',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 5.00, output_price_per_1m: 25.00, cache_creation_price_per_1m: 6.25, cache_read_price_per_1m: 0.5 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'Anthropic 最强大的模型'
+    },
     provider_count: 2,
-    alias_count: 1,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-003',
     name: 'claude-sonnet-4-5-20250929',
     display_name: 'claude-sonnet-4-5',
-    description: 'Anthropic 平衡型模型，支持 1h 缓存和 CLI 1M 上下文',
     is_active: true,
     default_tiered_pricing: {
       tiers: [
@@ -677,116 +678,124 @@ export const MOCK_GLOBAL_MODELS: GlobalModelResponse[] = [
         }
       ]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'Anthropic 平衡型模型，支持 1h 缓存和 CLI 1M 上下文'
+    },
     supported_capabilities: ['cache_1h', 'cli_1m'],
     provider_count: 3,
-    alias_count: 2,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-004',
     name: 'gemini-3-pro-image-preview',
     display_name: 'gemini-3-pro-image-preview',
-    description: 'Google Gemini 3 Pro 图像生成预览版',
     is_active: true,
     default_price_per_request: 0.300,
     default_tiered_pricing: {
       tiers: []
     },
-    default_supports_vision: true,
-    default_supports_function_calling: false,
-    default_supports_streaming: true,
-    default_supports_image_generation: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: false,
+      image_generation: true,
+      description: 'Google Gemini 3 Pro 图像生成预览版'
+    },
     provider_count: 1,
-    alias_count: 0,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-005',
     name: 'gemini-3-pro-preview',
     display_name: 'gemini-3-pro-preview',
-    description: 'Google Gemini 3 Pro 预览版',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 2.00, output_price_per_1m: 12.00 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'Google Gemini 3 Pro 预览版'
+    },
     provider_count: 1,
-    alias_count: 0,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-006',
     name: 'gpt-5.1',
     display_name: 'gpt-5.1',
-    description: 'OpenAI GPT-5.1 模型',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 1.25, output_price_per_1m: 10.00 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'OpenAI GPT-5.1 模型'
+    },
     provider_count: 2,
-    alias_count: 1,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-007',
     name: 'gpt-5.1-codex',
     display_name: 'gpt-5.1-codex',
-    description: 'OpenAI GPT-5.1 Codex 代码专用模型',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 1.25, output_price_per_1m: 10.00 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'OpenAI GPT-5.1 Codex 代码专用模型'
+    },
     provider_count: 2,
-    alias_count: 0,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-008',
     name: 'gpt-5.1-codex-max',
     display_name: 'gpt-5.1-codex-max',
-    description: 'OpenAI GPT-5.1 Codex Max 代码专用增强版',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 1.25, output_price_per_1m: 10.00 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'OpenAI GPT-5.1 Codex Max 代码专用增强版'
+    },
     provider_count: 2,
-    alias_count: 0,
     created_at: '2024-01-01T00:00:00Z'
   },
   {
     id: 'gm-009',
     name: 'gpt-5.1-codex-mini',
     display_name: 'gpt-5.1-codex-mini',
-    description: 'OpenAI GPT-5.1 Codex Mini 轻量代码模型',
     is_active: true,
     default_tiered_pricing: {
       tiers: [{ up_to: null, input_price_per_1m: 1.25, output_price_per_1m: 10.00 }]
     },
-    default_supports_vision: true,
-    default_supports_function_calling: true,
-    default_supports_streaming: true,
-    default_supports_extended_thinking: true,
+    config: {
+      streaming: true,
+      vision: true,
+      function_calling: true,
+      extended_thinking: true,
+      description: 'OpenAI GPT-5.1 Codex Mini 轻量代码模型'
+    },
     provider_count: 2,
-    alias_count: 0,
     created_at: '2024-01-01T00:00:00Z'
   }
 ]

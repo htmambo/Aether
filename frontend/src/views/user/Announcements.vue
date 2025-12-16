@@ -226,8 +226,8 @@
           <div
             v-for="announcement in announcements"
             :key="announcement.id"
+            class="p-4 space-y-2 cursor-pointer transition-colors"
             :class="[
-              'p-4 space-y-2 cursor-pointer transition-colors',
               announcement.is_read ? 'hover:bg-muted/30' : 'bg-primary/5 hover:bg-primary/10'
             ]"
             @click="viewAnnouncementDetail(announcement)"

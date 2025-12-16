@@ -385,7 +385,7 @@ class ModelCacheService:
             "is_active": model.is_active,
             "is_available": model.is_available if hasattr(model, "is_available") else True,
             "price_per_request": (
-                float(model.price_per_request) if model.price_per_request else None
+                float(model.price_per_request) if model.price_per_request is not None else None
             ),
             "tiered_pricing": model.tiered_pricing,
             "supports_vision": model.supports_vision,
@@ -425,14 +425,15 @@ class ModelCacheService:
             "id": global_model.id,
             "name": global_model.name,
             "display_name": global_model.display_name,
-            "default_supports_vision": global_model.default_supports_vision,
-            "default_supports_function_calling": global_model.default_supports_function_calling,
-            "default_supports_streaming": global_model.default_supports_streaming,
-            "default_supports_extended_thinking": global_model.default_supports_extended_thinking,
-            "default_supports_image_generation": global_model.default_supports_image_generation,
             "supported_capabilities": global_model.supported_capabilities,
+            "config": global_model.config,
+            "default_tiered_pricing": global_model.default_tiered_pricing,
+            "default_price_per_request": (
+                float(global_model.default_price_per_request)
+                if global_model.default_price_per_request is not None
+                else None
+            ),
             "is_active": global_model.is_active,
-            "description": global_model.description,
         }
 
     @staticmethod
@@ -442,19 +443,10 @@ class ModelCacheService:
             id=global_model_dict["id"],
             name=global_model_dict["name"],
             display_name=global_model_dict.get("display_name"),
-            default_supports_vision=global_model_dict.get("default_supports_vision", False),
-            default_supports_function_calling=global_model_dict.get(
-                "default_supports_function_calling", False
-            ),
-            default_supports_streaming=global_model_dict.get("default_supports_streaming", True),
-            default_supports_extended_thinking=global_model_dict.get(
-                "default_supports_extended_thinking", False
-            ),
-            default_supports_image_generation=global_model_dict.get(
-                "default_supports_image_generation", False
-            ),
             supported_capabilities=global_model_dict.get("supported_capabilities") or [],
+            config=global_model_dict.get("config"),
+            default_tiered_pricing=global_model_dict.get("default_tiered_pricing"),
+            default_price_per_request=global_model_dict.get("default_price_per_request"),
             is_active=global_model_dict.get("is_active", True),
-            description=global_model_dict.get("description"),
         )
         return global_model

@@ -935,7 +935,10 @@ onBeforeUnmount(() => {
                 :key="`${index}-${aliasIndex}`"
               >
                 <TableCell>
-                  <Badge variant="outline" class="text-xs">
+                  <Badge
+                    variant="outline"
+                    class="text-xs"
+                  >
                     {{ mapping.provider_name }}
                   </Badge>
                 </TableCell>
@@ -981,7 +984,10 @@ onBeforeUnmount(() => {
               class="p-4 space-y-2"
             >
               <div class="flex items-center justify-between">
-                <Badge variant="outline" class="text-xs">
+                <Badge
+                  variant="outline"
+                  class="text-xs"
+                >
                   {{ mapping.provider_name }}
                 </Badge>
                 <div class="flex items-center gap-2">

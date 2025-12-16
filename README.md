@@ -63,7 +63,7 @@ docker-compose up -d
 # 4. 更新
 docker-compose pull && docker-compose up -d
 
-# 5. 数据库迁移（首次部署或更新后执行）
+# 5. 数据库迁移 - 更新后执行
 ./migrate.sh
 ```
 

@@ -26,6 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -576,11 +577,6 @@ class GlobalModel(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     name = Column(String(100), unique=True, nullable=False, index=True)  # 统一模型名（唯一）
     display_name = Column(String(100), nullable=False)
-    description = Column(Text, nullable=True)
-
-    # 模型元数据
-    icon_url = Column(String(500), nullable=True)
-    official_url = Column(String(500), nullable=True)  # 官方文档链接
 
     # 按次计费配置（每次请求的固定费用，美元）- 可选，与按 token 计费叠加
     default_price_per_request = Column(Float, nullable=True, default=None)  # 每次请求固定费用
@@ -606,16 +602,33 @@ class GlobalModel(Base):
     # }
     default_tiered_pricing = Column(JSON, nullable=False)
 
-    # 默认能力配置 - Provider 可覆盖
-    default_supports_vision = Column(Boolean, default=False, nullable=True)
-    default_supports_function_calling = Column(Boolean, default=False, nullable=True)
-    default_supports_streaming = Column(Boolean, default=True, nullable=True)
-    default_supports_extended_thinking = Column(Boolean, default=False, nullable=True)
-    default_supports_image_generation = Column(Boolean, default=False, nullable=True)
-
     # Key 能力配置 - 模型支持的能力列表（如 ["cache_1h", "context_1m"]）
     # Key 只能启用模型支持的能力
     supported_capabilities = Column(JSON, nullable=True, default=list)
+
+    # 模型配置（JSON格式）- 包含能力、规格、元信息等
+    # 结构示例:
+    # {
+    #     # 能力配置
+    #     "streaming": true,
+    #     "vision": true,
+    #     "function_calling": true,
+    #     "extended_thinking": false,
+    #     "image_generation": false,
+    #     # 规格参数
+    #     "context_limit": 200000,
+    #     "output_limit": 8192,
+    #     # 元信息
+    #     "description": "...",
+    #     "icon_url": "...",
+    #     "official_url": "...",
+    #     "knowledge_cutoff": "2024-04",
+    #     "family": "claude-3.5",
+    #     "release_date": "2024-10-22",
+    #     "input_modalities": ["text", "image"],
+    #     "output_modalities": ["text"],
+    # }
+    config = Column(JSONB, nullable=True, default=dict)
 
     # 状态
     is_active = Column(Boolean, default=True, nullable=False)
@@ -767,11 +780,22 @@ class Model(Base):
         """获取有效的能力配置（通用辅助方法）"""
         local_value = getattr(self, attr_name, None)
         if local_value is not None:
-            return local_value
+            return bool(local_value)
         if self.global_model:
-            global_value = getattr(self.global_model, f"default_{attr_name}", None)
-            if global_value is not None:
-                return global_value
+            config_key_map = {
+                "supports_vision": "vision",
+                "supports_function_calling": "function_calling",
+                "supports_streaming": "streaming",
+                "supports_extended_thinking": "extended_thinking",
+                "supports_image_generation": "image_generation",
+            }
+            config_key = config_key_map.get(attr_name)
+            if config_key:
+                global_config = getattr(self.global_model, "config", None)
+                if isinstance(global_config, dict):
+                    global_value = global_config.get(config_key)
+                    if global_value is not None:
+                        return bool(global_value)
         return default
 
     def get_effective_supports_vision(self) -> bool:

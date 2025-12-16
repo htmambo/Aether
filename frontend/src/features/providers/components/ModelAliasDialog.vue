@@ -117,8 +117,12 @@
           class="text-center py-6 text-muted-foreground border rounded-lg border-dashed"
         >
           <Tag class="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p class="text-sm">未配置映射</p>
-          <p class="text-xs mt-1">将只使用主模型名称</p>
+          <p class="text-sm">
+            未配置映射
+          </p>
+          <p class="text-xs mt-1">
+            将只使用主模型名称
+          </p>
         </div>
       </div>
     </div>

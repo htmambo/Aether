@@ -165,17 +165,17 @@
                 <TableCell class="py-4">
                   <div class="flex gap-1.5">
                     <Eye
-                      v-if="model.default_supports_vision"
+                      v-if="model.config?.vision === true"
                       class="w-4 h-4 text-muted-foreground"
                       title="Vision"
                     />
                     <Wrench
-                      v-if="model.default_supports_function_calling"
+                      v-if="model.config?.function_calling === true"
                       class="w-4 h-4 text-muted-foreground"
                       title="Tool Use"
                     />
                     <Brain
-                      v-if="model.default_supports_extended_thinking"
+                      v-if="model.config?.extended_thinking === true"
                       class="w-4 h-4 text-muted-foreground"
                       title="Extended Thinking"
                     />
@@ -253,15 +253,15 @@
             <!-- 第二行：能力图标 -->
             <div class="flex gap-1.5">
               <Eye
-                v-if="model.default_supports_vision"
+                v-if="model.config?.vision === true"
                 class="w-4 h-4 text-muted-foreground"
               />
               <Wrench
-                v-if="model.default_supports_function_calling"
+                v-if="model.config?.function_calling === true"
                 class="w-4 h-4 text-muted-foreground"
               />
               <Brain
-                v-if="model.default_supports_extended_thinking"
+                v-if="model.config?.extended_thinking === true"
                 class="w-4 h-4 text-muted-foreground"
               />
             </div>
@@ -485,13 +485,13 @@ const filteredModels = computed(() => {
 
   // 能力筛选
   if (capabilityFilters.value.vision) {
-    result = result.filter(m => m.default_supports_vision)
+    result = result.filter(m => m.config?.vision === true)
   }
   if (capabilityFilters.value.toolUse) {
-    result = result.filter(m => m.default_supports_function_calling)
+    result = result.filter(m => m.config?.function_calling === true)
   }
   if (capabilityFilters.value.extendedThinking) {
-    result = result.filter(m => m.default_supports_extended_thinking)
+    result = result.filter(m => m.config?.extended_thinking === true)
   }
 
   return result

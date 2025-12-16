@@ -1000,17 +1000,11 @@ const mockHandlers: Record<string, (config: AxiosRequestConfig) => Promise<Axios
         id: m.id,
         name: m.name,
         display_name: m.display_name,
-        description: m.description,
-        icon_url: null,
         is_active: m.is_active,
         default_tiered_pricing: m.default_tiered_pricing,
-        default_price_per_request: null,
-        default_supports_vision: m.default_supports_vision,
-        default_supports_function_calling: m.default_supports_function_calling,
-        default_supports_streaming: m.default_supports_streaming,
-        default_supports_extended_thinking: m.default_supports_extended_thinking || false,
-        default_supports_image_generation: false,
-        supported_capabilities: null
+        default_price_per_request: m.default_price_per_request,
+        supported_capabilities: m.supported_capabilities,
+        config: m.config
       })),
       total: MOCK_GLOBAL_MODELS.length
     })

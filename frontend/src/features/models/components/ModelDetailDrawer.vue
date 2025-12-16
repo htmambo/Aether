@@ -38,12 +38,12 @@
                   >
                     <Copy class="w-3 h-3" />
                   </button>
-                  <template v-if="model.description">
+                  <template v-if="model.config?.description">
                     <span class="shrink-0">·</span>
                     <span
                       class="text-xs truncate"
-                      :title="model.description"
-                    >{{ model.description }}</span>
+                      :title="model.config?.description"
+                    >{{ model.config?.description }}</span>
                   </template>
                 </div>
               </div>
@@ -143,10 +143,10 @@
                       </p>
                     </div>
                     <Badge
-                      :variant="model.default_supports_streaming ?? false ? 'default' : 'secondary'"
+                      :variant="model.config?.streaming !== false ? 'default' : 'secondary'"
                       class="text-xs"
                     >
-                      {{ model.default_supports_streaming ?? false ? '支持' : '不支持' }}
+                      {{ model.config?.streaming !== false ? '支持' : '不支持' }}
                     </Badge>
                   </div>
                   <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -160,10 +160,10 @@
                       </p>
                     </div>
                     <Badge
-                      :variant="model.default_supports_image_generation ?? false ? 'default' : 'secondary'"
+                      :variant="model.config?.image_generation === true ? 'default' : 'secondary'"
                       class="text-xs"
                     >
-                      {{ model.default_supports_image_generation ?? false ? '支持' : '不支持' }}
+                      {{ model.config?.image_generation === true ? '支持' : '不支持' }}
                     </Badge>
                   </div>
                   <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -177,10 +177,10 @@
                       </p>
                     </div>
                     <Badge
-                      :variant="model.default_supports_vision ?? false ? 'default' : 'secondary'"
+                      :variant="model.config?.vision === true ? 'default' : 'secondary'"
                       class="text-xs"
                     >
-                      {{ model.default_supports_vision ?? false ? '支持' : '不支持' }}
+                      {{ model.config?.vision === true ? '支持' : '不支持' }}
                     </Badge>
                   </div>
                   <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -194,10 +194,10 @@
                       </p>
                     </div>
                     <Badge
-                      :variant="model.default_supports_function_calling ?? false ? 'default' : 'secondary'"
+                      :variant="model.config?.function_calling === true ? 'default' : 'secondary'"
                       class="text-xs"
                     >
-                      {{ model.default_supports_function_calling ?? false ? '支持' : '不支持' }}
+                      {{ model.config?.function_calling === true ? '支持' : '不支持' }}
                     </Badge>
                   </div>
                   <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -211,10 +211,10 @@
                       </p>
                     </div>
                     <Badge
-                      :variant="model.default_supports_extended_thinking ?? false ? 'default' : 'secondary'"
+                      :variant="model.config?.extended_thinking === true ? 'default' : 'secondary'"
                       class="text-xs"
                     >
-                      {{ model.default_supports_extended_thinking ?? false ? '支持' : '不支持' }}
+                      {{ model.config?.extended_thinking === true ? '支持' : '不支持' }}
                     </Badge>
                   </div>
                 </div>
@@ -396,11 +396,11 @@
                   </div>
                   <div class="p-3 rounded-lg border bg-muted/20">
                     <div class="flex items-center justify-between">
-                      <Label class="text-xs text-muted-foreground">别名数量</Label>
-                      <Tag class="w-4 h-4 text-muted-foreground" />
+                      <Label class="text-xs text-muted-foreground">调用次数</Label>
+                      <BarChart3 class="w-4 h-4 text-muted-foreground" />
                     </div>
                     <p class="text-2xl font-bold mt-1">
-                      {{ model.alias_count || 0 }}
+                      {{ model.usage_count || 0 }}
                     </p>
                   </div>
                 </div>
@@ -455,105 +455,153 @@
                 <template v-else-if="providers.length > 0">
                   <!-- 桌面端表格 -->
                   <Table class="hidden sm:table">
-                  <TableHeader>
-                    <TableRow class="border-b border-border/60 hover:bg-transparent">
-                      <TableHead class="h-10 font-semibold">
-                        Provider
-                      </TableHead>
-                      <TableHead class="w-[120px] h-10 font-semibold">
-                        能力
-                      </TableHead>
-                      <TableHead class="w-[180px] h-10 font-semibold">
-                        价格 ($/M)
-                      </TableHead>
-                      <TableHead class="w-[80px] h-10 font-semibold text-center">
-                        操作
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow
+                    <TableHeader>
+                      <TableRow class="border-b border-border/60 hover:bg-transparent">
+                        <TableHead class="h-10 font-semibold">
+                          Provider
+                        </TableHead>
+                        <TableHead class="w-[120px] h-10 font-semibold">
+                          能力
+                        </TableHead>
+                        <TableHead class="w-[180px] h-10 font-semibold">
+                          价格 ($/M)
+                        </TableHead>
+                        <TableHead class="w-[80px] h-10 font-semibold text-center">
+                          操作
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow
+                        v-for="provider in providers"
+                        :key="provider.id"
+                        class="border-b border-border/40 hover:bg-muted/30 transition-colors"
+                      >
+                        <TableCell class="py-3">
+                          <div class="flex items-center gap-2">
+                            <span
+                              class="w-2 h-2 rounded-full shrink-0"
+                              :class="provider.is_active ? 'bg-green-500' : 'bg-gray-300'"
+                              :title="provider.is_active ? '活跃' : '停用'"
+                            />
+                            <span class="font-medium truncate">{{ provider.display_name }}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell class="py-3">
+                          <div class="flex gap-0.5">
+                            <Zap
+                              v-if="provider.supports_streaming"
+                              class="w-3.5 h-3.5 text-muted-foreground"
+                              title="流式输出"
+                            />
+                            <Eye
+                              v-if="provider.supports_vision"
+                              class="w-3.5 h-3.5 text-muted-foreground"
+                              title="视觉理解"
+                            />
+                            <Wrench
+                              v-if="provider.supports_function_calling"
+                              class="w-3.5 h-3.5 text-muted-foreground"
+                              title="工具调用"
+                            />
+                          </div>
+                        </TableCell>
+                        <TableCell class="py-3">
+                          <div class="text-xs font-mono space-y-0.5">
+                            <!-- Token 计费：输入/输出 -->
+                            <div v-if="(provider.input_price_per_1m || 0) > 0 || (provider.output_price_per_1m || 0) > 0">
+                              <span class="text-muted-foreground">输入/输出:</span>
+                              <span class="ml-1">${{ (provider.input_price_per_1m || 0).toFixed(1) }}/${{ (provider.output_price_per_1m || 0).toFixed(1) }}</span>
+                              <!-- 阶梯标记 -->
+                              <span
+                                v-if="(provider.tier_count || 1) > 1"
+                                class="ml-1 text-muted-foreground"
+                                title="阶梯计费"
+                              >[阶梯]</span>
+                            </div>
+                            <!-- 缓存价格 -->
+                            <div
+                              v-if="(provider.cache_creation_price_per_1m || 0) > 0 || (provider.cache_read_price_per_1m || 0) > 0"
+                              class="text-muted-foreground"
+                            >
+                              <span>缓存:</span>
+                              <span class="ml-1">${{ (provider.cache_creation_price_per_1m || 0).toFixed(2) }}/${{ (provider.cache_read_price_per_1m || 0).toFixed(2) }}</span>
+                            </div>
+                            <!-- 1h 缓存价格 -->
+                            <div
+                              v-if="(provider.cache_1h_creation_price_per_1m || 0) > 0"
+                              class="text-muted-foreground"
+                            >
+                              <span>1h 缓存:</span>
+                              <span class="ml-1">${{ (provider.cache_1h_creation_price_per_1m || 0).toFixed(2) }}</span>
+                            </div>
+                            <!-- 按次计费 -->
+                            <div v-if="(provider.price_per_request || 0) > 0">
+                              <span class="text-muted-foreground">按次:</span>
+                              <span class="ml-1">${{ (provider.price_per_request || 0).toFixed(3) }}/次</span>
+                            </div>
+                            <!-- 无定价 -->
+                            <span
+                              v-if="!(provider.input_price_per_1m || 0) && !(provider.output_price_per_1m || 0) && !(provider.price_per_request || 0)"
+                              class="text-muted-foreground"
+                            >-</span>
+                          </div>
+                        </TableCell>
+                        <TableCell class="py-3 text-center">
+                          <div class="flex items-center justify-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              class="h-7 w-7"
+                              title="编辑此关联"
+                              @click="$emit('editProvider', provider)"
+                            >
+                              <Edit class="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              class="h-7 w-7"
+                              :title="provider.is_active ? '停用此关联' : '启用此关联'"
+                              @click="$emit('toggleProviderStatus', provider)"
+                            >
+                              <Power class="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              class="h-7 w-7"
+                              title="删除此关联"
+                              @click="$emit('deleteProvider', provider)"
+                            >
+                              <Trash2 class="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+
+                  <!-- 移动端卡片列表 -->
+                  <div class="sm:hidden divide-y divide-border/40">
+                    <div
                       v-for="provider in providers"
                       :key="provider.id"
-                      class="border-b border-border/40 hover:bg-muted/30 transition-colors"
+                      class="p-4 space-y-3"
                     >
-                      <TableCell class="py-3">
-                        <div class="flex items-center gap-2">
+                      <div class="flex items-start justify-between gap-3">
+                        <div class="flex items-center gap-2 min-w-0">
                           <span
                             class="w-2 h-2 rounded-full shrink-0"
                             :class="provider.is_active ? 'bg-green-500' : 'bg-gray-300'"
-                            :title="provider.is_active ? '活跃' : '停用'"
                           />
                           <span class="font-medium truncate">{{ provider.display_name }}</span>
                         </div>
-                      </TableCell>
-                      <TableCell class="py-3">
-                        <div class="flex gap-0.5">
-                          <Zap
-                            v-if="provider.supports_streaming"
-                            class="w-3.5 h-3.5 text-muted-foreground"
-                            title="流式输出"
-                          />
-                          <Eye
-                            v-if="provider.supports_vision"
-                            class="w-3.5 h-3.5 text-muted-foreground"
-                            title="视觉理解"
-                          />
-                          <Wrench
-                            v-if="provider.supports_function_calling"
-                            class="w-3.5 h-3.5 text-muted-foreground"
-                            title="工具调用"
-                          />
-                        </div>
-                      </TableCell>
-                      <TableCell class="py-3">
-                        <div class="text-xs font-mono space-y-0.5">
-                          <!-- Token 计费：输入/输出 -->
-                          <div v-if="(provider.input_price_per_1m || 0) > 0 || (provider.output_price_per_1m || 0) > 0">
-                            <span class="text-muted-foreground">输入/输出:</span>
-                            <span class="ml-1">${{ (provider.input_price_per_1m || 0).toFixed(1) }}/${{ (provider.output_price_per_1m || 0).toFixed(1) }}</span>
-                            <!-- 阶梯标记 -->
-                            <span
-                              v-if="(provider.tier_count || 1) > 1"
-                              class="ml-1 text-muted-foreground"
-                              title="阶梯计费"
-                            >[阶梯]</span>
-                          </div>
-                          <!-- 缓存价格 -->
-                          <div
-                            v-if="(provider.cache_creation_price_per_1m || 0) > 0 || (provider.cache_read_price_per_1m || 0) > 0"
-                            class="text-muted-foreground"
-                          >
-                            <span>缓存:</span>
-                            <span class="ml-1">${{ (provider.cache_creation_price_per_1m || 0).toFixed(2) }}/${{ (provider.cache_read_price_per_1m || 0).toFixed(2) }}</span>
-                          </div>
-                          <!-- 1h 缓存价格 -->
-                          <div
-                            v-if="(provider.cache_1h_creation_price_per_1m || 0) > 0"
-                            class="text-muted-foreground"
-                          >
-                            <span>1h 缓存:</span>
-                            <span class="ml-1">${{ (provider.cache_1h_creation_price_per_1m || 0).toFixed(2) }}</span>
-                          </div>
-                          <!-- 按次计费 -->
-                          <div v-if="(provider.price_per_request || 0) > 0">
-                            <span class="text-muted-foreground">按次:</span>
-                            <span class="ml-1">${{ (provider.price_per_request || 0).toFixed(3) }}/次</span>
-                          </div>
-                          <!-- 无定价 -->
-                          <span
-                            v-if="!(provider.input_price_per_1m || 0) && !(provider.output_price_per_1m || 0) && !(provider.price_per_request || 0)"
-                            class="text-muted-foreground"
-                          >-</span>
-                        </div>
-                      </TableCell>
-                      <TableCell class="py-3 text-center">
-                        <div class="flex items-center justify-center gap-1">
+                        <div class="flex items-center gap-1 shrink-0">
                           <Button
                             variant="ghost"
                             size="icon"
                             class="h-7 w-7"
-                            title="编辑此关联"
                             @click="$emit('editProvider', provider)"
                           >
                             <Edit class="w-3.5 h-3.5" />
@@ -562,7 +610,6 @@
                             variant="ghost"
                             size="icon"
                             class="h-7 w-7"
-                            :title="provider.is_active ? '停用此关联' : '启用此关联'"
                             @click="$emit('toggleProviderStatus', provider)"
                           >
                             <Power class="w-3.5 h-3.5" />
@@ -571,82 +618,35 @@
                             variant="ghost"
                             size="icon"
                             class="h-7 w-7"
-                            title="删除此关联"
                             @click="$emit('deleteProvider', provider)"
                           >
                             <Trash2 class="w-3.5 h-3.5" />
                           </Button>
                         </div>
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                  </Table>
-
-                  <!-- 移动端卡片列表 -->
-                  <div class="sm:hidden divide-y divide-border/40">
-                  <div
-                    v-for="provider in providers"
-                    :key="provider.id"
-                    class="p-4 space-y-3"
-                  >
-                    <div class="flex items-start justify-between gap-3">
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span
-                          class="w-2 h-2 rounded-full shrink-0"
-                          :class="provider.is_active ? 'bg-green-500' : 'bg-gray-300'"
-                        />
-                        <span class="font-medium truncate">{{ provider.display_name }}</span>
                       </div>
-                      <div class="flex items-center gap-1 shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="h-7 w-7"
-                          @click="$emit('editProvider', provider)"
+                      <div class="flex items-center gap-3 text-xs">
+                        <div class="flex gap-1">
+                          <Zap
+                            v-if="provider.supports_streaming"
+                            class="w-3.5 h-3.5 text-muted-foreground"
+                          />
+                          <Eye
+                            v-if="provider.supports_vision"
+                            class="w-3.5 h-3.5 text-muted-foreground"
+                          />
+                          <Wrench
+                            v-if="provider.supports_function_calling"
+                            class="w-3.5 h-3.5 text-muted-foreground"
+                          />
+                        </div>
+                        <div
+                          v-if="(provider.input_price_per_1m || 0) > 0 || (provider.output_price_per_1m || 0) > 0"
+                          class="text-muted-foreground font-mono"
                         >
-                          <Edit class="w-3.5 h-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="h-7 w-7"
-                          @click="$emit('toggleProviderStatus', provider)"
-                        >
-                          <Power class="w-3.5 h-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          class="h-7 w-7"
-                          @click="$emit('deleteProvider', provider)"
-                        >
-                          <Trash2 class="w-3.5 h-3.5" />
-                        </Button>
+                          ${{ (provider.input_price_per_1m || 0).toFixed(1) }}/${{ (provider.output_price_per_1m || 0).toFixed(1) }}
+                        </div>
                       </div>
                     </div>
-                    <div class="flex items-center gap-3 text-xs">
-                      <div class="flex gap-1">
-                        <Zap
-                          v-if="provider.supports_streaming"
-                          class="w-3.5 h-3.5 text-muted-foreground"
-                        />
-                        <Eye
-                          v-if="provider.supports_vision"
-                          class="w-3.5 h-3.5 text-muted-foreground"
-                        />
-                        <Wrench
-                          v-if="provider.supports_function_calling"
-                          class="w-3.5 h-3.5 text-muted-foreground"
-                        />
-                      </div>
-                      <div
-                        v-if="(provider.input_price_per_1m || 0) > 0 || (provider.output_price_per_1m || 0) > 0"
-                        class="text-muted-foreground font-mono"
-                      >
-                        ${{ (provider.input_price_per_1m || 0).toFixed(1) }}/${{ (provider.output_price_per_1m || 0).toFixed(1) }}
-                      </div>
-                    </div>
-                  </div>
                   </div>
                 </template>
 
@@ -695,7 +695,8 @@ import {
   Loader2,
   RefreshCw,
   Copy,
-  Layers
+  Layers,
+  BarChart3
 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import Card from '@/components/ui/card.vue'

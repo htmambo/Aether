@@ -407,67 +407,45 @@ export interface TieredPricingConfig {
 export interface GlobalModelCreate {
   name: string
   display_name: string
-  description?: string
-  official_url?: string
-  icon_url?: string
   // 按次计费配置（可选，与阶梯计费叠加）
   default_price_per_request?: number
   // 阶梯计费配置（必填，固定价格用单阶梯表示）
   default_tiered_pricing: TieredPricingConfig
-  // 默认能力配置
-  default_supports_vision?: boolean
-  default_supports_function_calling?: boolean
-  default_supports_streaming?: boolean
-  default_supports_extended_thinking?: boolean
-  default_supports_image_generation?: boolean
   // Key 能力配置 - 模型支持的能力列表
   supported_capabilities?: string[]
+  // 模型配置（JSON格式）- 包含能力、规格、元信息等
+  config?: Record<string, any>
   is_active?: boolean
 }
 
 export interface GlobalModelUpdate {
   display_name?: string
-  description?: string
-  official_url?: string
-  icon_url?: string
   is_active?: boolean
   // 按次计费配置
   default_price_per_request?: number | null  // null 表示清空
   // 阶梯计费配置
   default_tiered_pricing?: TieredPricingConfig
-  // 默认能力配置
-  default_supports_vision?: boolean
-  default_supports_function_calling?: boolean
-  default_supports_streaming?: boolean
-  default_supports_extended_thinking?: boolean
-  default_supports_image_generation?: boolean
   // Key 能力配置 - 模型支持的能力列表
   supported_capabilities?: string[] | null
+  // 模型配置（JSON格式）- 包含能力、规格、元信息等
+  config?: Record<string, any> | null
 }
 
 export interface GlobalModelResponse {
   id: string
   name: string
   display_name: string
-  description?: string
-  official_url?: string
-  icon_url?: string
   is_active: boolean
   // 按次计费配置
   default_price_per_request?: number
   // 阶梯计费配置（必填）
   default_tiered_pricing: TieredPricingConfig
-  // 默认能力配置
-  default_supports_vision?: boolean
-  default_supports_function_calling?: boolean
-  default_supports_streaming?: boolean
-  default_supports_extended_thinking?: boolean
-  default_supports_image_generation?: boolean
   // Key 能力配置 - 模型支持的能力列表
   supported_capabilities?: string[] | null
+  // 模型配置（JSON格式）
+  config?: Record<string, any> | null
   // 统计数据
   provider_count?: number
-  alias_count?: number
   usage_count?: number
   created_at: string
   updated_at?: string

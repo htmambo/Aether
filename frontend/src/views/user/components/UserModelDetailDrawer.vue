@@ -38,10 +38,10 @@
                   </button>
                 </div>
                 <p
-                  v-if="model.description"
+                  v-if="model.config?.description"
                   class="text-xs text-muted-foreground"
                 >
-                  {{ model.description }}
+                  {{ model.config?.description }}
                 </p>
               </div>
               <Button
@@ -73,10 +73,10 @@
                     </p>
                   </div>
                   <Badge
-                    :variant="model.default_supports_streaming ?? false ? 'default' : 'secondary'"
+                    :variant="model.config?.streaming !== false ? 'default' : 'secondary'"
                     class="text-xs"
                   >
-                    {{ model.default_supports_streaming ?? false ? '支持' : '不支持' }}
+                    {{ model.config?.streaming !== false ? '支持' : '不支持' }}
                   </Badge>
                 </div>
                 <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -90,10 +90,10 @@
                     </p>
                   </div>
                   <Badge
-                    :variant="model.default_supports_image_generation ?? false ? 'default' : 'secondary'"
+                    :variant="model.config?.image_generation === true ? 'default' : 'secondary'"
                     class="text-xs"
                   >
-                    {{ model.default_supports_image_generation ?? false ? '支持' : '不支持' }}
+                    {{ model.config?.image_generation === true ? '支持' : '不支持' }}
                   </Badge>
                 </div>
                 <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -107,10 +107,10 @@
                     </p>
                   </div>
                   <Badge
-                    :variant="model.default_supports_vision ?? false ? 'default' : 'secondary'"
+                    :variant="model.config?.vision === true ? 'default' : 'secondary'"
                     class="text-xs"
                   >
-                    {{ model.default_supports_vision ?? false ? '支持' : '不支持' }}
+                    {{ model.config?.vision === true ? '支持' : '不支持' }}
                   </Badge>
                 </div>
                 <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -124,10 +124,10 @@
                     </p>
                   </div>
                   <Badge
-                    :variant="model.default_supports_function_calling ?? false ? 'default' : 'secondary'"
+                    :variant="model.config?.function_calling === true ? 'default' : 'secondary'"
                     class="text-xs"
                   >
-                    {{ model.default_supports_function_calling ?? false ? '支持' : '不支持' }}
+                    {{ model.config?.function_calling === true ? '支持' : '不支持' }}
                   </Badge>
                 </div>
                 <div class="flex items-center gap-2 p-3 rounded-lg border">
@@ -141,10 +141,10 @@
                     </p>
                   </div>
                   <Badge
-                    :variant="model.default_supports_extended_thinking ?? false ? 'default' : 'secondary'"
+                    :variant="model.config?.extended_thinking === true ? 'default' : 'secondary'"
                     class="text-xs"
                   >
-                    {{ model.default_supports_extended_thinking ?? false ? '支持' : '不支持' }}
+                    {{ model.config?.extended_thinking === true ? '支持' : '不支持' }}
                   </Badge>
                 </div>
               </div>

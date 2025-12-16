@@ -72,10 +72,12 @@ class AdminGetModelCatalogAdapter(AdminApiAdapter):
         for gm in global_models:
             gm_id = gm.id
             provider_entries: List[ModelCatalogProviderDetail] = []
+            # 从 config JSON 读取能力标志
+            gm_config = gm.config or {}
             capability_flags = {
-                "supports_vision": gm.default_supports_vision or False,
-                "supports_function_calling": gm.default_supports_function_calling or False,
-                "supports_streaming": gm.default_supports_streaming or False,
+                "supports_vision": gm_config.get("vision", False),
+                "supports_function_calling": gm_config.get("function_calling", False),
+                "supports_streaming": gm_config.get("streaming", True),
             }
 
             # 遍历该 GlobalModel 的所有关联提供商
@@ -140,7 +142,7 @@ class AdminGetModelCatalogAdapter(AdminApiAdapter):
                 ModelCatalogItem(
                     global_model_name=gm.name,
                     display_name=gm.display_name,
-                    description=gm.description,
+                    description=gm_config.get("description"),
                     providers=provider_entries,
                     price_range=price_range,
                     total_providers=len(provider_entries),

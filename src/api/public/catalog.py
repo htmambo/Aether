@@ -210,9 +210,9 @@ class PublicModelsAdapter(PublicApiAdapter):
                 provider_display_name=provider.display_name,
                 name=unified_name,
                 display_name=display_name,
-                description=global_model.description if global_model else None,
+                description=global_model.config.get("description") if global_model and global_model.config else None,
                 tags=None,
-                icon_url=global_model.icon_url if global_model else None,
+                icon_url=global_model.config.get("icon_url") if global_model and global_model.config else None,
                 input_price_per_1m=model.get_effective_input_price(),
                 output_price_per_1m=model.get_effective_output_price(),
                 cache_creation_price_per_1m=model.get_effective_cache_creation_price(),
@@ -274,7 +274,6 @@ class PublicSearchModelsAdapter(PublicApiAdapter):
             Model.provider_model_name.ilike(f"%{self.query}%")
             | GlobalModel.name.ilike(f"%{self.query}%")
             | GlobalModel.display_name.ilike(f"%{self.query}%")
-            | GlobalModel.description.ilike(f"%{self.query}%")
         )
         query_stmt = query_stmt.filter(search_filter)
         if self.provider_id is not None:
@@ -293,9 +292,9 @@ class PublicSearchModelsAdapter(PublicApiAdapter):
                 provider_display_name=provider.display_name,
                 name=unified_name,
                 display_name=display_name,
-                description=global_model.description if global_model else None,
+                description=global_model.config.get("description") if global_model and global_model.config else None,
                 tags=None,
-                icon_url=global_model.icon_url if global_model else None,
+                icon_url=global_model.config.get("icon_url") if global_model and global_model.config else None,
                 input_price_per_1m=model.get_effective_input_price(),
                 output_price_per_1m=model.get_effective_output_price(),
                 cache_creation_price_per_1m=model.get_effective_cache_creation_price(),
@@ -499,7 +498,6 @@ class PublicGlobalModelsAdapter(PublicApiAdapter):
                 or_(
                     GlobalModel.name.ilike(search_term),
                     GlobalModel.display_name.ilike(search_term),
-                    GlobalModel.description.ilike(search_term),
                 )
             )
 
@@ -517,21 +515,11 @@ class PublicGlobalModelsAdapter(PublicApiAdapter):
                     id=gm.id,
                     name=gm.name,
                     display_name=gm.display_name,
-                    description=gm.description,
-                    icon_url=gm.icon_url,
                     is_active=gm.is_active,
                     default_price_per_request=gm.default_price_per_request,
                     default_tiered_pricing=gm.default_tiered_pricing,
-                    default_supports_vision=gm.default_supports_vision or False,
-                    default_supports_function_calling=gm.default_supports_function_calling or False,
-                    default_supports_streaming=(
-                        gm.default_supports_streaming
-                        if gm.default_supports_streaming is not None
-                        else True
-                    ),
-                    default_supports_extended_thinking=gm.default_supports_extended_thinking
-                    or False,
                     supported_capabilities=gm.supported_capabilities,
+                    config=gm.config,
                 )
             )
 

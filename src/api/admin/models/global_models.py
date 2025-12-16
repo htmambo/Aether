@@ -187,21 +187,15 @@ class AdminCreateGlobalModelAdapter(AdminApiAdapter):
             db=context.db,
             name=self.payload.name,
             display_name=self.payload.display_name,
-            description=self.payload.description,
-            official_url=self.payload.official_url,
-            icon_url=self.payload.icon_url,
             is_active=self.payload.is_active,
             # 按次计费配置
             default_price_per_request=self.payload.default_price_per_request,
             # 阶梯计费配置
             default_tiered_pricing=tiered_pricing_dict,
-            # 默认能力配置
-            default_supports_vision=self.payload.default_supports_vision,
-            default_supports_function_calling=self.payload.default_supports_function_calling,
-            default_supports_streaming=self.payload.default_supports_streaming,
-            default_supports_extended_thinking=self.payload.default_supports_extended_thinking,
             # Key 能力配置
             supported_capabilities=self.payload.supported_capabilities,
+            # 模型配置（JSON）
+            config=self.payload.config,
         )
 
         logger.info(f"GlobalModel 已创建: id={global_model.id} name={global_model.name}")

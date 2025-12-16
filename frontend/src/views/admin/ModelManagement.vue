@@ -111,9 +111,6 @@
               <TableHead class="w-[80px] text-center">
                 提供商
               </TableHead>
-              <TableHead class="w-[70px] text-center">
-                别名/映射
-              </TableHead>
               <TableHead class="w-[80px] text-center">
                 调用次数
               </TableHead>
@@ -128,7 +125,7 @@
           <TableBody>
             <TableRow v-if="loading">
               <TableCell
-                colspan="8"
+                colspan="7"
                 class="text-center py-8"
               >
                 <Loader2 class="w-6 h-6 animate-spin mx-auto" />
@@ -136,7 +133,7 @@
             </TableRow>
             <TableRow v-else-if="filteredGlobalModels.length === 0">
               <TableCell
-                colspan="8"
+                colspan="7"
                 class="text-center py-8 text-muted-foreground"
               >
                 没有找到匹配的模型
@@ -171,27 +168,27 @@
                   <div class="space-y-1 w-fit">
                     <div class="flex flex-wrap gap-1">
                       <Zap
-                        v-if="model.default_supports_streaming"
+                        v-if="model.config?.streaming !== false"
                         class="w-4 h-4 text-muted-foreground"
                         title="流式输出"
                       />
                       <Image
-                        v-if="model.default_supports_image_generation"
+                        v-if="model.config?.image_generation === true"
                         class="w-4 h-4 text-muted-foreground"
                         title="图像生成"
                       />
                       <Eye
-                        v-if="model.default_supports_vision"
+                        v-if="model.config?.vision === true"
                         class="w-4 h-4 text-muted-foreground"
                         title="视觉理解"
                       />
                       <Wrench
-                        v-if="model.default_supports_function_calling"
+                        v-if="model.config?.function_calling === true"
                         class="w-4 h-4 text-muted-foreground"
                         title="工具调用"
                       />
                       <Brain
-                        v-if="model.default_supports_extended_thinking"
+                        v-if="model.config?.extended_thinking === true"
                         class="w-4 h-4 text-muted-foreground"
                         title="深度思考"
                       />
@@ -242,11 +239,6 @@
                 <TableCell class="text-center">
                   <Badge variant="secondary">
                     {{ model.provider_count || 0 }}
-                  </Badge>
-                </TableCell>
-                <TableCell class="text-center">
-                  <Badge variant="secondary">
-                    {{ model.alias_count || 0 }}
                   </Badge>
                 </TableCell>
                 <TableCell class="text-center">
@@ -369,23 +361,23 @@
             <!-- 第二行：能力图标 -->
             <div class="flex flex-wrap gap-1.5">
               <Zap
-                v-if="model.default_supports_streaming"
+                v-if="model.config?.streaming !== false"
                 class="w-4 h-4 text-muted-foreground"
               />
               <Image
-                v-if="model.default_supports_image_generation"
+                v-if="model.config?.image_generation === true"
                 class="w-4 h-4 text-muted-foreground"
               />
               <Eye
-                v-if="model.default_supports_vision"
+                v-if="model.config?.vision === true"
                 class="w-4 h-4 text-muted-foreground"
               />
               <Wrench
-                v-if="model.default_supports_function_calling"
+                v-if="model.config?.function_calling === true"
                 class="w-4 h-4 text-muted-foreground"
               />
               <Brain
-                v-if="model.default_supports_extended_thinking"
+                v-if="model.config?.extended_thinking === true"
                 class="w-4 h-4 text-muted-foreground"
               />
             </div>
@@ -393,7 +385,6 @@
             <!-- 第三行：统计信息 -->
             <div class="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <span>提供商 {{ model.provider_count || 0 }}</span>
-              <span>别名 {{ model.alias_count || 0 }}</span>
               <span>调用 {{ formatUsageCount(model.usage_count || 0) }}</span>
               <span
                 v-if="getFirstTierPrice(model, 'input') || getFirstTierPrice(model, 'output')"
@@ -1022,19 +1013,19 @@ const filteredGlobalModels = computed(() => {
 
   // 能力筛选
   if (capabilityFilters.value.streaming) {
-    result = result.filter(m => m.default_supports_streaming)
+    result = result.filter(m => m.config?.streaming !== false)
   }
   if (capabilityFilters.value.imageGeneration) {
-    result = result.filter(m => m.default_supports_image_generation)
+    result = result.filter(m => m.config?.image_generation === true)
   }
   if (capabilityFilters.value.vision) {
-    result = result.filter(m => m.default_supports_vision)
+    result = result.filter(m => m.config?.vision === true)
   }
   if (capabilityFilters.value.toolUse) {
-    result = result.filter(m => m.default_supports_function_calling)
+    result = result.filter(m => m.config?.function_calling === true)
   }
   if (capabilityFilters.value.extendedThinking) {
-    result = result.filter(m => m.default_supports_extended_thinking)
+    result = result.filter(m => m.config?.extended_thinking === true)
   }
 
   return result
