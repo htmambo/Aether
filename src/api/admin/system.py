@@ -852,7 +852,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
             from src.services.cache.invalidation import get_cache_invalidation_service
 
             cache_service = get_cache_invalidation_service()
-            cache_service.invalidate_all()
+            cache_service.clear_all_caches()
 
             return {
                 "message": "配置导入成功",

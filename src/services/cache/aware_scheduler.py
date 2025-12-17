@@ -121,8 +121,17 @@ class CacheAwareScheduler:
         PRIORITY_MODE_PROVIDER,
         PRIORITY_MODE_GLOBAL_KEY,
     }
+    # 调度模式常量
+    SCHEDULING_MODE_FIXED_ORDER = "fixed_order"  # 固定顺序模式
+    SCHEDULING_MODE_CACHE_AFFINITY = "cache_affinity"  # 缓存亲和模式
+    ALLOWED_SCHEDULING_MODES = {
+        SCHEDULING_MODE_FIXED_ORDER,
+        SCHEDULING_MODE_CACHE_AFFINITY,
+    }
 
-    def __init__(self, redis_client=None, priority_mode: Optional[str] = None):
+    def __init__(
+        self, redis_client=None, priority_mode: Optional[str] = None, scheduling_mode: Optional[str] = None
+    ):
         """
         初始化调度器
 
@@ -132,12 +141,16 @@ class CacheAwareScheduler:
         Args:
             redis_client: Redis客户端（可选）
             priority_mode: 候选排序策略（provider | global_key）
+            scheduling_mode: 调度模式（fixed_order | cache_affinity）
         """
         self.redis = redis_client
         self.priority_mode = self._normalize_priority_mode(
             priority_mode or self.PRIORITY_MODE_PROVIDER
         )
-        logger.debug(f"[CacheAwareScheduler] 初始化优先级模式: {self.priority_mode}")
+        self.scheduling_mode = self._normalize_scheduling_mode(
+            scheduling_mode or self.SCHEDULING_MODE_CACHE_AFFINITY
+        )
+        logger.debug(f"[CacheAwareScheduler] 初始化优先级模式: {self.priority_mode}, 调度模式: {self.scheduling_mode}")
 
         # 初始化子组件（将在第一次使用时异步初始化）
         self._affinity_manager: Optional[CacheAffinityManager] = None
@@ -673,14 +686,19 @@ class CacheAwareScheduler:
             f"(api_format={target_format.value}, model={model_name})"
         )
 
-        # 4. 应用缓存亲和性排序（使用 global_model_id 作为模型标识）
-        if affinity_key and candidates:
-            candidates = await self._apply_cache_affinity(
-                candidates=candidates,
-                affinity_key=affinity_key,
-                api_format=target_format,
-                global_model_id=global_model_id,
-            )
+        # 4. 应用缓存亲和性排序（仅在缓存亲和模式下启用）
+        if self.scheduling_mode == self.SCHEDULING_MODE_CACHE_AFFINITY:
+            if affinity_key and candidates:
+                candidates = await self._apply_cache_affinity(
+                    candidates=candidates,
+                    affinity_key=affinity_key,
+                    api_format=target_format,
+                    global_model_id=global_model_id,
+                )
+        else:
+            # 固定顺序模式：标记所有候选为非缓存
+            for candidate in candidates:
+                candidate.is_cached = False
 
         return candidates, global_model_id
 
@@ -1060,6 +1078,22 @@ class CacheAwareScheduler:
         self.priority_mode = normalized
         logger.debug(f"[CacheAwareScheduler] 切换优先级模式为: {self.priority_mode}")
 
+    def _normalize_scheduling_mode(self, mode: Optional[str]) -> str:
+        normalized = (mode or "").strip().lower()
+        if normalized not in self.ALLOWED_SCHEDULING_MODES:
+            if normalized:
+                logger.warning(f"[CacheAwareScheduler] 无效的调度模式 '{mode}'，回退为 cache_affinity")
+            return self.SCHEDULING_MODE_CACHE_AFFINITY
+        return normalized
+
+    def set_scheduling_mode(self, mode: Optional[str]) -> None:
+        """运行时更新调度模式"""
+        normalized = self._normalize_scheduling_mode(mode)
+        if normalized == self.scheduling_mode:
+            return
+        self.scheduling_mode = normalized
+        logger.debug(f"[CacheAwareScheduler] 切换调度模式为: {self.scheduling_mode}")
+
     def _apply_priority_mode_sort(
         self, candidates: List[ProviderCandidate], affinity_key: Optional[str] = None
     ) -> List[ProviderCandidate]:
@@ -1307,6 +1341,7 @@ _scheduler: Optional[CacheAwareScheduler] = None
 async def get_cache_aware_scheduler(
     redis_client=None,
     priority_mode: Optional[str] = None,
+    scheduling_mode: Optional[str] = None,
 ) -> CacheAwareScheduler:
     """
     获取全局CacheAwareScheduler实例
@@ -1317,6 +1352,7 @@ async def get_cache_aware_scheduler(
     Args:
         redis_client: Redis客户端（可选）
         priority_mode: 外部覆盖的优先级模式（provider | global_key）
+        scheduling_mode: 外部覆盖的调度模式（fixed_order | cache_affinity）
 
     Returns:
         CacheAwareScheduler实例
@@ -1324,8 +1360,13 @@ async def get_cache_aware_scheduler(
     global _scheduler
 
     if _scheduler is None:
-        _scheduler = CacheAwareScheduler(redis_client, priority_mode=priority_mode)
-    elif priority_mode:
-        _scheduler.set_priority_mode(priority_mode)
+        _scheduler = CacheAwareScheduler(
+            redis_client, priority_mode=priority_mode, scheduling_mode=scheduling_mode
+        )
+    else:
+        if priority_mode:
+            _scheduler.set_priority_mode(priority_mode)
+        if scheduling_mode:
+            _scheduler.set_scheduling_mode(scheduling_mode)
 
     return _scheduler

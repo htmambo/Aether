@@ -103,7 +103,7 @@
           </div>
           <div class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             <Card class="relative p-3 sm:p-4 border-book-cloth/30">
-              <Clock class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-book-cloth" />
+              <Clock class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   平均响应
@@ -114,7 +114,7 @@
               </div>
             </Card>
             <Card class="relative p-3 sm:p-4 border-kraft/30">
-              <AlertTriangle class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-kraft" />
+              <AlertTriangle class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   错误率
@@ -128,7 +128,7 @@
               </div>
             </Card>
             <Card class="relative p-3 sm:p-4 border-book-cloth/25">
-              <Shuffle class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-kraft" />
+              <Shuffle class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   转移次数
@@ -142,7 +142,7 @@
               v-if="costStats"
               class="relative p-3 sm:p-4 border-manilla/40"
             >
-              <DollarSign class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-book-cloth" />
+              <DollarSign class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   实际成本
@@ -180,7 +180,7 @@
           </div>
           <div class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             <Card class="relative p-3 sm:p-4 border-book-cloth/30">
-              <Database class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-book-cloth" />
+              <Database class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   缓存命中率
@@ -191,7 +191,7 @@
               </div>
             </Card>
             <Card class="relative p-3 sm:p-4 border-kraft/30">
-              <Hash class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-kraft" />
+              <Hash class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   缓存读取
@@ -202,7 +202,7 @@
               </div>
             </Card>
             <Card class="relative p-3 sm:p-4 border-book-cloth/25">
-              <Database class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-kraft" />
+              <Database class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   缓存创建
@@ -216,7 +216,7 @@
               v-if="tokenBreakdown"
               class="relative p-3 sm:p-4 border-manilla/40"
             >
-              <Hash class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-book-cloth" />
+              <Hash class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
                   总Token
@@ -254,16 +254,16 @@
         <Card class="overflow-hidden p-4 flex flex-col flex-1 min-h-0 h-full max-h-[280px] sm:max-h-none">
           <div
             v-if="loadingAnnouncements"
-            class="py-8 text-center"
+            class="flex-1 flex items-center justify-center"
           >
-            <Loader2 class="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+            <Loader2 class="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
 
           <div
             v-else-if="announcements.length === 0"
-            class="py-8 text-center"
+            class="flex-1 flex flex-col items-center justify-center"
           >
-            <Bell class="h-8 w-8 mx-auto text-muted-foreground/40" />
+            <Bell class="h-8 w-8 text-muted-foreground/40" />
             <p class="mt-2 text-xs text-muted-foreground">
               暂无公告
             </p>
@@ -793,9 +793,8 @@ const statCardGlows = [
   'bg-kraft/30'
 ]
 
-const getStatIconColor = (index: number): string => {
-  const colors = ['text-book-cloth', 'text-kraft', 'text-book-cloth', 'text-kraft']
-  return colors[index % colors.length]
+const getStatIconColor = (_index: number): string => {
+  return 'text-muted-foreground'
 }
 
 // 统计数据

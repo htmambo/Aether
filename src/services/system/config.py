@@ -71,6 +71,10 @@ class SystemConfigService:
             "value": "provider",
             "description": "优先级策略：provider(提供商优先模式) 或 global_key(全局Key优先模式)",
         },
+        "scheduling_mode": {
+            "value": "cache_affinity",
+            "description": "调度模式：fixed_order(固定顺序模式，严格按优先级顺序) 或 cache_affinity(缓存亲和模式，优先使用已缓存的Provider)",
+        },
         "auto_delete_expired_keys": {
             "value": False,
             "description": "是否自动删除过期的API Key（True=物理删除，False=仅禁用），仅管理员可配置",

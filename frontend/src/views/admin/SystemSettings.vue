@@ -7,6 +7,7 @@
       <template #actions>
         <Button
           :disabled="loading"
+          class="shadow-none hover:shadow-none"
           @click="saveSystemConfig"
         >
           {{ loading ? '保存中...' : '保存所有配置' }}
@@ -465,317 +466,303 @@
     </div>
 
     <!-- 导入配置对话框 -->
-    <Dialog v-model:open="importDialogOpen">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>导入配置</DialogTitle>
-          <DialogDescription>
-            选择冲突处理模式并确认导入
-          </DialogDescription>
-        </DialogHeader>
-
-        <div class="space-y-4 py-4">
-          <div
-            v-if="importPreview"
-            class="p-3 bg-muted rounded-lg text-sm"
-          >
-            <p class="font-medium mb-2">
-              配置预览
-            </p>
-            <ul class="space-y-1 text-muted-foreground">
-              <li>全局模型: {{ importPreview.global_models?.length || 0 }} 个</li>
-              <li>提供商: {{ importPreview.providers?.length || 0 }} 个</li>
-              <li>
-                端点: {{ importPreview.providers?.reduce((sum: number, p: any) => sum + (p.endpoints?.length || 0), 0) }} 个
-              </li>
-              <li>
-                API Keys: {{ importPreview.providers?.reduce((sum: number, p: any) => sum + p.endpoints?.reduce((s: number, e: any) => s + (e.keys?.length || 0), 0), 0) }} 个
-              </li>
-            </ul>
-          </div>
-
-          <div>
-            <Label class="block text-sm font-medium mb-2">冲突处理模式</Label>
-            <Select v-model="mergeMode">
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="skip">
-                  跳过 - 保留现有配置
-                </SelectItem>
-                <SelectItem value="overwrite">
-                  覆盖 - 用导入配置替换
-                </SelectItem>
-                <SelectItem value="error">
-                  报错 - 遇到冲突时中止
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p class="mt-1 text-xs text-muted-foreground">
-              <template v-if="mergeMode === 'skip'">
-                已存在的配置将被保留，仅导入新配置
-              </template>
-              <template v-else-if="mergeMode === 'overwrite'">
-                已存在的配置将被导入的配置覆盖
-              </template>
-              <template v-else>
-                如果发现任何冲突，导入将中止并回滚
-              </template>
-            </p>
-          </div>
-
-          <div class="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-            <p class="text-sm text-yellow-600 dark:text-yellow-400">
-              注意：相同的 API Keys 会自动跳过，不会创建重复记录。
-            </p>
-          </div>
+    <Dialog
+      v-model:open="importDialogOpen"
+      title="导入配置"
+      description="选择冲突处理模式并确认导入"
+    >
+      <div class="space-y-4">
+        <div
+          v-if="importPreview"
+          class="p-3 bg-muted rounded-lg text-sm"
+        >
+          <p class="font-medium mb-2">
+            配置预览
+          </p>
+          <ul class="space-y-1 text-muted-foreground">
+            <li>全局模型: {{ importPreview.global_models?.length || 0 }} 个</li>
+            <li>提供商: {{ importPreview.providers?.length || 0 }} 个</li>
+            <li>
+              端点: {{ importPreview.providers?.reduce((sum: number, p: any) => sum + (p.endpoints?.length || 0), 0) }} 个
+            </li>
+            <li>
+              API Keys: {{ importPreview.providers?.reduce((sum: number, p: any) => sum + p.endpoints?.reduce((s: number, e: any) => s + (e.keys?.length || 0), 0), 0) }} 个
+            </li>
+          </ul>
         </div>
 
-        <DialogFooter>
-          <Button
-            variant="outline"
-            @click="importDialogOpen = false"
+        <div>
+          <Label class="block text-sm font-medium mb-2">冲突处理模式</Label>
+          <Select
+            v-model="mergeMode"
+            v-model:open="mergeModeSelectOpen"
           >
-            取消
-          </Button>
-          <Button
-            :disabled="importLoading"
-            @click="confirmImport"
-          >
-            {{ importLoading ? '导入中...' : '确认导入' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="skip">
+                跳过 - 保留现有配置
+              </SelectItem>
+              <SelectItem value="overwrite">
+                覆盖 - 用导入配置替换
+              </SelectItem>
+              <SelectItem value="error">
+                报错 - 遇到冲突时中止
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="mt-1 text-xs text-muted-foreground">
+            <template v-if="mergeMode === 'skip'">
+              已存在的配置将被保留，仅导入新配置
+            </template>
+            <template v-else-if="mergeMode === 'overwrite'">
+              已存在的配置将被导入的配置覆盖
+            </template>
+            <template v-else>
+              如果发现任何冲突，导入将中止并回滚
+            </template>
+          </p>
+        </div>
+
+        <p class="text-xs text-muted-foreground">
+          注意：相同的 API Keys 会自动跳过，不会创建重复记录。
+        </p>
+      </div>
+
+      <template #footer>
+        <Button
+          variant="outline"
+          @click="importDialogOpen = false; mergeModeSelectOpen = false"
+        >
+          取消
+        </Button>
+        <Button
+          :disabled="importLoading"
+          @click="confirmImport"
+        >
+          {{ importLoading ? '导入中...' : '确认导入' }}
+        </Button>
+      </template>
     </Dialog>
 
     <!-- 导入结果对话框 -->
-    <Dialog v-model:open="importResultDialogOpen">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>导入完成</DialogTitle>
-        </DialogHeader>
-
-        <div
-          v-if="importResult"
-          class="space-y-4 py-4"
-        >
-          <div class="grid grid-cols-2 gap-4 text-sm">
-            <div class="p-3 bg-muted rounded-lg">
-              <p class="font-medium">
-                全局模型
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importResult.stats.global_models.created }},
-                更新: {{ importResult.stats.global_models.updated }},
-                跳过: {{ importResult.stats.global_models.skipped }}
-              </p>
-            </div>
-            <div class="p-3 bg-muted rounded-lg">
-              <p class="font-medium">
-                提供商
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importResult.stats.providers.created }},
-                更新: {{ importResult.stats.providers.updated }},
-                跳过: {{ importResult.stats.providers.skipped }}
-              </p>
-            </div>
-            <div class="p-3 bg-muted rounded-lg">
-              <p class="font-medium">
-                端点
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importResult.stats.endpoints.created }},
-                更新: {{ importResult.stats.endpoints.updated }},
-                跳过: {{ importResult.stats.endpoints.skipped }}
-              </p>
-            </div>
-            <div class="p-3 bg-muted rounded-lg">
-              <p class="font-medium">
-                API Keys
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importResult.stats.keys.created }},
-                跳过: {{ importResult.stats.keys.skipped }}
-              </p>
-            </div>
-            <div class="p-3 bg-muted rounded-lg col-span-2">
-              <p class="font-medium">
-                模型配置
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importResult.stats.models.created }},
-                更新: {{ importResult.stats.models.updated }},
-                跳过: {{ importResult.stats.models.skipped }}
-              </p>
-            </div>
-          </div>
-
-          <div
-            v-if="importResult.stats.errors.length > 0"
-            class="p-3 bg-red-500/10 border border-red-500/20 rounded-lg"
-          >
-            <p class="font-medium text-red-600 dark:text-red-400 mb-2">
-              警告信息
+    <Dialog
+      v-model:open="importResultDialogOpen"
+      title="导入完成"
+    >
+      <div
+        v-if="importResult"
+        class="space-y-4"
+      >
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div class="p-3 bg-muted rounded-lg">
+            <p class="font-medium">
+              全局模型
             </p>
-            <ul class="text-sm text-red-600 dark:text-red-400 space-y-1">
-              <li
-                v-for="(err, index) in importResult.stats.errors"
-                :key="index"
-              >
-                {{ err }}
-              </li>
-            </ul>
+            <p class="text-muted-foreground">
+              创建: {{ importResult.stats.global_models.created }},
+              更新: {{ importResult.stats.global_models.updated }},
+              跳过: {{ importResult.stats.global_models.skipped }}
+            </p>
+          </div>
+          <div class="p-3 bg-muted rounded-lg">
+            <p class="font-medium">
+              提供商
+            </p>
+            <p class="text-muted-foreground">
+              创建: {{ importResult.stats.providers.created }},
+              更新: {{ importResult.stats.providers.updated }},
+              跳过: {{ importResult.stats.providers.skipped }}
+            </p>
+          </div>
+          <div class="p-3 bg-muted rounded-lg">
+            <p class="font-medium">
+              端点
+            </p>
+            <p class="text-muted-foreground">
+              创建: {{ importResult.stats.endpoints.created }},
+              更新: {{ importResult.stats.endpoints.updated }},
+              跳过: {{ importResult.stats.endpoints.skipped }}
+            </p>
+          </div>
+          <div class="p-3 bg-muted rounded-lg">
+            <p class="font-medium">
+              API Keys
+            </p>
+            <p class="text-muted-foreground">
+              创建: {{ importResult.stats.keys.created }},
+              跳过: {{ importResult.stats.keys.skipped }}
+            </p>
+          </div>
+          <div class="p-3 bg-muted rounded-lg col-span-2">
+            <p class="font-medium">
+              模型配置
+            </p>
+            <p class="text-muted-foreground">
+              创建: {{ importResult.stats.models.created }},
+              更新: {{ importResult.stats.models.updated }},
+              跳过: {{ importResult.stats.models.skipped }}
+            </p>
           </div>
         </div>
 
-        <DialogFooter>
-          <Button @click="importResultDialogOpen = false">
-            确定
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+        <div
+          v-if="importResult.stats.errors.length > 0"
+          class="p-3 bg-destructive/10 rounded-lg"
+        >
+          <p class="font-medium text-destructive mb-2">
+            警告信息
+          </p>
+          <ul class="text-sm text-destructive space-y-1">
+            <li
+              v-for="(err, index) in importResult.stats.errors"
+              :key="index"
+            >
+              {{ err }}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <template #footer>
+        <Button @click="importResultDialogOpen = false">
+          确定
+        </Button>
+      </template>
     </Dialog>
 
     <!-- 用户数据导入对话框 -->
-    <Dialog v-model:open="importUsersDialogOpen">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>导入用户数据</DialogTitle>
-          <DialogDescription>
-            选择冲突处理模式并确认导入
-          </DialogDescription>
-        </DialogHeader>
-
-        <div class="space-y-4 py-4">
-          <div
-            v-if="importUsersPreview"
-            class="p-3 bg-muted rounded-lg text-sm"
-          >
-            <p class="font-medium mb-2">
-              数据预览
-            </p>
-            <ul class="space-y-1 text-muted-foreground">
-              <li>用户: {{ importUsersPreview.users?.length || 0 }} 个</li>
-              <li>
-                API Keys: {{ importUsersPreview.users?.reduce((sum: number, u: any) => sum + (u.api_keys?.length || 0), 0) }} 个
-              </li>
-            </ul>
-          </div>
-
-          <div>
-            <Label class="block text-sm font-medium mb-2">冲突处理模式</Label>
-            <Select v-model="usersMergeMode">
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="skip">
-                  跳过 - 保留现有用户
-                </SelectItem>
-                <SelectItem value="overwrite">
-                  覆盖 - 用导入数据替换
-                </SelectItem>
-                <SelectItem value="error">
-                  报错 - 遇到冲突时中止
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p class="mt-1 text-xs text-muted-foreground">
-              <template v-if="usersMergeMode === 'skip'">
-                已存在的用户将被保留，仅导入新用户
-              </template>
-              <template v-else-if="usersMergeMode === 'overwrite'">
-                已存在的用户将被导入的数据覆盖
-              </template>
-              <template v-else>
-                如果发现任何冲突，导入将中止并回滚
-              </template>
-            </p>
-          </div>
-
-          <div class="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-            <p class="text-sm text-yellow-600 dark:text-yellow-400">
-              注意：用户 API Keys 需要目标系统使用相同的 ENCRYPTION_KEY 环境变量才能正常工作。
-            </p>
-          </div>
+    <Dialog
+      v-model:open="importUsersDialogOpen"
+      title="导入用户数据"
+      description="选择冲突处理模式并确认导入"
+    >
+      <div class="space-y-4">
+        <div
+          v-if="importUsersPreview"
+          class="p-3 bg-muted rounded-lg text-sm"
+        >
+          <p class="font-medium mb-2">
+            数据预览
+          </p>
+          <ul class="space-y-1 text-muted-foreground">
+            <li>用户: {{ importUsersPreview.users?.length || 0 }} 个</li>
+            <li>
+              API Keys: {{ importUsersPreview.users?.reduce((sum: number, u: any) => sum + (u.api_keys?.length || 0), 0) }} 个
+            </li>
+          </ul>
         </div>
 
-        <DialogFooter>
-          <Button
-            variant="outline"
-            @click="importUsersDialogOpen = false"
+        <div>
+          <Label class="block text-sm font-medium mb-2">冲突处理模式</Label>
+          <Select
+            v-model="usersMergeMode"
+            v-model:open="usersMergeModeSelectOpen"
           >
-            取消
-          </Button>
-          <Button
-            :disabled="importUsersLoading"
-            @click="confirmImportUsers"
-          >
-            {{ importUsersLoading ? '导入中...' : '确认导入' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="skip">
+                跳过 - 保留现有用户
+              </SelectItem>
+              <SelectItem value="overwrite">
+                覆盖 - 用导入数据替换
+              </SelectItem>
+              <SelectItem value="error">
+                报错 - 遇到冲突时中止
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="mt-1 text-xs text-muted-foreground">
+            <template v-if="usersMergeMode === 'skip'">
+              已存在的用户将被保留，仅导入新用户
+            </template>
+            <template v-else-if="usersMergeMode === 'overwrite'">
+              已存在的用户将被导入的数据覆盖
+            </template>
+            <template v-else>
+              如果发现任何冲突，导入将中止并回滚
+            </template>
+          </p>
+        </div>
+
+        <p class="text-xs text-muted-foreground">
+          注意：用户 API Keys 需要目标系统使用相同的 ENCRYPTION_KEY 环境变量才能正常工作。
+        </p>
+      </div>
+
+      <template #footer>
+        <Button
+          variant="outline"
+          @click="importUsersDialogOpen = false; usersMergeModeSelectOpen = false"
+        >
+          取消
+        </Button>
+        <Button
+          :disabled="importUsersLoading"
+          @click="confirmImportUsers"
+        >
+          {{ importUsersLoading ? '导入中...' : '确认导入' }}
+        </Button>
+      </template>
     </Dialog>
 
     <!-- 用户数据导入结果对话框 -->
-    <Dialog v-model:open="importUsersResultDialogOpen">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>用户数据导入完成</DialogTitle>
-        </DialogHeader>
-
-        <div
-          v-if="importUsersResult"
-          class="space-y-4 py-4"
-        >
-          <div class="grid grid-cols-2 gap-4 text-sm">
-            <div class="p-3 bg-muted rounded-lg">
-              <p class="font-medium">
-                用户
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importUsersResult.stats.users.created }},
-                更新: {{ importUsersResult.stats.users.updated }},
-                跳过: {{ importUsersResult.stats.users.skipped }}
-              </p>
-            </div>
-            <div class="p-3 bg-muted rounded-lg">
-              <p class="font-medium">
-                API Keys
-              </p>
-              <p class="text-muted-foreground">
-                创建: {{ importUsersResult.stats.api_keys.created }},
-                跳过: {{ importUsersResult.stats.api_keys.skipped }}
-              </p>
-            </div>
-          </div>
-
-          <div
-            v-if="importUsersResult.stats.errors.length > 0"
-            class="p-3 bg-red-500/10 border border-red-500/20 rounded-lg"
-          >
-            <p class="font-medium text-red-600 dark:text-red-400 mb-2">
-              警告信息
+    <Dialog
+      v-model:open="importUsersResultDialogOpen"
+      title="用户数据导入完成"
+    >
+      <div
+        v-if="importUsersResult"
+        class="space-y-4"
+      >
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div class="p-3 bg-muted rounded-lg">
+            <p class="font-medium">
+              用户
             </p>
-            <ul class="text-sm text-red-600 dark:text-red-400 space-y-1">
-              <li
-                v-for="(err, index) in importUsersResult.stats.errors"
-                :key="index"
-              >
-                {{ err }}
-              </li>
-            </ul>
+            <p class="text-muted-foreground">
+              创建: {{ importUsersResult.stats.users.created }},
+              更新: {{ importUsersResult.stats.users.updated }},
+              跳过: {{ importUsersResult.stats.users.skipped }}
+            </p>
+          </div>
+          <div class="p-3 bg-muted rounded-lg">
+            <p class="font-medium">
+              API Keys
+            </p>
+            <p class="text-muted-foreground">
+              创建: {{ importUsersResult.stats.api_keys.created }},
+              跳过: {{ importUsersResult.stats.api_keys.skipped }}
+            </p>
           </div>
         </div>
 
-        <DialogFooter>
-          <Button @click="importUsersResultDialogOpen = false">
-            确定
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+        <div
+          v-if="importUsersResult.stats.errors.length > 0"
+          class="p-3 bg-destructive/10 rounded-lg"
+        >
+          <p class="font-medium text-destructive mb-2">
+            警告信息
+          </p>
+          <ul class="text-sm text-destructive space-y-1">
+            <li
+              v-for="(err, index) in importUsersResult.stats.errors"
+              :key="index"
+            >
+              {{ err }}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <template #footer>
+        <Button @click="importUsersResultDialogOpen = false">
+          确定
+        </Button>
+      </template>
     </Dialog>
   </PageContainer>
 </template>
@@ -794,11 +781,6 @@ import SelectContent from '@/components/ui/select-content.vue'
 import SelectItem from '@/components/ui/select-item.vue'
 import {
   Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter
 } from '@/components/ui'
 import { PageHeader, PageContainer, CardSection } from '@/components/layout'
 import { useToast } from '@/composables/useToast'
@@ -843,6 +825,7 @@ const configFileInput = ref<HTMLInputElement | null>(null)
 const importPreview = ref<ConfigExportData | null>(null)
 const importResult = ref<ConfigImportResponse | null>(null)
 const mergeMode = ref<'skip' | 'overwrite' | 'error'>('skip')
+const mergeModeSelectOpen = ref(false)
 
 // 用户数据导出/导入相关
 const exportUsersLoading = ref(false)
@@ -853,6 +836,7 @@ const usersFileInput = ref<HTMLInputElement | null>(null)
 const importUsersPreview = ref<UsersExportData | null>(null)
 const importUsersResult = ref<UsersImportResponse | null>(null)
 const usersMergeMode = ref<'skip' | 'overwrite' | 'error'>('skip')
+const usersMergeModeSelectOpen = ref(false)
 
 const systemConfig = ref<SystemConfig>({
   // 基础配置
@@ -1136,6 +1120,7 @@ async function confirmImport() {
     })
     importResult.value = result
     importDialogOpen.value = false
+    mergeModeSelectOpen.value = false
     importResultDialogOpen.value = true
     success('配置导入成功')
   } catch (err: any) {
@@ -1224,6 +1209,7 @@ async function confirmImportUsers() {
     })
     importUsersResult.value = result
     importUsersDialogOpen.value = false
+    usersMergeModeSelectOpen.value = false
     importUsersResultDialogOpen.value = true
     success('用户数据导入成功')
   } catch (err: any) {

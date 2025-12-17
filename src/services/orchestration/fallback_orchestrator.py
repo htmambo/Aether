@@ -102,9 +102,15 @@ class FallbackOrchestrator:
                 "provider_priority_mode",
                 CacheAwareScheduler.PRIORITY_MODE_PROVIDER,
             )
+            scheduling_mode = SystemConfigService.get_config(
+                self.db,
+                "scheduling_mode",
+                CacheAwareScheduler.SCHEDULING_MODE_CACHE_AFFINITY,
+            )
             self.cache_scheduler = await get_cache_aware_scheduler(
                 self.redis,
                 priority_mode=priority_mode,
+                scheduling_mode=scheduling_mode,
             )
         else:
             # 确保运行时配置变更能生效
@@ -113,7 +119,13 @@ class FallbackOrchestrator:
                 "provider_priority_mode",
                 CacheAwareScheduler.PRIORITY_MODE_PROVIDER,
             )
+            scheduling_mode = SystemConfigService.get_config(
+                self.db,
+                "scheduling_mode",
+                CacheAwareScheduler.SCHEDULING_MODE_CACHE_AFFINITY,
+            )
             self.cache_scheduler.set_priority_mode(priority_mode)
+            self.cache_scheduler.set_scheduling_mode(scheduling_mode)
 
         # 确保 cache_scheduler 内部组件也已初始化
         await self.cache_scheduler._ensure_initialized()

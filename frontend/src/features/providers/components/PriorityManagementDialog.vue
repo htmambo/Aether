@@ -312,8 +312,41 @@
 
     <template #footer>
       <div class="flex items-center justify-between w-full">
-        <div class="text-xs text-muted-foreground">
-          当前模式: <span class="font-medium">{{ activeMainTab === 'provider' ? '提供商优先' : 'Key 优先' }}</span>
+        <div class="flex items-center gap-4">
+          <div class="text-xs text-muted-foreground">
+            当前模式: <span class="font-medium">{{ activeMainTab === 'provider' ? '提供商优先' : 'Key 优先' }}</span>
+          </div>
+          <div class="flex items-center gap-2 pl-4 border-l border-border">
+            <span class="text-xs text-muted-foreground">调度:</span>
+            <div class="flex gap-0.5 p-0.5 bg-muted/40 rounded-md">
+              <button
+                type="button"
+                class="px-2 py-1 text-xs font-medium rounded transition-all"
+                :class="[
+                  schedulingMode === 'fixed_order'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                ]"
+                title="严格按优先级顺序，不考虑缓存"
+                @click="schedulingMode = 'fixed_order'"
+              >
+                固定顺序
+              </button>
+              <button
+                type="button"
+                class="px-2 py-1 text-xs font-medium rounded transition-all"
+                :class="[
+                  schedulingMode === 'cache_affinity'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                ]"
+                title="优先使用已缓存的Provider，利用Prompt Cache"
+                @click="schedulingMode = 'cache_affinity'"
+              >
+                缓存亲和
+              </button>
+            </div>
+          </div>
         </div>
         <div class="flex gap-2">
           <Button
@@ -410,6 +443,9 @@ const saving = ref(false)
 // Key 优先级编辑状态
 const editingKeyPriority = ref<Record<string, string | null>>({})  // format -> keyId
 
+// 调度模式状态
+const schedulingMode = ref<'fixed_order' | 'cache_affinity'>('cache_affinity')
+
 // 可用的 API 格式
 const availableFormats = computed(() => {
   return Object.keys(keysByFormat.value).sort()
@@ -433,11 +469,18 @@ watch(internalOpen, async (open) => {
 // 加载当前的优先级模式配置
 async function loadCurrentPriorityMode() {
   try {
-    const response = await adminApi.getSystemConfig('provider_priority_mode')
-    const currentMode = response.value || 'provider'
+    const [priorityResponse, schedulingResponse] = await Promise.all([
+      adminApi.getSystemConfig('provider_priority_mode'),
+      adminApi.getSystemConfig('scheduling_mode')
+    ])
+    const currentMode = priorityResponse.value || 'provider'
     activeMainTab.value = currentMode === 'global_key' ? 'key' : 'provider'
+
+    const currentSchedulingMode = schedulingResponse.value || 'cache_affinity'
+    schedulingMode.value = currentSchedulingMode === 'fixed_order' ? 'fixed_order' : 'cache_affinity'
   } catch {
     activeMainTab.value = 'provider'
+    schedulingMode.value = 'cache_affinity'
   }
 }
 
@@ -611,11 +654,19 @@ async function save() {
 
     const newMode = activeMainTab.value === 'key' ? 'global_key' : 'provider'
 
-    await adminApi.updateSystemConfig(
-      'provider_priority_mode',
-      newMode,
-      'Provider/Key 优先级策略：provider(提供商优先模式) 或 global_key(全局Key优先模式)'
-    )
+    // 保存优先级模式和调度模式
+    await Promise.all([
+      adminApi.updateSystemConfig(
+        'provider_priority_mode',
+        newMode,
+        'Provider/Key 优先级策略：provider(提供商优先模式) 或 global_key(全局Key优先模式)'
+      ),
+      adminApi.updateSystemConfig(
+        'scheduling_mode',
+        schedulingMode.value,
+        '调度模式：fixed_order(固定顺序模式) 或 cache_affinity(缓存亲和模式)'
+      )
+    ])
 
     const providerUpdates = sortedProviders.value.map((provider, index) =>
       updateProvider(provider.id, { provider_priority: index + 1 })

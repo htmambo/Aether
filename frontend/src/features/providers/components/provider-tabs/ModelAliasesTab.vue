@@ -286,7 +286,9 @@
                     @click="addUpstreamModel(model.id)"
                   >
                     <div class="flex-1 min-w-0">
-                      <div class="font-mono text-xs truncate">{{ model.id }}</div>
+                      <div class="font-mono text-xs truncate">
+                        {{ model.id }}
+                      </div>
                       <div
                         v-if="model.owned_by"
                         class="text-xs text-muted-foreground truncate"

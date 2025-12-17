@@ -34,11 +34,10 @@ const buttonClass = computed(() => {
     'inline-flex items-center justify-center rounded-xl text-sm font-semibold transition-all duration-200 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]'
 
   const variantClasses = {
-    default:
-      'bg-primary text-white shadow-[0_20px_35px_rgba(204,120,92,0.35)] hover:bg-primary/90 hover:shadow-[0_25px_45px_rgba(204,120,92,0.45)]',
-    destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/85 shadow-sm',
+    default: 'bg-primary text-white hover:bg-primary/90',
+    destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/85',
     outline:
-      'border border-border/60 bg-card/60 text-foreground hover:border-primary/60 hover:text-primary hover:bg-primary/10 shadow-sm backdrop-blur transition-all',
+      'border border-border/60 bg-card/60 text-foreground hover:border-primary/60 hover:text-primary hover:bg-primary/10 backdrop-blur transition-all',
     secondary:
       'bg-secondary text-secondary-foreground shadow-inner hover:bg-secondary/80',
     ghost: 'hover:bg-accent hover:text-accent-foreground',

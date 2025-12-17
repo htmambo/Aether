@@ -2,7 +2,7 @@
   <Teleport to="body">
     <div
       v-if="isOpen"
-      class="fixed inset-0 overflow-y-auto"
+      class="fixed inset-0 overflow-y-auto pointer-events-none"
       :style="{ zIndex: containerZIndex }"
     >
       <!-- 背景遮罩 -->
@@ -16,7 +16,7 @@
       >
         <div
           v-if="isOpen"
-          class="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
+          class="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity pointer-events-auto"
           :style="{ zIndex: backdropZIndex }"
           @click="handleClose"
         />
@@ -34,7 +34,7 @@
         >
           <div
             v-if="isOpen"
-            class="relative transform rounded-lg bg-background text-left shadow-2xl transition-all sm:my-8 sm:w-full border border-border"
+            class="relative transform rounded-lg bg-background text-left shadow-2xl transition-all sm:my-8 sm:w-full border border-border pointer-events-auto"
             :style="{ zIndex: contentZIndex }"
             :class="maxWidthClass"
             @click.stop
