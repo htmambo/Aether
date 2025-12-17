@@ -5,7 +5,7 @@ Pydantic 数据模型（阶段一统一模型管理）
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ========== 阶梯计费相关模型 ==========
@@ -256,8 +256,7 @@ class GlobalModelResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class GlobalModelWithStats(GlobalModelResponse):

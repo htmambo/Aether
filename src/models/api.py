@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.enums import UserRole
 
@@ -336,8 +336,7 @@ class ProviderResponse(BaseModel):
     active_models_count: int = 0
     api_keys_count: int = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ========== 模型管理 ==========
@@ -442,8 +441,7 @@ class ModelResponse(BaseModel):
     global_model_name: Optional[str] = None
     global_model_display_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ModelDetailResponse(BaseModel):
@@ -469,8 +467,7 @@ class ModelDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ========== 系统设置 ==========

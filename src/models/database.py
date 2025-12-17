@@ -27,8 +27,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declarative_base, relationship
 
 from ..config import config
 from ..core.enums import ProviderBillingType, UserRole

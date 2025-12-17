@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ========== ProviderEndpoint CRUD ==========
 
@@ -141,8 +141,7 @@ class ProviderEndpointResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ========== ProviderAPIKey 相关（新架构） ==========
@@ -384,8 +383,7 @@ class EndpointAPIKeyResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ========== 健康监控相关 ==========
@@ -535,8 +533,7 @@ class ProviderWithEndpointsSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ========== 健康监控可视化模型 ==========
