@@ -136,23 +136,20 @@
       <!-- 分隔线 -->
       <div class="hidden sm:block h-4 w-px bg-border" />
 
-      <!-- 刷新按钮 -->
-      <RefreshButton
-        v-if="!autoRefresh"
-        :loading="loading"
-        @click="$emit('refresh')"
-      />
-
-      <!-- 自动刷新开关 -->
-      <div class="flex items-center gap-2">
-        <Switch
-          :model-value="autoRefresh"
-          @update:model-value="$emit('update:autoRefresh', $event)"
+      <!-- 自动刷新按钮 -->
+      <Button
+        variant="ghost"
+        size="icon"
+        class="h-8 w-8"
+        :class="autoRefresh ? 'text-primary' : ''"
+        :title="autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新（每10秒刷新）'"
+        @click="$emit('update:autoRefresh', !autoRefresh)"
+      >
+        <RefreshCcw
+          class="w-3.5 h-3.5"
+          :class="autoRefresh ? 'animate-spin' : ''"
         />
-        <label class="text-xs text-muted-foreground cursor-pointer select-none" @click="$emit('update:autoRefresh', !autoRefresh)">
-          自动刷新
-        </label>
-      </div>
+      </Button>
     </template>
 
     <Table>
@@ -420,6 +417,7 @@ import { ref, computed, onUnmounted, watch } from 'vue'
 import {
   TableCard,
   Badge,
+  Button,
   Select,
   SelectTrigger,
   SelectValue,
@@ -432,9 +430,8 @@ import {
   TableHead,
   TableCell,
   Pagination,
-  RefreshButton,
-  Switch,
 } from '@/components/ui'
+import { RefreshCcw } from 'lucide-vue-next'
 import { formatTokens, formatCurrency } from '@/utils/format'
 import { formatDateTime } from '../composables'
 import { useRowClick } from '@/composables/useRowClick'

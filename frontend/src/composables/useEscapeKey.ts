@@ -45,6 +45,11 @@ export function useEscapeKey(
     // 执行回调
     callback()
 
+    // 移除当前元素的焦点，避免残留样式
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+
     // 如果只监听一次，则移除监听器
     if (once) {
       removeEventListener()
