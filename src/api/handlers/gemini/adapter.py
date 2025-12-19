@@ -4,8 +4,9 @@ Gemini Chat Adapter
 处理 Gemini API 格式的请求适配
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
+import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -150,6 +151,53 @@ class GeminiChatAdapter(ChatAdapterBase):
                 }
             },
         )
+
+    @classmethod
+    async def fetch_models(
+        cls,
+        client: httpx.AsyncClient,
+        base_url: str,
+        api_key: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[list, Optional[str]]:
+        """查询 Gemini API 支持的模型列表"""
+        # 兼容 base_url 已包含 /v1beta 的情况
+        base_url_clean = base_url.rstrip("/")
+        if base_url_clean.endswith("/v1beta"):
+            models_url = f"{base_url_clean}/models?key={api_key}"
+        else:
+            models_url = f"{base_url_clean}/v1beta/models?key={api_key}"
+
+        headers: Dict[str, str] = {}
+        if extra_headers:
+            headers.update(extra_headers)
+
+        try:
+            response = await client.get(models_url, headers=headers)
+            logger.debug(f"Gemini models request to {models_url}: status={response.status_code}")
+            if response.status_code == 200:
+                data = response.json()
+                if "models" in data:
+                    # 转换为统一格式
+                    return [
+                        {
+                            "id": m.get("name", "").replace("models/", ""),
+                            "owned_by": "google",
+                            "display_name": m.get("displayName", ""),
+                            "api_format": cls.FORMAT_ID,
+                        }
+                        for m in data["models"]
+                    ], None
+                return [], None
+            else:
+                error_body = response.text[:500] if response.text else "(empty)"
+                error_msg = f"HTTP {response.status_code}: {error_body}"
+                logger.warning(f"Gemini models request to {models_url} failed: {error_msg}")
+                return [], error_msg
+        except Exception as e:
+            error_msg = f"Request error: {str(e)}"
+            logger.warning(f"Failed to fetch Gemini models from {models_url}: {e}")
+            return [], error_msg
 
 
 def build_gemini_adapter(x_app_header: str = "") -> GeminiChatAdapter:

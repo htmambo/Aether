@@ -144,6 +144,18 @@ class Config:
         self.stream_prefetch_lines = int(os.getenv("STREAM_PREFETCH_LINES", "5"))
         self.stream_stats_delay = float(os.getenv("STREAM_STATS_DELAY", "0.1"))
 
+        # 内部请求 User-Agent 配置（用于查询上游模型列表等）
+        # 可通过环境变量覆盖默认值
+        self.internal_user_agent_claude = os.getenv(
+            "CLAUDE_USER_AGENT", "claude-cli/1.0"
+        )
+        self.internal_user_agent_openai = os.getenv(
+            "OPENAI_USER_AGENT", "openai-cli/1.0"
+        )
+        self.internal_user_agent_gemini = os.getenv(
+            "GEMINI_USER_AGENT", "gemini-cli/1.0"
+        )
+
         # 验证连接池配置
         self._validate_pool_config()
 

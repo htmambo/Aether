@@ -4,13 +4,15 @@ Claude CLI Adapter - 基于通用 CLI Adapter 基类的简化实现
 继承 CliAdapterBase，只需配置 FORMAT_ID 和 HANDLER_CLASS。
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
+import httpx
 from fastapi import Request
 
 from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_adapter
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
-from src.api.handlers.claude.adapter import ClaudeCapabilityDetector
+from src.api.handlers.claude.adapter import ClaudeCapabilityDetector, ClaudeChatAdapter
+from src.config.settings import config
 
 
 @register_cli_adapter
@@ -98,6 +100,31 @@ class ClaudeCliAdapter(CliAdapterBase):
             "tool_count": len(payload.get("tools") or []),
             "system_present": bool(payload.get("system")),
         }
+
+    # =========================================================================
+    # 模型列表查询
+    # =========================================================================
+
+    @classmethod
+    async def fetch_models(
+        cls,
+        client: httpx.AsyncClient,
+        base_url: str,
+        api_key: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[list, Optional[str]]:
+        """查询 Claude API 支持的模型列表（带 CLI User-Agent）"""
+        # 复用 ClaudeChatAdapter 的实现，添加 CLI User-Agent
+        cli_headers = {"User-Agent": config.internal_user_agent_claude}
+        if extra_headers:
+            cli_headers.update(extra_headers)
+        models, error = await ClaudeChatAdapter.fetch_models(
+            client, base_url, api_key, cli_headers
+        )
+        # 更新 api_format 为 CLI 格式
+        for m in models:
+            m["api_format"] = cls.FORMAT_ID
+        return models, error
 
 
 __all__ = ["ClaudeCliAdapter"]

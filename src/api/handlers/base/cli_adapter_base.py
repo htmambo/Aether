@@ -17,8 +17,9 @@ CLI Adapter 通用基类
 
 import time
 import traceback
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
+import httpx
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
@@ -579,6 +580,39 @@ class CliAdapterBase(ApiAdapter):
                 return tier
 
         return tiers[-1] if tiers else None
+
+    # =========================================================================
+    # 模型列表查询 - 子类应覆盖此方法
+    # =========================================================================
+
+    @classmethod
+    async def fetch_models(
+        cls,
+        client: httpx.AsyncClient,
+        base_url: str,
+        api_key: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[list, Optional[str]]:
+        """
+        查询上游 API 支持的模型列表
+
+        这是 Aether 内部发起的请求（非用户透传），用于：
+        - 管理后台查询提供商支持的模型
+        - 自动发现可用模型
+
+        Args:
+            client: httpx 异步客户端
+            base_url: API 基础 URL
+            api_key: API 密钥（已解密）
+            extra_headers: 端点配置的额外请求头
+
+        Returns:
+            (models, error): 模型列表和错误信息
+            - models: 模型信息列表，每个模型至少包含 id 字段
+            - error: 错误信息，成功时为 None
+        """
+        # 默认实现返回空列表，子类应覆盖
+        return [], f"{cls.FORMAT_ID} adapter does not implement fetch_models"
 
 
 # =========================================================================

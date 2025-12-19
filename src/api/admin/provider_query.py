@@ -4,7 +4,6 @@ Provider Query API 端点
 """
 
 import asyncio
-import os
 from typing import Optional
 
 import httpx
@@ -12,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
+from src.api.handlers.base.chat_adapter_base import get_adapter_class
+from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.database.database import get_db
@@ -34,151 +35,19 @@ class ModelsQueryRequest(BaseModel):
 # ============ API Endpoints ============
 
 
-async def _fetch_openai_models(
-    client: httpx.AsyncClient,
-    base_url: str,
-    api_key: str,
-    api_format: str,
-    extra_headers: Optional[dict] = None,
-) -> tuple[list, Optional[str]]:
-    """获取 OpenAI 格式的模型列表
+def _get_adapter_for_format(api_format: str):
+    """根据 API 格式获取对应的 Adapter 类"""
+    # 先检查 Chat Adapter 注册表
+    adapter_class = get_adapter_class(api_format)
+    if adapter_class:
+        return adapter_class
 
-    Returns:
-        tuple[list, Optional[str]]: (模型列表, 错误信息)
-    """
-    useragent = os.getenv("OPENAI_USER_AGENT") or "codex_cli_rs/0.73.0 (Mac OS 14.8.4; x86_64) Apple_Terminal/453"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "User-Agent": useragent,
-    }
-    if extra_headers:
-        # 防止 extra_headers 覆盖 Authorization
-        safe_headers = {k: v for k, v in extra_headers.items() if k.lower() != "authorization"}
-        headers.update(safe_headers)
+    # 再检查 CLI Adapter 注册表
+    cli_adapter_class = get_cli_adapter_class(api_format)
+    if cli_adapter_class:
+        return cli_adapter_class
 
-    # 构建 /v1/models URL
-    if base_url.endswith("/v1"):
-        models_url = f"{base_url}/models"
-    else:
-        models_url = f"{base_url}/v1/models"
-
-    try:
-        response = await client.get(models_url, headers=headers)
-        logger.debug(f"OpenAI models request to {models_url}: status={response.status_code}")
-        if response.status_code == 200:
-            data = response.json()
-            models = []
-            if "data" in data:
-                models = data["data"]
-            elif isinstance(data, list):
-                models = data
-            # 为每个模型添加 api_format 字段
-            for m in models:
-                m["api_format"] = api_format
-            return models, None
-        else:
-            # 记录详细的错误信息
-            error_body = response.text[:500] if response.text else "(empty)"
-            error_msg = f"HTTP {response.status_code}: {error_body}"
-            logger.warning(f"OpenAI models request to {models_url} failed: {error_msg}")
-            return [], error_msg
-    except Exception as e:
-        error_msg = f"Request error: {str(e)}"
-        logger.warning(f"Failed to fetch models from {models_url}: {e}")
-        return [], error_msg
-
-
-async def _fetch_claude_models(
-    client: httpx.AsyncClient, base_url: str, api_key: str, api_format: str
-) -> tuple[list, Optional[str]]:
-    """获取 Claude 格式的模型列表
-
-    Returns:
-        tuple[list, Optional[str]]: (模型列表, 错误信息)
-    """
-    useragent = os.getenv("CLAUDE_USER_AGENT") or "claude-cli/2.0.62 (external, cli)"
-    headers = {
-        "x-api-key": api_key,
-        "Authorization": f"Bearer {api_key}",
-        "anthropic-version": "2023-06-01",
-        "User-Agent": useragent,
-    }
-
-    # 构建 /v1/models URL
-    if base_url.endswith("/v1"):
-        models_url = f"{base_url}/models"
-    else:
-        models_url = f"{base_url}/v1/models"
-
-    try:
-        response = await client.get(models_url, headers=headers)
-        logger.debug(f"Claude models request to {models_url}: status={response.status_code}")
-        if response.status_code == 200:
-            data = response.json()
-            models = []
-            if "data" in data:
-                models = data["data"]
-            elif isinstance(data, list):
-                models = data
-            # 为每个模型添加 api_format 字段
-            for m in models:
-                m["api_format"] = api_format
-            return models, None
-        else:
-            error_body = response.text[:500] if response.text else "(empty)"
-            error_msg = f"HTTP {response.status_code}: {error_body}"
-            logger.warning(f"Claude models request to {models_url} failed: {error_msg}")
-            return [], error_msg
-    except Exception as e:
-        error_msg = f"Request error: {str(e)}"
-        logger.warning(f"Failed to fetch Claude models from {models_url}: {e}")
-        return [], error_msg
-
-
-async def _fetch_gemini_models(
-    client: httpx.AsyncClient, base_url: str, api_key: str, api_format: str
-) -> tuple[list, Optional[str]]:
-    """获取 Gemini 格式的模型列表
-
-    Returns:
-        tuple[list, Optional[str]]: (模型列表, 错误信息)
-    """
-    # 兼容 base_url 已包含 /v1beta 的情况
-    base_url_clean = base_url.rstrip("/")
-    if base_url_clean.endswith("/v1beta"):
-        models_url = f"{base_url_clean}/models?key={api_key}"
-    else:
-        models_url = f"{base_url_clean}/v1beta/models?key={api_key}"
-    useragent = os.getenv("GEMINI_USER_AGENT") or "gemini-cli/0.1.0 (external, cli)"
-    headers = {
-        "User-Agent": useragent,
-    }
-    try:
-        response = await client.get(models_url, headers=headers)
-        logger.debug(f"Gemini models request to {models_url}: status={response.status_code}")
-        if response.status_code == 200:
-            data = response.json()
-            if "models" in data:
-                # 转换为统一格式
-                return [
-                    {
-                        "id": m.get("name", "").replace("models/", ""),
-                        "owned_by": "google",
-                        "display_name": m.get("displayName", ""),
-                        "api_format": api_format,
-                    }
-                    for m in data["models"]
-                ], None
-            return [], None
-        else:
-            error_body = response.text[:500] if response.text else "(empty)"
-            error_msg = f"HTTP {response.status_code}: {error_body}"
-            logger.warning(f"Gemini models request to {models_url} failed: {error_msg}")
-            return [], error_msg
-    except Exception as e:
-        error_msg = f"Request error: {str(e)}"
-        logger.warning(f"Failed to fetch Gemini models from {models_url}: {e}")
-        return [], error_msg
+    return None
 
 
 @router.post("/models")
@@ -190,10 +59,10 @@ async def query_available_models(
     """
     查询提供商可用模型
 
-    遍历所有活跃端点，根据端点的 API 格式选择正确的请求方式：
-    - OPENAI/OPENAI_CLI: /v1/models (Bearer token)
-    - CLAUDE/CLAUDE_CLI: /v1/models (x-api-key)
-    - GEMINI/GEMINI_CLI: /v1beta/models (URL key parameter)
+    遍历所有活跃端点，根据端点的 API 格式选择正确的 Adapter 进行请求：
+    - OPENAI/OPENAI_CLI: 使用 OpenAIChatAdapter.fetch_models
+    - CLAUDE/CLAUDE_CLI: 使用 ClaudeChatAdapter.fetch_models
+    - GEMINI/GEMINI_CLI: 使用 GeminiChatAdapter.fetch_models
 
     Args:
         request: 查询请求
@@ -275,17 +144,16 @@ async def query_available_models(
         base_url = base_url.rstrip("/")
         api_format = config["api_format"]
         api_key_value = config["api_key"]
-        extra_headers = config["extra_headers"]
+        extra_headers = config.get("extra_headers")
 
         try:
-            if api_format in ["CLAUDE", "CLAUDE_CLI"]:
-                return await _fetch_claude_models(client, base_url, api_key_value, api_format)
-            elif api_format in ["GEMINI", "GEMINI_CLI"]:
-                return await _fetch_gemini_models(client, base_url, api_key_value, api_format)
-            else:
-                return await _fetch_openai_models(
-                    client, base_url, api_key_value, api_format, extra_headers
-                )
+            # 获取对应的 Adapter 类并调用 fetch_models
+            adapter_class = _get_adapter_for_format(api_format)
+            if not adapter_class:
+                return [], f"Unknown API format: {api_format}"
+            return await adapter_class.fetch_models(
+                client, base_url, api_key_value, extra_headers
+            )
         except Exception as e:
             logger.error(f"Error fetching models from {api_format} endpoint: {e}")
             return [], f"{api_format}: {str(e)}"

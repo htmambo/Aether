@@ -4,12 +4,15 @@ Gemini CLI Adapter - 基于通用 CLI Adapter 基类的实现
 继承 CliAdapterBase，处理 Gemini CLI 格式的请求。
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
+import httpx
 from fastapi import Request
 
 from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_adapter
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
+from src.api.handlers.gemini.adapter import GeminiChatAdapter
+from src.config.settings import config
 
 
 @register_cli_adapter
@@ -94,6 +97,31 @@ class GeminiCliAdapter(CliAdapterBase):
             "system_instruction_present": bool(payload.get("system_instruction")),
             "safety_settings_count": len(payload.get("safety_settings") or []),
         }
+
+    # =========================================================================
+    # 模型列表查询
+    # =========================================================================
+
+    @classmethod
+    async def fetch_models(
+        cls,
+        client: httpx.AsyncClient,
+        base_url: str,
+        api_key: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[list, Optional[str]]:
+        """查询 Gemini API 支持的模型列表（带 CLI User-Agent）"""
+        # 复用 GeminiChatAdapter 的实现，添加 CLI User-Agent
+        cli_headers = {"User-Agent": config.internal_user_agent_gemini}
+        if extra_headers:
+            cli_headers.update(extra_headers)
+        models, error = await GeminiChatAdapter.fetch_models(
+            client, base_url, api_key, cli_headers
+        )
+        # 更新 api_format 为 CLI 格式
+        for m in models:
+            m["api_format"] = cls.FORMAT_ID
+        return models, error
 
 
 def build_gemini_cli_adapter(x_app_header: str = "") -> GeminiCliAdapter:

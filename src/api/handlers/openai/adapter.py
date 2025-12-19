@@ -4,8 +4,9 @@ OpenAI Chat Adapter - 基于 ChatAdapterBase 的 OpenAI Chat API 适配器
 处理 /v1/chat/completions 端点的 OpenAI Chat 格式请求。
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
+import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -104,6 +105,54 @@ class OpenAIChatAdapter(ChatAdapterBase):
                 }
             },
         )
+
+    @classmethod
+    async def fetch_models(
+        cls,
+        client: httpx.AsyncClient,
+        base_url: str,
+        api_key: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[list, Optional[str]]:
+        """查询 OpenAI 兼容 API 支持的模型列表"""
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+        }
+        if extra_headers:
+            # 防止 extra_headers 覆盖 Authorization
+            safe_headers = {k: v for k, v in extra_headers.items() if k.lower() != "authorization"}
+            headers.update(safe_headers)
+
+        # 构建 /v1/models URL
+        base_url = base_url.rstrip("/")
+        if base_url.endswith("/v1"):
+            models_url = f"{base_url}/models"
+        else:
+            models_url = f"{base_url}/v1/models"
+
+        try:
+            response = await client.get(models_url, headers=headers)
+            logger.debug(f"OpenAI models request to {models_url}: status={response.status_code}")
+            if response.status_code == 200:
+                data = response.json()
+                models = []
+                if "data" in data:
+                    models = data["data"]
+                elif isinstance(data, list):
+                    models = data
+                # 为每个模型添加 api_format 字段
+                for m in models:
+                    m["api_format"] = cls.FORMAT_ID
+                return models, None
+            else:
+                error_body = response.text[:500] if response.text else "(empty)"
+                error_msg = f"HTTP {response.status_code}: {error_body}"
+                logger.warning(f"OpenAI models request to {models_url} failed: {error_msg}")
+                return [], error_msg
+        except Exception as e:
+            error_msg = f"Request error: {str(e)}"
+            logger.warning(f"Failed to fetch models from {models_url}: {e}")
+            return [], error_msg
 
 
 __all__ = ["OpenAIChatAdapter"]
