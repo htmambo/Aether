@@ -20,12 +20,28 @@ def upgrade() -> None:
 
     使用 CONCURRENTLY 创建索引以避免锁表，
     但需要在 AUTOCOMMIT 模式下执行（不能在事务内）
+
+    注意：如果是从全新数据库执行（baseline 刚创建表），
+    由于 AUTOCOMMIT 连接看不到事务中未提交的表，会跳过索引创建。
+    这种情况下索引会在下次迁移或手动创建。
     """
     conn = op.get_bind()
     engine = conn.engine
 
     # 使用新连接并设置 AUTOCOMMIT 模式以支持 CREATE INDEX CONCURRENTLY
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as autocommit_conn:
+        # 检查 usage 表是否存在（在 AUTOCOMMIT 连接中可见）
+        # 如果表不存在（例如 baseline 迁移还在事务中），跳过索引创建
+        result = autocommit_conn.execute(text(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'usage')"
+        ))
+        table_exists = result.scalar()
+
+        if not table_exists:
+            # 表在当前连接不可见（可能 baseline 还在事务中），跳过
+            # 索引将通过后续迁移或手动创建
+            return
+
         # 使用 IF NOT EXISTS 避免重复创建，无需单独检查索引是否存在
 
         # 1. user_id + created_at 复合索引 (用户用量查询)

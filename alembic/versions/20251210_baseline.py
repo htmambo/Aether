@@ -394,6 +394,10 @@ def upgrade() -> None:
             index=True,
         ),
     )
+    # usage 表复合索引（优化常见查询）
+    op.create_index("idx_usage_user_created", "usage", ["user_id", "created_at"])
+    op.create_index("idx_usage_apikey_created", "usage", ["api_key_id", "created_at"])
+    op.create_index("idx_usage_provider_model_created", "usage", ["provider", "model", "created_at"])
 
     # ==================== user_quotas ====================
     op.create_table(
