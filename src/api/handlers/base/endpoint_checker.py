@@ -58,19 +58,35 @@ def _truncate_repr(value: Any, limit: int = 1200) -> str:
 
 def build_safe_headers(
     base_headers: Dict[str, str],
-    extra_headers: Optional[Dict[str, str]],
+    extra_headers: Optional[Dict[str, Any]],
     protected_keys: Iterable[str],
 ) -> Dict[str, str]:
     """
     合并 extra_headers，但防止覆盖 protected_keys（大小写不敏感）。
+
+    支持高级 headers 规则处理：
+    - 如果 header_rules 存在，会先应用规则处理 headers
+    - 规则包括：add（新增）、remove（删除）、replace_name（改名）、replace_value（改值）
+
+    Args:
+        base_headers: 基础 headers
+        extra_headers: 额外的 headers（可选）
+        protected_keys: 受保护的键列表（不会被覆盖）
+        header_rules: headers 处理规则（可选）
+
+    Returns:
+        处理后的 headers 字典
     """
     headers = dict(base_headers)
     if not extra_headers:
         return headers
 
-    protected = {k.lower() for k in protected_keys}
-    safe_headers = {k: v for k, v in extra_headers.items() if k.lower() not in protected}
-    headers.update(safe_headers)
+    # 合并 extra_headers（如果有）
+    if extra_headers:
+        from src.core.header_rules import apply_header_rules
+        headers = apply_header_rules(headers, extra_headers)
+
+    logger.debug(f"headers:{headers}")
     return headers
 
 
@@ -88,12 +104,13 @@ async def run_endpoint_check(
     provider_id: Optional[str] = None,
     db: Optional[Any] = None,  # Session对象，需要时才导入
     user: Optional[Any] = None,  # User对象
+    enable_usage_calculation: bool = True,  # 是否启用用量计算
 ) -> Dict[str, Any]:
     """
     执行端点检查（重构版本，使用新的架构）：
     - 使用新的架构类来分离关注点
     - 保持与现有代码的兼容性
-    - 强制用量统计和费用计算（测试功能必需）
+    - 支持用量统计和费用计算（可通过 enable_usage_calculation 控制，万一免费的不需要计费呢？）
     """
 
     # 创建端点检查请求对象
@@ -112,7 +129,9 @@ async def run_endpoint_check(
     )
 
     # 使用协调器执行检查
-    orchestrator = EndpointCheckOrchestrator()
+    orchestrator = EndpointCheckOrchestrator(
+        enable_usage_calculation=enable_usage_calculation
+    )
     result = await orchestrator.execute_check(request)
 
     # 转换为原有的响应格式以保持兼容性
@@ -1031,7 +1050,8 @@ class ConfigurableEndpointChecker:
         self.usage_calculator = UsageCalculator()
         self.orchestrator = EndpointCheckOrchestrator(
             executor=self.executor,
-            usage_calculator=self.usage_calculator
+            usage_calculator=self.usage_calculator,
+            enable_usage_calculation=self.config.enable_usage_calculation,
         )
 
         # 应用配置到缓存大小
@@ -1199,10 +1219,15 @@ def get_configured_checker(config: Optional[EndpointCheckConfig] = None) -> Conf
 class EndpointCheckOrchestrator:
     """端点检查协调器 - 协调整个流程"""
 
-    def __init__(self, executor: Optional[HttpRequestExecutor] = None,
-                 usage_calculator: Optional[UsageCalculator] = None):
+    def __init__(
+        self,
+        executor: Optional[HttpRequestExecutor] = None,
+        usage_calculator: Optional[UsageCalculator] = None,
+        enable_usage_calculation: bool = True,
+    ):
         self.executor = executor or HttpRequestExecutor()
         self.usage_calculator = usage_calculator or UsageCalculator()
+        self.enable_usage_calculation = enable_usage_calculation
 
     async def execute_check(self, request: EndpointCheckRequest) -> EndpointCheckResult:
         """执行端点检查的完整流程"""
@@ -1213,7 +1238,13 @@ class EndpointCheckOrchestrator:
         result = await self.executor.execute(request)
 
         # 2. 计算用量
-        if request.db and request.user:  # 只在有数据库连接和用户信息时才计算用量
+        should_calculate_usage = (
+            self.enable_usage_calculation
+            and request.db
+            and request.user
+            and request.api_key_id
+        )
+        if should_calculate_usage:
             try:
                 input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens = \
                     self.usage_calculator.calculate_tokens(request, result)
@@ -1225,7 +1256,7 @@ class EndpointCheckOrchestrator:
                     user=request.user,
                     provider_name=request.provider_name or "unknown",
                     provider_id=request.provider_id or "unknown",
-                    api_key_id=request.api_key_id or "unknown",
+                    api_key_id=request.api_key_id,
                     model_name=request.model_name or "unknown",
                     request_data=request.json_body,
                     response_data=result.response_data,
@@ -1243,7 +1274,28 @@ class EndpointCheckOrchestrator:
                     api_format=api_format,
                 )
 
-                logger.info(f"[{request.api_format}] Usage calculated successfully: {result.usage_data}")
+                # 构建结构化日志
+                usage_data = result.usage_data
+                usage_error = usage_data.get("error") if isinstance(usage_data, dict) else None
+
+                log_entry = {
+                    "event": "endpoint_check_usage_calculation",
+                    "timestamp": time.time(),
+                    "request_id": result.request_id,
+                    "api_format": request.api_format,
+                    "provider": request.provider_name,
+                    "model": request.model_name,
+                    "provider_api_key_id": request.api_key_id,
+                    "success": usage_error is None,
+                    "error": usage_error,
+                    "usage_data": usage_data,
+                }
+
+                log_json = json.dumps(log_entry, default=str)
+                if usage_error is None:
+                    logger.info(f"[{request.api_format}] {log_json}")
+                else:
+                    logger.warning(f"[{request.api_format}] {log_json}")
             except Exception as e:
                 logger.error(f"[{request.api_format}] Failed to calculate usage: {e}")
                 import traceback
