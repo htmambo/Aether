@@ -30,6 +30,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import random
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
@@ -956,7 +958,16 @@ class CacheAwareScheduler:
 
                 # 获取活跃的 Key 并按 internal_priority + 负载均衡排序
                 active_keys = [key for key in endpoint.api_keys if key.is_active]
-                keys = self._shuffle_keys_by_internal_priority(active_keys, affinity_key)
+                # 检查是否所有 Key 都是 TTL=0（轮换模式）
+                # 如果所有 Key 的 cache_ttl_minutes 都是 0 或 None，则使用随机排序
+                use_random = all(
+                    (key.cache_ttl_minutes or 0) == 0 for key in active_keys
+                ) if active_keys else False
+                if use_random and len(active_keys) > 1:
+                    logger.debug(
+                        f"  Endpoint {endpoint.id[:8]}... 启用 Key 轮换模式 (TTL=0, {len(active_keys)} keys)"
+                    )
+                keys = self._shuffle_keys_by_internal_priority(active_keys, affinity_key, use_random)
 
                 for key in keys:
                     # Key 级别的能力检查（模型级别的能力检查已在上面完成）
@@ -1170,6 +1181,7 @@ class CacheAwareScheduler:
         self,
         keys: List[ProviderAPIKey],
         affinity_key: Optional[str] = None,
+        use_random: bool = False,
     ) -> List[ProviderAPIKey]:
         """
         对 API Key 按 internal_priority 分组，同优先级内部基于 affinity_key 进行确定性打乱
@@ -1178,10 +1190,12 @@ class CacheAwareScheduler:
         - 数字越小越优先使用
         - 同优先级 Key 之间实现负载均衡
         - 使用 affinity_key 哈希确保同一请求 Key 的请求稳定（避免破坏缓存亲和性）
+        - 当 use_random=True 时，使用随机排序实现轮换（用于 TTL=0 的场景）
 
         Args:
             keys: API Key 列表
             affinity_key: 亲和性标识符（通常为 API Key ID，用于确定性打乱）
+            use_random: 是否使用随机排序（TTL=0 时为 True）
 
         Returns:
             排序后的 Key 列表
@@ -1198,28 +1212,35 @@ class CacheAwareScheduler:
             priority = key.internal_priority if key.internal_priority is not None else 999999
             priority_groups[priority].append(key)
 
-        # 对每个优先级组内的 Key 进行确定性打乱
+        # 对每个优先级组内的 Key 进行打乱
         result = []
         for priority in sorted(priority_groups.keys()):  # 数字小的优先级高，排前面
             group_keys = priority_groups[priority]
 
-            if len(group_keys) > 1 and affinity_key:
-                # 改进的哈希策略：为每个 key 计算独立的哈希值
-                import hashlib
+            if len(group_keys) > 1:
+                if use_random:
+                    # TTL=0 模式：使用随机排序实现 Key 轮换
+                    shuffled = list(group_keys)
+                    random.shuffle(shuffled)
+                    result.extend(shuffled)
+                elif affinity_key:
+                    # 正常模式：使用哈希确定性打乱（保持缓存亲和性）
+                    key_scores = []
+                    for key in group_keys:
+                        # 使用 affinity_key + key.id 的组合哈希
+                        hash_input = f"{affinity_key}:{key.id}"
+                        hash_value = int(hashlib.sha256(hash_input.encode()).hexdigest()[:16], 16)
+                        key_scores.append((hash_value, key))
 
-                key_scores = []
-                for key in group_keys:
-                    # 使用 affinity_key + key.id 的组合哈希
-                    hash_input = f"{affinity_key}:{key.id}"
-                    hash_value = int(hashlib.sha256(hash_input.encode()).hexdigest()[:16], 16)
-                    key_scores.append((hash_value, key))
-
-                # 按哈希值排序
-                sorted_group = [key for _, key in sorted(key_scores)]
-                result.extend(sorted_group)
+                    # 按哈希值排序
+                    sorted_group = [key for _, key in sorted(key_scores)]
+                    result.extend(sorted_group)
+                else:
+                    # 没有 affinity_key 时按 ID 排序保持稳定性
+                    result.extend(sorted(group_keys, key=lambda k: k.id))
             else:
-                # 单个 Key 或没有 affinity_key 时保持原顺序
-                result.extend(sorted(group_keys, key=lambda k: k.id))
+                # 单个 Key 直接添加
+                result.extend(group_keys)
 
         return result
 
