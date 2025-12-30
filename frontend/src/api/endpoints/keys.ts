@@ -111,6 +111,14 @@ export async function updateEndpointKey(
 }
 
 /**
+ * 获取完整的 API Key（用于查看和复制）
+ */
+export async function revealEndpointKey(keyId: string): Promise<{ api_key: string }> {
+  const response = await client.get(`/api/admin/endpoints/keys/${keyId}/reveal`)
+  return response.data
+}
+
+/**
  * 删除 Endpoint Key
  */
 export async function deleteEndpointKey(keyId: string): Promise<{ message: string }> {

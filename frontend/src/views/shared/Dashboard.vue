@@ -145,10 +145,10 @@
               <DollarSign class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
-                  实际成本
+                  本月费用
                 </p>
                 <p class="mt-1.5 sm:mt-2 text-lg sm:text-xl font-semibold text-foreground">
-                  {{ formatCurrency(costStats.total_actual_cost) }}
+                  {{ formatCurrency(costStats.total_cost) }}
                 </p>
                 <Badge
                   v-if="costStats.cost_savings > 0"
@@ -162,14 +162,14 @@
           </div>
         </div>
 
-        <!-- 普通用户：缓存统计 -->
+        <!-- 普通用户：月度统计 -->
         <div
-          v-else-if="!isAdmin && cacheStats && cacheStats.total_cache_tokens > 0"
+          v-else-if="!isAdmin && (hasCacheData || (userMonthlyCost !== null && userMonthlyCost > 0))"
           class="mt-6"
         >
           <div class="mb-3 flex items-center justify-between">
             <h3 class="text-sm font-medium text-foreground">
-              本月缓存使用
+              本月统计
             </h3>
             <Badge
               variant="outline"
@@ -178,8 +178,16 @@
               Monthly
             </Badge>
           </div>
-          <div class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
-            <Card class="relative p-3 sm:p-4 border-book-cloth/30">
+          <div
+            :class="[
+              'grid gap-2 sm:gap-3',
+              hasCacheData ? 'grid-cols-2 xl:grid-cols-4' : 'grid-cols-1 max-w-xs'
+            ]"
+          >
+            <Card
+              v-if="cacheStats"
+              class="relative p-3 sm:p-4 border-book-cloth/30"
+            >
               <Database class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
@@ -190,7 +198,10 @@
                 </p>
               </div>
             </Card>
-            <Card class="relative p-3 sm:p-4 border-kraft/30">
+            <Card
+              v-if="cacheStats"
+              class="relative p-3 sm:p-4 border-kraft/30"
+            >
               <Hash class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
@@ -201,7 +212,10 @@
                 </p>
               </div>
             </Card>
-            <Card class="relative p-3 sm:p-4 border-book-cloth/25">
+            <Card
+              v-if="cacheStats"
+              class="relative p-3 sm:p-4 border-book-cloth/25"
+            >
               <Database class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
@@ -213,19 +227,16 @@
               </div>
             </Card>
             <Card
-              v-if="tokenBreakdown"
+              v-if="userMonthlyCost !== null"
               class="relative p-3 sm:p-4 border-manilla/40"
             >
-              <Hash class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
+              <DollarSign class="absolute top-3 right-3 h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
               <div class="pr-6">
                 <p class="text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-muted-foreground">
-                  总Token
+                  本月费用
                 </p>
                 <p class="mt-1.5 sm:mt-2 text-lg sm:text-xl font-semibold text-foreground">
-                  {{ formatTokens((tokenBreakdown.input || 0) + (tokenBreakdown.output || 0)) }}
-                </p>
-                <p class="mt-0.5 sm:mt-1 text-[9px] sm:text-[10px] text-muted-foreground">
-                  输入 {{ formatTokens(tokenBreakdown.input || 0) }} / 输出 {{ formatTokens(tokenBreakdown.output || 0) }}
+                  {{ formatCurrency(userMonthlyCost) }}
                 </p>
               </div>
             </Card>
@@ -831,6 +842,12 @@ const cacheStats = ref<{
   total_cache_tokens: number
 } | null>(null)
 
+const userMonthlyCost = ref<number | null>(null)
+
+const hasCacheData = computed(() =>
+  cacheStats.value && cacheStats.value.total_cache_tokens > 0
+)
+
 const tokenBreakdown = ref<{
   input: number
   output: number
@@ -1086,6 +1103,7 @@ async function loadDashboardData() {
     } else {
       if (statsData.cache_stats) cacheStats.value = statsData.cache_stats
       if (statsData.token_breakdown) tokenBreakdown.value = statsData.token_breakdown
+      if (statsData.monthly_cost !== undefined) userMonthlyCost.value = statsData.monthly_cost
     }
   } finally {
     loading.value = false

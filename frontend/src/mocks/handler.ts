@@ -405,10 +405,10 @@ function getUsageRecords() {
 
 // Mock 映射数据
 const MOCK_ALIASES = [
-  { id: 'alias-001', source_model: 'claude-4-sonnet', target_global_model_id: 'gm-001', target_global_model_name: 'claude-sonnet-4-20250514', target_global_model_display_name: 'Claude Sonnet 4', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-  { id: 'alias-002', source_model: 'claude-4-opus', target_global_model_id: 'gm-002', target_global_model_name: 'claude-opus-4-20250514', target_global_model_display_name: 'Claude Opus 4', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-  { id: 'alias-003', source_model: 'gpt4o', target_global_model_id: 'gm-004', target_global_model_name: 'gpt-4o', target_global_model_display_name: 'GPT-4o', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-  { id: 'alias-004', source_model: 'gemini-flash', target_global_model_id: 'gm-005', target_global_model_name: 'gemini-2.0-flash', target_global_model_display_name: 'Gemini 2.0 Flash', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
+  { id: 'alias-001', source_model: 'claude-4-sonnet', target_global_model_id: 'gm-003', target_global_model_name: 'claude-sonnet-4-5-20250929', target_global_model_display_name: 'Claude Sonnet 4.5', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+  { id: 'alias-002', source_model: 'claude-4-opus', target_global_model_id: 'gm-002', target_global_model_name: 'claude-opus-4-5-20251101', target_global_model_display_name: 'Claude Opus 4.5', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+  { id: 'alias-003', source_model: 'gpt5', target_global_model_id: 'gm-006', target_global_model_name: 'gpt-5.1', target_global_model_display_name: 'GPT-5.1', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+  { id: 'alias-004', source_model: 'gemini-pro', target_global_model_id: 'gm-005', target_global_model_name: 'gemini-3-pro-preview', target_global_model_display_name: 'Gemini 3 Pro Preview', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
 ]
 
 // Mock Endpoint Keys
@@ -2172,10 +2172,10 @@ function generateIntervalTimelineData(
 
   // 模型列表（用于按模型区分颜色）
   const models = [
-    'claude-sonnet-4-20250514',
-    'claude-3-5-sonnet-20241022',
-    'claude-3-5-haiku-20241022',
-    'claude-opus-4-20250514'
+    'claude-sonnet-4-5-20250929',
+    'claude-haiku-4-5-20251001',
+    'claude-opus-4-5-20251101',
+    'gpt-5.1'
   ]
 
   // 生成模拟的请求间隔数据

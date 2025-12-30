@@ -5,7 +5,7 @@
 
 import type { User, LoginResponse } from '@/api/auth'
 import type { DashboardStatsResponse, RecentRequest, ProviderStatus, DailyStatsResponse } from '@/api/dashboard'
-import type { User as AdminUser, ApiKey } from '@/api/users'
+import type { User as AdminUser } from '@/api/users'
 import type { AdminApiKeysResponse } from '@/api/admin'
 import type { Profile, UsageResponse } from '@/api/me'
 import type { ProviderWithEndpointsSummary, GlobalModelResponse } from '@/api/endpoints/types'
@@ -185,18 +185,20 @@ export const MOCK_DASHBOARD_STATS: DashboardStatsResponse = {
     output: 700000,
     cache_creation: 50000,
     cache_read: 200000
-  }
+  },
+  // 普通用户专用字段
+  monthly_cost: 45.67
 }
 
 export const MOCK_RECENT_REQUESTS: RecentRequest[] = [
-  { id: 'req-001', user: 'alice', model: 'claude-sonnet-4-20250514', tokens: 15234, time: '2 分钟前' },
-  { id: 'req-002', user: 'bob', model: 'gpt-4o', tokens: 8765, time: '5 分钟前' },
-  { id: 'req-003', user: 'charlie', model: 'claude-opus-4-20250514', tokens: 32100, time: '8 分钟前' },
-  { id: 'req-004', user: 'diana', model: 'gemini-2.0-flash', tokens: 4521, time: '12 分钟前' },
-  { id: 'req-005', user: 'eve', model: 'claude-sonnet-4-20250514', tokens: 9876, time: '15 分钟前' },
-  { id: 'req-006', user: 'frank', model: 'gpt-4o-mini', tokens: 2345, time: '18 分钟前' },
-  { id: 'req-007', user: 'grace', model: 'claude-haiku-3-5-20241022', tokens: 6789, time: '22 分钟前' },
-  { id: 'req-008', user: 'henry', model: 'gemini-2.5-pro', tokens: 12345, time: '25 分钟前' }
+  { id: 'req-001', user: 'alice', model: 'claude-sonnet-4-5-20250929', tokens: 15234, time: '2 分钟前' },
+  { id: 'req-002', user: 'bob', model: 'gpt-5.1', tokens: 8765, time: '5 分钟前' },
+  { id: 'req-003', user: 'charlie', model: 'claude-opus-4-5-20251101', tokens: 32100, time: '8 分钟前' },
+  { id: 'req-004', user: 'diana', model: 'gemini-3-pro-preview', tokens: 4521, time: '12 分钟前' },
+  { id: 'req-005', user: 'eve', model: 'claude-sonnet-4-5-20250929', tokens: 9876, time: '15 分钟前' },
+  { id: 'req-006', user: 'frank', model: 'gpt-5.1-codex-mini', tokens: 2345, time: '18 分钟前' },
+  { id: 'req-007', user: 'grace', model: 'claude-haiku-4-5-20251001', tokens: 6789, time: '22 分钟前' },
+  { id: 'req-008', user: 'henry', model: 'gemini-3-pro-preview', tokens: 12345, time: '25 分钟前' }
 ]
 
 export const MOCK_PROVIDER_STATUS: ProviderStatus[] = [
@@ -231,11 +233,11 @@ function generateDailyStats(): DailyStatsResponse {
       unique_models: 8 + Math.floor(Math.random() * 5),
       unique_providers: 4 + Math.floor(Math.random() * 3),
       model_breakdown: [
-        { model: 'claude-sonnet-4-20250514', requests: Math.floor(baseRequests * 0.35), tokens: Math.floor(baseTokens * 0.35), cost: Number((baseCost * 0.35).toFixed(2)) },
-        { model: 'gpt-4o', requests: Math.floor(baseRequests * 0.25), tokens: Math.floor(baseTokens * 0.25), cost: Number((baseCost * 0.25).toFixed(2)) },
-        { model: 'claude-opus-4-20250514', requests: Math.floor(baseRequests * 0.15), tokens: Math.floor(baseTokens * 0.15), cost: Number((baseCost * 0.20).toFixed(2)) },
-        { model: 'gemini-2.0-flash', requests: Math.floor(baseRequests * 0.15), tokens: Math.floor(baseTokens * 0.15), cost: Number((baseCost * 0.10).toFixed(2)) },
-        { model: 'claude-haiku-3-5-20241022', requests: Math.floor(baseRequests * 0.10), tokens: Math.floor(baseTokens * 0.10), cost: Number((baseCost * 0.10).toFixed(2)) }
+        { model: 'claude-sonnet-4-5-20250929', requests: Math.floor(baseRequests * 0.35), tokens: Math.floor(baseTokens * 0.35), cost: Number((baseCost * 0.35).toFixed(2)) },
+        { model: 'gpt-5.1', requests: Math.floor(baseRequests * 0.25), tokens: Math.floor(baseTokens * 0.25), cost: Number((baseCost * 0.25).toFixed(2)) },
+        { model: 'claude-opus-4-5-20251101', requests: Math.floor(baseRequests * 0.15), tokens: Math.floor(baseTokens * 0.15), cost: Number((baseCost * 0.20).toFixed(2)) },
+        { model: 'gemini-3-pro-preview', requests: Math.floor(baseRequests * 0.15), tokens: Math.floor(baseTokens * 0.15), cost: Number((baseCost * 0.10).toFixed(2)) },
+        { model: 'claude-haiku-4-5-20251001', requests: Math.floor(baseRequests * 0.10), tokens: Math.floor(baseTokens * 0.10), cost: Number((baseCost * 0.10).toFixed(2)) }
       ]
     })
   }
@@ -243,11 +245,11 @@ function generateDailyStats(): DailyStatsResponse {
   return {
     daily_stats: dailyStats,
     model_summary: [
-      { model: 'claude-sonnet-4-20250514', requests: 2456, tokens: 8500000, cost: 125.45, avg_response_time: 1.2, cost_per_request: 0.051, tokens_per_request: 3461 },
-      { model: 'gpt-4o', requests: 1823, tokens: 6200000, cost: 98.32, avg_response_time: 0.9, cost_per_request: 0.054, tokens_per_request: 3401 },
-      { model: 'claude-opus-4-20250514', requests: 987, tokens: 4100000, cost: 156.78, avg_response_time: 2.1, cost_per_request: 0.159, tokens_per_request: 4154 },
-      { model: 'gemini-2.0-flash', requests: 1234, tokens: 3800000, cost: 28.56, avg_response_time: 0.6, cost_per_request: 0.023, tokens_per_request: 3079 },
-      { model: 'claude-haiku-3-5-20241022', requests: 2100, tokens: 5200000, cost: 32.10, avg_response_time: 0.5, cost_per_request: 0.015, tokens_per_request: 2476 }
+      { model: 'claude-sonnet-4-5-20250929', requests: 2456, tokens: 8500000, cost: 125.45, avg_response_time: 1.2, cost_per_request: 0.051, tokens_per_request: 3461 },
+      { model: 'gpt-5.1', requests: 1823, tokens: 6200000, cost: 98.32, avg_response_time: 0.9, cost_per_request: 0.054, tokens_per_request: 3401 },
+      { model: 'claude-opus-4-5-20251101', requests: 987, tokens: 4100000, cost: 156.78, avg_response_time: 2.1, cost_per_request: 0.159, tokens_per_request: 4154 },
+      { model: 'gemini-3-pro-preview', requests: 1234, tokens: 3800000, cost: 28.56, avg_response_time: 0.6, cost_per_request: 0.023, tokens_per_request: 3079 },
+      { model: 'claude-haiku-4-5-20251001', requests: 2100, tokens: 5200000, cost: 32.10, avg_response_time: 0.5, cost_per_request: 0.015, tokens_per_request: 2476 }
     ],
     period: {
       start_date: dailyStats[0].date,
@@ -336,7 +338,7 @@ export const MOCK_ALL_USERS: AdminUser[] = [
 
 // ========== API Key 数据 ==========
 
-export const MOCK_USER_API_KEYS: ApiKey[] = [
+export const MOCK_USER_API_KEYS = [
   {
     id: 'key-uuid-001',
     key_display: 'sk-ae...x7f9',
@@ -346,7 +348,8 @@ export const MOCK_USER_API_KEYS: ApiKey[] = [
     is_active: true,
     is_standalone: false,
     total_requests: 1234,
-    total_cost_usd: 45.67
+    total_cost_usd: 45.67,
+    force_capabilities: null
   },
   {
     id: 'key-uuid-002',
@@ -357,7 +360,8 @@ export const MOCK_USER_API_KEYS: ApiKey[] = [
     is_active: true,
     is_standalone: false,
     total_requests: 5678,
-    total_cost_usd: 123.45
+    total_cost_usd: 123.45,
+    force_capabilities: { cache_1h: true }
   },
   {
     id: 'key-uuid-003',
@@ -367,7 +371,8 @@ export const MOCK_USER_API_KEYS: ApiKey[] = [
     is_active: false,
     is_standalone: false,
     total_requests: 100,
-    total_cost_usd: 2.34
+    total_cost_usd: 2.34,
+    force_capabilities: null
   }
 ]
 
@@ -813,16 +818,16 @@ export const MOCK_USAGE_RESPONSE: UsageResponse = {
   quota_usd: 100,
   used_usd: 45.32,
   summary_by_model: [
-    { model: 'claude-sonnet-4-20250514', requests: 456, input_tokens: 650000, output_tokens: 250000, total_tokens: 900000, total_cost_usd: 18.50, actual_total_cost_usd: 13.50 },
-    { model: 'gpt-4o', requests: 312, input_tokens: 480000, output_tokens: 180000, total_tokens: 660000, total_cost_usd: 12.30, actual_total_cost_usd: 9.20 },
-    { model: 'claude-haiku-3-5-20241022', requests: 289, input_tokens: 420000, output_tokens: 170000, total_tokens: 590000, total_cost_usd: 8.50, actual_total_cost_usd: 6.30 },
-    { model: 'gemini-2.0-flash', requests: 177, input_tokens: 250000, output_tokens: 100000, total_tokens: 350000, total_cost_usd: 6.37, actual_total_cost_usd: 4.33 }
+    { model: 'claude-sonnet-4-5-20250929', requests: 456, input_tokens: 650000, output_tokens: 250000, total_tokens: 900000, total_cost_usd: 18.50, actual_total_cost_usd: 13.50 },
+    { model: 'gpt-5.1', requests: 312, input_tokens: 480000, output_tokens: 180000, total_tokens: 660000, total_cost_usd: 12.30, actual_total_cost_usd: 9.20 },
+    { model: 'claude-haiku-4-5-20251001', requests: 289, input_tokens: 420000, output_tokens: 170000, total_tokens: 590000, total_cost_usd: 8.50, actual_total_cost_usd: 6.30 },
+    { model: 'gemini-3-pro-preview', requests: 177, input_tokens: 250000, output_tokens: 100000, total_tokens: 350000, total_cost_usd: 6.37, actual_total_cost_usd: 4.33 }
   ],
   records: [
     {
       id: 'usage-001',
       provider: 'anthropic',
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5-20250929',
       input_tokens: 1500,
       output_tokens: 800,
       total_tokens: 2300,
@@ -837,7 +842,7 @@ export const MOCK_USAGE_RESPONSE: UsageResponse = {
     {
       id: 'usage-002',
       provider: 'openai',
-      model: 'gpt-4o',
+      model: 'gpt-5.1',
       input_tokens: 2000,
       output_tokens: 500,
       total_tokens: 2500,

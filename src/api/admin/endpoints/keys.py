@@ -80,6 +80,17 @@ async def get_keys_grouped_by_format(
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.get("/keys/{key_id}/reveal")
+async def reveal_endpoint_key(
+    key_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """获取完整的 API Key（用于查看和复制）"""
+    adapter = AdminRevealEndpointKeyAdapter(key_id=key_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 @router.delete("/keys/{key_id}")
 async def delete_endpoint_key(
     key_id: str,
@@ -291,6 +302,30 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
             }
         )
         return EndpointAPIKeyResponse(**response_dict)
+
+
+@dataclass
+class AdminRevealEndpointKeyAdapter(AdminApiAdapter):
+    """获取完整的 API Key（用于查看和复制）"""
+
+    key_id: str
+
+    async def handle(self, context):  # type: ignore[override]
+        db = context.db
+        key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
+        if not key:
+            raise NotFoundException(f"Key {self.key_id} 不存在")
+
+        try:
+            decrypted_key = crypto_service.decrypt(key.api_key)
+        except Exception as e:
+            logger.error(f"解密 Key 失败: ID={self.key_id}, Error={e}")
+            raise InvalidRequestException(
+                "无法解密 API Key，可能是加密密钥已更改。请重新添加该密钥。"
+            )
+
+        logger.info(f"[REVEAL] 查看完整 Key: ID={self.key_id}, Name={key.name}")
+        return {"api_key": decrypted_key}
 
 
 @dataclass

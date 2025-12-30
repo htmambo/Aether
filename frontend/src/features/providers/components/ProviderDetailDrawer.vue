@@ -337,8 +337,40 @@
                                         {{ key.is_active ? '活跃' : '禁用' }}
                                       </Badge>
                                     </div>
-                                    <div class="text-[10px] font-mono text-muted-foreground truncate">
-                                      {{ key.api_key_masked }}
+                                    <div class="flex items-center gap-1">
+                                      <span class="text-[10px] font-mono text-muted-foreground truncate max-w-[180px]">
+                                        {{ revealedKeys.has(key.id) ? revealedKeys.get(key.id) : key.api_key_masked }}
+                                      </span>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        class="h-5 w-5 shrink-0"
+                                        :title="revealedKeys.has(key.id) ? '隐藏密钥' : '显示密钥'"
+                                        :disabled="revealingKeyId === key.id"
+                                        @click.stop="toggleKeyReveal(key)"
+                                      >
+                                        <Loader2
+                                          v-if="revealingKeyId === key.id"
+                                          class="w-3 h-3 animate-spin"
+                                        />
+                                        <EyeOff
+                                          v-else-if="revealedKeys.has(key.id)"
+                                          class="w-3 h-3"
+                                        />
+                                        <Eye
+                                          v-else
+                                          class="w-3 h-3"
+                                        />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        class="h-5 w-5 shrink-0"
+                                        title="复制密钥"
+                                        @click.stop="copyFullKey(key)"
+                                      >
+                                        <Copy class="w-3 h-3" />
+                                      </Button>
                                     </div>
                                   </div>
                                   <div class="flex items-center gap-1.5 ml-auto shrink-0">
@@ -654,7 +686,9 @@ import {
   Power,
   Layers,
   GripVertical,
-  Copy
+  Copy,
+  Eye,
+  EyeOff
 } from 'lucide-vue-next'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import Button from '@/components/ui/button.vue'
@@ -681,6 +715,7 @@ import {
   updateEndpoint,
   updateEndpointKey,
   batchUpdateKeyPriority,
+  revealEndpointKey,
   type ProviderEndpoint,
   type EndpointAPIKey,
   type Model
@@ -730,6 +765,10 @@ const keyToDelete = ref<EndpointAPIKey | null>(null)
 const recoveringEndpointId = ref<string | null>(null)
 const togglingEndpointId = ref<string | null>(null)
 const togglingKeyId = ref<string | null>(null)
+
+// 密钥显示状态：key_id -> 完整密钥
+const revealedKeys = ref<Map<string, string>>(new Map())
+const revealingKeyId = ref<string | null>(null)
 
 // 模型相关状态
 const modelFormDialogOpen = ref(false)
@@ -800,6 +839,9 @@ watch(() => props.open, (newOpen) => {
     currentEndpoint.value = null
     editingKey.value = null
     keyToDelete.value = null
+
+    // 清除已显示的密钥（安全考虑）
+    revealedKeys.value.clear()
   }
 })
 
@@ -886,6 +928,43 @@ function handleEditKey(endpoint: ProviderEndpoint, key: EndpointAPIKey) {
 function handleConfigKeyModels(key: EndpointAPIKey) {
   editingKey.value = key
   keyAllowedModelsDialogOpen.value = true
+}
+
+// 切换密钥显示/隐藏
+async function toggleKeyReveal(key: EndpointAPIKey) {
+  if (revealedKeys.value.has(key.id)) {
+    // 已显示，隐藏它
+    revealedKeys.value.delete(key.id)
+    return
+  }
+
+  // 未显示，调用 API 获取完整密钥
+  revealingKeyId.value = key.id
+  try {
+    const result = await revealEndpointKey(key.id)
+    revealedKeys.value.set(key.id, result.api_key)
+  } catch (err: any) {
+    showError(err.response?.data?.detail || '获取密钥失败', '错误')
+  } finally {
+    revealingKeyId.value = null
+  }
+}
+
+// 复制完整密钥
+async function copyFullKey(key: EndpointAPIKey) {
+  // 如果已经显示了，直接复制
+  if (revealedKeys.value.has(key.id)) {
+    copyToClipboard(revealedKeys.value.get(key.id)!)
+    return
+  }
+
+  // 否则先获取再复制
+  try {
+    const result = await revealEndpointKey(key.id)
+    copyToClipboard(result.api_key)
+  } catch (err: any) {
+    showError(err.response?.data?.detail || '获取密钥失败', '错误')
+  }
 }
 
 function handleDeleteKey(key: EndpointAPIKey) {

@@ -87,6 +87,8 @@ export interface DashboardStatsResponse {
   cache_stats?: CacheStats
   users?: UserStats
   token_breakdown?: TokenBreakdown
+  // 普通用户专用字段
+  monthly_cost?: number
 }
 
 export interface RecentRequestsResponse {

@@ -143,7 +143,7 @@ cd frontend && npm install && npm run dev
 - **模型级别**: 在模型管理中针对指定模型开启 1H缓存策略
 - **密钥级别**: 在密钥管理中针对指定密钥使用 1H缓存策略
 
-> **注意**: 若对密钥设置强制 1H缓存, 则该密钥只能调用支持 1H缓存的模型
+> **注意**: 若对密钥设置强制 1H缓存, 则该密钥只能使用支持 1H缓存的模型, 匹配提供商Key, 将会导致这个Key无法同时用于Claude Code、Codex、GeminiCLI, 因为更推荐使用模型开启1H缓存.
 
 ### Q: 如何配置负载均衡？
 
@@ -162,4 +162,16 @@ cd frontend && npm install && npm run dev
 
 ## 许可证
 
-本项目采用 [Aether 非商业开源许可证](LICENSE)。
+本项目采用 [Aether 非商业开源许可证](LICENSE)。允许个人学习、教育研究、非盈利组织及企业内部非盈利性质的使用；禁止用于盈利目的。商业使用请联系获取商业许可。
+
+## 联系作者
+
+<p align="center">
+  <img src="docs/author/qq_qrcode.jpg" width="200" alt="QQ二维码">
+</p>
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=fawney19/Aether&type=Date)](https://star-history.com/#fawney19/Aether&Date)
+
+
