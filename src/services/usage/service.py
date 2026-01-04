@@ -1027,7 +1027,12 @@ class UsageService:
         window_days: int = 365,
         include_actual_cost: bool = False,
     ) -> Dict[str, Any]:
-        """按天统计请求活跃度，用于渲染热力图。"""
+        """按天统计请求活跃度，用于渲染热力图。
+
+        优化策略：
+        - 历史数据从预计算的 StatsDaily/StatsUserDaily 表读取
+        - 只有"今天"的数据才实时查询 Usage 表
+        """
 
         def ensure_timezone(value: datetime) -> datetime:
             if value.tzinfo is None:
@@ -1041,54 +1046,109 @@ class UsageService:
             ensure_timezone(start_date) if start_date else end_dt - timedelta(days=window_days - 1)
         )
 
-        # 对齐到自然日的开始/结束，避免遗漏边界数据
-        start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        # 对齐到自然日的开始/结束
+        start_dt = datetime.combine(start_dt.date(), datetime.min.time(), tzinfo=timezone.utc)
+        end_dt = datetime.combine(end_dt.date(), datetime.max.time(), tzinfo=timezone.utc)
 
-        from src.utils.database_helpers import date_trunc_portable
-
-        bind = db.get_bind()
-        dialect = bind.dialect.name if bind is not None else "sqlite"
-        day_bucket = date_trunc_portable(dialect, "day", Usage.created_at).label("day")
-
-        columns = [
-            day_bucket,
-            func.count(Usage.id).label("requests"),
-            func.sum(Usage.total_tokens).label("total_tokens"),
-            func.sum(Usage.total_cost_usd).label("total_cost_usd"),
-        ]
-
-        if include_actual_cost:
-            columns.append(func.sum(Usage.actual_total_cost_usd).label("actual_total_cost_usd"))
-
-        query = db.query(*columns).filter(Usage.created_at >= start_dt, Usage.created_at <= end_dt)
-
-        if user_id:
-            query = query.filter(Usage.user_id == user_id)
-
-        query = query.group_by(day_bucket).order_by(day_bucket)
-        rows = query.all()
-
-        def normalize_period(value: Any) -> str:
-            if value is None:
-                return ""
-            if isinstance(value, str):
-                return value[:10]
-            if isinstance(value, datetime):
-                return value.date().isoformat()
-            return str(value)
-
+        today = now.date()
+        today_start_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
         aggregated: Dict[str, Dict[str, Any]] = {}
-        for row in rows:
-            key = normalize_period(row.day)
-            aggregated[key] = {
-                "requests": int(row.requests or 0),
-                "total_tokens": int(row.total_tokens or 0),
-                "total_cost_usd": float(row.total_cost_usd or 0.0),
-            }
-            if include_actual_cost:
-                aggregated[key]["actual_total_cost_usd"] = float(row.actual_total_cost_usd or 0.0)
 
+        # 1. 从预计算表读取历史数据（不包括今天）
+        if user_id:
+            from src.models.database import StatsUserDaily
+
+            hist_query = db.query(StatsUserDaily).filter(
+                StatsUserDaily.user_id == user_id,
+                StatsUserDaily.date >= start_dt,
+                StatsUserDaily.date < today_start_dt,
+            )
+            for row in hist_query.all():
+                key = (
+                    row.date.date().isoformat()
+                    if isinstance(row.date, datetime)
+                    else str(row.date)[:10]
+                )
+                aggregated[key] = {
+                    "requests": row.total_requests or 0,
+                    "total_tokens": (
+                        (row.input_tokens or 0)
+                        + (row.output_tokens or 0)
+                        + (row.cache_creation_tokens or 0)
+                        + (row.cache_read_tokens or 0)
+                    ),
+                    "total_cost_usd": float(row.total_cost or 0.0),
+                }
+                # StatsUserDaily 没有 actual_total_cost 字段，用户视图不需要倍率成本
+        else:
+            from src.models.database import StatsDaily
+
+            hist_query = db.query(StatsDaily).filter(
+                StatsDaily.date >= start_dt,
+                StatsDaily.date < today_start_dt,
+            )
+            for row in hist_query.all():
+                key = (
+                    row.date.date().isoformat()
+                    if isinstance(row.date, datetime)
+                    else str(row.date)[:10]
+                )
+                aggregated[key] = {
+                    "requests": row.total_requests or 0,
+                    "total_tokens": (
+                        (row.input_tokens or 0)
+                        + (row.output_tokens or 0)
+                        + (row.cache_creation_tokens or 0)
+                        + (row.cache_read_tokens or 0)
+                    ),
+                    "total_cost_usd": float(row.total_cost or 0.0),
+                }
+                if include_actual_cost:
+                    aggregated[key]["actual_total_cost_usd"] = float(
+                        row.actual_total_cost or 0.0  # type: ignore[attr-defined]
+                    )
+
+        # 2. 实时查询今天的数据（如果在查询范围内）
+        if today >= start_dt.date() and today <= end_dt.date():
+            today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+            today_end = datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc)
+
+            if include_actual_cost:
+                today_query = db.query(
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("total_tokens"),
+                    func.sum(Usage.total_cost_usd).label("total_cost_usd"),
+                    func.sum(Usage.actual_total_cost_usd).label("actual_total_cost_usd"),
+                ).filter(
+                    Usage.created_at >= today_start,
+                    Usage.created_at <= today_end,
+                )
+            else:
+                today_query = db.query(
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("total_tokens"),
+                    func.sum(Usage.total_cost_usd).label("total_cost_usd"),
+                ).filter(
+                    Usage.created_at >= today_start,
+                    Usage.created_at <= today_end,
+                )
+
+            if user_id:
+                today_query = today_query.filter(Usage.user_id == user_id)
+
+            today_row = today_query.first()
+            if today_row and today_row.requests:
+                aggregated[today.isoformat()] = {
+                    "requests": int(today_row.requests or 0),
+                    "total_tokens": int(today_row.total_tokens or 0),
+                    "total_cost_usd": float(today_row.total_cost_usd or 0.0),
+                }
+                if include_actual_cost:
+                    aggregated[today.isoformat()]["actual_total_cost_usd"] = float(
+                        today_row.actual_total_cost_usd or 0.0
+                    )
+
+        # 3. 构建返回结果
         days: List[Dict[str, Any]] = []
         cursor = start_dt.date()
         end_date_only = end_dt.date()

@@ -75,6 +75,16 @@ export interface ModelSummary {
   actual_total_cost_usd?: number  // 倍率消耗（仅管理员可见）
 }
 
+// 提供商统计接口
+export interface ProviderSummary {
+  provider: string
+  requests: number
+  total_tokens: number
+  total_cost_usd: number
+  success_rate: number | null
+  avg_response_time_ms: number | null
+}
+
 // 使用统计响应接口
 export interface UsageResponse {
   total_requests: number
@@ -87,6 +97,13 @@ export interface UsageResponse {
   quota_usd: number | null
   used_usd: number
   summary_by_model: ModelSummary[]
+  summary_by_provider?: ProviderSummary[]
+  pagination?: {
+    total: number
+    limit: number
+    offset: number
+    has_more: boolean
+  }
   records: UsageRecordDetail[]
   activity_heatmap?: ActivityHeatmap | null
 }
@@ -175,6 +192,8 @@ export const meApi = {
   async getUsage(params?: {
     start_date?: string
     end_date?: string
+    limit?: number
+    offset?: number
   }): Promise<UsageResponse> {
     const response = await apiClient.get<UsageResponse>('/api/users/me/usage', { params })
     return response.data

@@ -104,9 +104,11 @@ async def get_my_usage(
     request: Request,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    limit: int = Query(100, ge=1, le=200, description="每页记录数，默认100，最大200"),
+    offset: int = Query(0, ge=0, le=2000, description="偏移量，用于分页，最大2000"),
     db: Session = Depends(get_db),
 ):
-    adapter = GetUsageAdapter(start_date=start_date, end_date=end_date)
+    adapter = GetUsageAdapter(start_date=start_date, end_date=end_date, limit=limit, offset=offset)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
@@ -471,6 +473,8 @@ class ToggleMyApiKeyAdapter(AuthenticatedApiAdapter):
 class GetUsageAdapter(AuthenticatedApiAdapter):
     start_date: Optional[datetime]
     end_date: Optional[datetime]
+    limit: int = 100
+    offset: int = 0
 
     async def handle(self, context):  # type: ignore[override]
         db = context.db
@@ -553,7 +557,7 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             stats["total_cost_usd"] += item["total_cost_usd"]
             # 假设 summary 中的都是成功的请求
             stats["success_count"] += item["requests"]
-            if item.get("avg_response_time_ms"):
+            if item.get("avg_response_time_ms") is not None:
                 stats["total_response_time_ms"] += item["avg_response_time_ms"] * item["requests"]
                 stats["response_time_count"] += item["requests"]
 
@@ -582,7 +586,10 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             query = query.filter(Usage.created_at >= self.start_date)
         if self.end_date:
             query = query.filter(Usage.created_at <= self.end_date)
-        usage_records = query.order_by(Usage.created_at.desc()).limit(100).all()
+
+        # 计算总数用于分页
+        total_records = query.count()
+        usage_records = query.order_by(Usage.created_at.desc()).offset(self.offset).limit(self.limit).all()
 
         avg_resp_query = db.query(func.avg(Usage.response_time_ms)).filter(
             Usage.user_id == user.id,
@@ -608,6 +615,13 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             "used_usd": user.used_usd,
             "summary_by_model": summary_by_model,
             "summary_by_provider": summary_by_provider,
+            # 分页信息
+            "pagination": {
+                "total": total_records,
+                "limit": self.limit,
+                "offset": self.offset,
+                "has_more": self.offset + self.limit < total_records,
+            },
             "records": [
                 {
                     "id": r.id,
