@@ -405,7 +405,7 @@ class BaseMessageHandler:
         asyncio.create_task(_do_update())
 
     def _update_usage_to_streaming_with_ctx(self, ctx: "StreamContext") -> None:
-        """更新 Usage 状态为 streaming，同时更新 provider 和 target_model
+        """更新 Usage 状态为 streaming，同时更新 provider 相关信息
 
         使用 asyncio 后台任务执行数据库更新，避免阻塞流式传输
 
@@ -413,7 +413,7 @@ class BaseMessageHandler:
         并在最终 record_success 时传递到数据库，避免重复记录导致数据不一致。
 
         Args:
-            ctx: 流式上下文，包含 provider_name 和 mapped_model
+            ctx: 流式上下文，包含 provider 相关信息
         """
         import asyncio
         from src.database.database import get_db
@@ -421,6 +421,10 @@ class BaseMessageHandler:
         target_request_id = self.request_id
         provider = ctx.provider_name
         target_model = ctx.mapped_model
+        provider_id = ctx.provider_id
+        endpoint_id = ctx.endpoint_id
+        key_id = ctx.key_id
+        first_byte_time_ms = ctx.first_byte_time_ms
 
         # 如果 provider 为空，记录警告（不应该发生，但用于调试）
         if not provider:
@@ -440,6 +444,10 @@ class BaseMessageHandler:
                         status="streaming",
                         provider=provider,
                         target_model=target_model,
+                        provider_id=provider_id,
+                        provider_endpoint_id=endpoint_id,
+                        provider_api_key_id=key_id,
+                        first_byte_time_ms=first_byte_time_ms,
                     )
                 finally:
                     db.close()
