@@ -94,6 +94,7 @@ async def get_usage_records(
     end_date: Optional[datetime] = None,
     user_id: Optional[str] = None,
     username: Optional[str] = None,
+    user_api_key_name: Optional[str] = None,
     model: Optional[str] = None,
     provider: Optional[str] = None,
     status: Optional[str] = None,  # stream, standard, error
@@ -106,6 +107,7 @@ async def get_usage_records(
         end_date=end_date,
         user_id=user_id,
         username=username,
+        user_api_key_name=user_api_key_name,
         model=model,
         provider=provider,
         status=status,
@@ -502,6 +504,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         end_date: Optional[datetime],
         user_id: Optional[str],
         username: Optional[str],
+        user_api_key_name: Optional[str],
         model: Optional[str],
         provider: Optional[str],
         status: Optional[str],
@@ -512,6 +515,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         self.end_date = end_date
         self.user_id = user_id
         self.username = username
+        self.user_api_key_name = user_api_key_name
         self.model = model
         self.provider = provider
         self.status = status
@@ -521,16 +525,20 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
     async def handle(self, context):  # type: ignore[override]
         db = context.db
         query = (
-            db.query(Usage, User, ProviderEndpoint, ProviderAPIKey)
+            db.query(Usage, User, ProviderEndpoint, ProviderAPIKey, ApiKey)
             .outerjoin(User, Usage.user_id == User.id)
             .outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
             .outerjoin(ProviderAPIKey, Usage.provider_api_key_id == ProviderAPIKey.id)
+            .outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
         )
         if self.user_id:
             query = query.filter(Usage.user_id == self.user_id)
         if self.username:
             # 支持用户名模糊搜索
             query = query.filter(User.username.ilike(f"%{self.username}%"))
+        if self.user_api_key_name:
+            # 支持用户 API Key 名称模糊搜索（注意：不是 Provider Key）
+            query = query.filter(ApiKey.name.ilike(f"%{self.user_api_key_name}%"))
         if self.model:
             # 支持模型名模糊搜索
             query = query.filter(Usage.model.ilike(f"%{self.model}%"))
@@ -575,7 +583,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             query.order_by(Usage.created_at.desc()).offset(self.offset).limit(self.limit).all()
         )
 
-        request_ids = [usage.request_id for usage, _, _, _ in records if usage.request_id]
+        request_ids = [usage.request_id for usage, _, _, _, _ in records if usage.request_id]
         fallback_map = {}
         if request_ids:
             # 只统计实际执行的候选（success 或 failed），不包括 skipped/pending/available
@@ -597,6 +605,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             end_date=self.end_date.isoformat() if self.end_date else None,
             user_id=self.user_id,
             username=self.username,
+            user_api_key_name=self.user_api_key_name,
             model=self.model,
             provider=self.provider,
             status=self.status,
@@ -606,7 +615,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         )
 
         # 构建 provider_id -> Provider 名称的映射，避免 N+1 查询
-        provider_ids = [usage.provider_id for usage, _, _, _ in records if usage.provider_id]
+        provider_ids = [usage.provider_id for usage, _, _, _, _ in records if usage.provider_id]
         provider_map = {}
         if provider_ids:
             providers_data = (
@@ -615,7 +624,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
             provider_map = {str(p.id): p.name for p in providers_data}
 
         data = []
-        for usage, user, endpoint, api_key in records:
+        for usage, user, endpoint, provider_api_key, user_api_key in records:
             actual_cost = (
                 float(usage.actual_total_cost_usd)
                 if usage.actual_total_cost_usd is not None
@@ -636,6 +645,15 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     "user_id": user.id if user else None,
                     "user_email": user.email if user else "已删除用户",
                     "username": user.username if user else "已删除用户",
+                    "api_key": (
+                        {
+                            "id": user_api_key.id,
+                            "name": user_api_key.name,
+                            "display": user_api_key.get_display_key(),
+                        }
+                        if user_api_key
+                        else None
+                    ),
                     "provider": provider_name,
                     "model": usage.model,
                     "target_model": usage.target_model,  # 映射后的目标模型名
@@ -661,7 +679,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     "has_fallback": fallback_map.get(usage.request_id, False),
                     "api_format": usage.api_format
                     or (endpoint.api_format if endpoint and endpoint.api_format else None),
-                    "api_key_name": api_key.name if api_key else None,
+                    "api_key_name": provider_api_key.name if provider_api_key else None,
                     "request_metadata": usage.request_metadata,  # Provider 响应元数据
                 }
             )

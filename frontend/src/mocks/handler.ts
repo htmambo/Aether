@@ -367,6 +367,11 @@ function generateMockUsageRecords(count: number = 100) {
       user_id: user.id,
       username: user.username,
       user_email: user.email,
+      api_key: {
+        id: `key-${user.id}-${Math.ceil(Math.random() * 2)}`,
+        name: `${user.username} Key ${Math.ceil(Math.random() * 3)}`,
+        display: `sk-ae...${String(1000 + Math.floor(Math.random() * 9000))}`
+      },
       provider: model.provider,
       api_key_name: `${model.provider}-key-${Math.ceil(Math.random() * 3)}`,
       rate_multiplier: 1.0,
@@ -835,10 +840,17 @@ const mockHandlers: Record<string, (config: AxiosRequestConfig) => Promise<Axios
   'GET /api/admin/usage/records': async (config) => {
     await delay()
     requireAdmin()
-    const records = getUsageRecords()
+    let records = getUsageRecords()
     const params = config.params || {}
     const limit = parseInt(params.limit) || 20
     const offset = parseInt(params.offset) || 0
+
+    // 用户 API Key 名称筛选（注意：不是 Provider Key）
+    if (typeof params.user_api_key_name === 'string' && params.user_api_key_name.trim()) {
+      const keyword = params.user_api_key_name.trim().toLowerCase()
+      records = records.filter(r => (r.api_key?.name || '').toLowerCase().includes(keyword))
+    }
+
     return createMockResponse({
       records: records.slice(offset, offset + limit),
       total: records.length,

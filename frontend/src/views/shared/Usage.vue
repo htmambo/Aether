@@ -57,6 +57,7 @@
       :loading="isLoadingRecords"
       :selected-period="selectedPeriod"
       :filter-user="filterUser"
+      :filter-key-name="filterKeyName"
       :filter-model="filterModel"
       :filter-provider="filterProvider"
       :filter-status="filterStatus"
@@ -70,6 +71,7 @@
       :auto-refresh="globalAutoRefresh"
       @update:selected-period="handlePeriodChange"
       @update:filter-user="handleFilterUserChange"
+      @update:filter-key-name="handleFilterKeyNameChange"
       @update:filter-model="handleFilterModelChange"
       @update:filter-provider="handleFilterProviderChange"
       @update:filter-status="handleFilterStatusChange"
@@ -134,6 +136,7 @@ const pageSizeOptions = [10, 20, 50, 100]
 
 // 筛选状态
 const filterUser = ref('__all__')
+const filterKeyName = ref('')
 const filterModel = ref('__all__')
 const filterProvider = ref('__all__')
 const filterStatus = ref<FilterStatusValue>('__all__')
@@ -439,6 +442,7 @@ async function handlePageSizeChange(size: number) {
 function getCurrentFilters() {
   return {
     user_id: filterUser.value !== '__all__' ? filterUser.value : undefined,
+    user_api_key_name: filterKeyName.value.trim() ? filterKeyName.value.trim() : undefined,
     model: filterModel.value !== '__all__' ? filterModel.value : undefined,
     provider: filterProvider.value !== '__all__' ? filterProvider.value : undefined,
     status: filterStatus.value !== '__all__' ? filterStatus.value : undefined
@@ -449,6 +453,15 @@ function getCurrentFilters() {
 async function handleFilterUserChange(value: string) {
   filterUser.value = value
   currentPage.value = 1  // 重置到第一页
+
+  if (isAdminPage.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())
+  }
+}
+
+async function handleFilterKeyNameChange(value: string) {
+  filterKeyName.value = value
+  currentPage.value = 1
 
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters())

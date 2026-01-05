@@ -61,6 +61,11 @@ export interface UsageRecord {
   user_id?: string
   username?: string
   user_email?: string
+  api_key?: {
+    id: string | null
+    name: string | null
+    display: string | null
+  } | null
   provider: string
   api_key_name?: string
   rate_multiplier?: number

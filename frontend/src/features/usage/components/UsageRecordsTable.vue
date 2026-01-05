@@ -56,6 +56,20 @@
         </SelectContent>
       </Select>
 
+      <!-- Key 名称筛选（请求使用的用户 Key，仅管理员可见） -->
+      <div
+        v-if="isAdmin"
+        class="relative"
+      >
+        <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10 pointer-events-none" />
+        <Input
+          id="usage-records-key-name"
+          v-model="localKeyName"
+          placeholder="搜索密钥名称"
+          class="w-24 sm:w-40 h-8 text-xs border-border/60 pl-8"
+        />
+      </div>
+
       <!-- 模型筛选 -->
       <Select
         v-model:open="filterModelSelectOpen"
@@ -218,7 +232,18 @@
             class="py-4 w-[100px] truncate"
             :title="record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户')"
           >
-            {{ record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户') }}
+            <div class="flex flex-col text-xs gap-0.5">
+              <span class="truncate">
+                {{ record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户') }}
+              </span>
+              <span
+                v-if="record.api_key?.name"
+                class="text-muted-foreground truncate"
+                :title="record.api_key.name"
+              >
+                {{ record.api_key.name }}
+              </span>
+            </div>
           </TableCell>
           <TableCell
             class="font-medium py-4 w-[140px]"
@@ -438,6 +463,7 @@ import {
   TableCard,
   Badge,
   Button,
+  Input,
   Select,
   SelectTrigger,
   SelectValue,
@@ -451,7 +477,7 @@ import {
   TableCell,
   Pagination,
 } from '@/components/ui'
-import { RefreshCcw } from 'lucide-vue-next'
+import { RefreshCcw, Search } from 'lucide-vue-next'
 import { formatTokens, formatCurrency } from '@/utils/format'
 import { formatDateTime } from '../composables'
 import { useRowClick } from '@/composables/useRowClick'
@@ -472,6 +498,7 @@ const props = defineProps<{
   selectedPeriod: string
   // 筛选
   filterUser: string
+  filterKeyName: string
   filterModel: string
   filterProvider: string
   filterStatus: string
@@ -490,6 +517,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:selectedPeriod': [value: string]
   'update:filterUser': [value: string]
+  'update:filterKeyName': [value: string]
   'update:filterModel': [value: string]
   'update:filterProvider': [value: string]
   'update:filterStatus': [value: string]
@@ -506,6 +534,23 @@ const filterUserSelectOpen = ref(false)
 const filterModelSelectOpen = ref(false)
 const filterProviderSelectOpen = ref(false)
 const filterStatusSelectOpen = ref(false)
+
+// Key 名称筛选（输入防抖）
+const localKeyName = ref(props.filterKeyName)
+let keyNameDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(() => props.filterKeyName, (value) => {
+  if (value !== localKeyName.value) {
+    localKeyName.value = value
+  }
+})
+
+watch(localKeyName, (value) => {
+  if (keyNameDebounceTimer) clearTimeout(keyNameDebounceTimer)
+  keyNameDebounceTimer = setTimeout(() => {
+    emit('update:filterKeyName', value)
+  }, 300)
+})
 
 // 动态计时器相关
 const now = ref(Date.now())
@@ -574,6 +619,10 @@ function handleRowClick(event: MouseEvent, id: string) {
 // 组件卸载时清理
 onUnmounted(() => {
   stopTimer()
+  if (keyNameDebounceTimer) {
+    clearTimeout(keyNameDebounceTimer)
+    keyNameDebounceTimer = null
+  }
 })
 
 // 格式化 API 格式显示名称

@@ -166,6 +166,7 @@ export const usageApi = {
     end_date?: string
     user_id?: string // UUID
     username?: string
+    user_api_key_name?: string
     model?: string
     provider?: string
     status?: string // 'stream' | 'standard' | 'error'

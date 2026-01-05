@@ -24,6 +24,7 @@ export interface PaginationParams {
 
 export interface FilterParams {
   user_id?: string
+  user_api_key_name?: string
   model?: string
   provider?: string
   status?: string
@@ -254,6 +255,9 @@ export function useUsageData(options: UseUsageDataOptions) {
       // 添加筛选条件
       if (filters?.user_id) {
         params.user_id = filters.user_id
+      }
+      if (filters?.user_api_key_name) {
+        params.user_api_key_name = filters.user_api_key_name
       }
       if (filters?.model) {
         params.model = filters.model
