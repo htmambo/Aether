@@ -78,6 +78,51 @@ class SystemConfigService:
             "value": False,
             "description": "是否自动删除过期的API Key（True=物理删除，False=仅禁用），仅管理员可配置",
         },
+        "email_suffix_mode": {
+            "value": "none",
+            "description": "邮箱后缀限制模式：none(不限制), whitelist(白名单), blacklist(黑名单)",
+        },
+        "email_suffix_list": {
+            "value": [],
+            "description": "邮箱后缀列表，配合 email_suffix_mode 使用",
+        },
+        "audit_log_retention_days": {
+            "value": 30,
+            "description": "审计日志保留天数，超过此天数的审计日志将被自动清理",
+        },
+        # SMTP 邮件配置
+        "smtp_host": {
+            "value": None,
+            "description": "SMTP 服务器地址",
+        },
+        "smtp_port": {
+            "value": 587,
+            "description": "SMTP 服务器端口",
+        },
+        "smtp_user": {
+            "value": None,
+            "description": "SMTP 用户名",
+        },
+        "smtp_password": {
+            "value": None,
+            "description": "SMTP 密码（加密存储）",
+        },
+        "smtp_use_tls": {
+            "value": True,
+            "description": "是否使用 STARTTLS",
+        },
+        "smtp_use_ssl": {
+            "value": False,
+            "description": "是否使用 SSL/TLS",
+        },
+        "smtp_from_email": {
+            "value": None,
+            "description": "发件人邮箱地址",
+        },
+        "smtp_from_name": {
+            "value": "Aether",
+            "description": "发件人名称",
+        },
     }
 
     @classmethod
