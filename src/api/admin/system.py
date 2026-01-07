@@ -42,6 +42,42 @@ def _get_version_from_git() -> str | None:
     return None
 
 
+def _get_current_version() -> str:
+    """获取当前版本号"""
+    version = _get_version_from_git()
+    if version:
+        return version
+    try:
+        from src._version import __version__
+
+        return __version__
+    except ImportError:
+        return "unknown"
+
+
+def _parse_version(version_str: str) -> tuple:
+    """解析版本号为可比较的元组，支持 3-4 段版本号
+
+    例如:
+    - '0.2.5' -> (0, 2, 5, 0)
+    - '0.2.5.1' -> (0, 2, 5, 1)
+    - 'v0.2.5-4-g1234567' -> (0, 2, 5, 0)
+    """
+    import re
+
+    version_str = version_str.lstrip("v")
+    main_version = re.split(r"[-+]", version_str)[0]
+    try:
+        parts = main_version.split(".")
+        # 标准化为 4 段，便于比较
+        int_parts = [int(p) for p in parts]
+        while len(int_parts) < 4:
+            int_parts.append(0)
+        return tuple(int_parts[:4])
+    except ValueError:
+        return (0, 0, 0, 0)
+
+
 @router.get("/version")
 async def get_system_version():
     """
@@ -52,18 +88,111 @@ async def get_system_version():
     **返回字段**:
     - `version`: 版本号字符串
     """
-    # 优先从 git 获取
-    version = _get_version_from_git()
-    if version:
-        return {"version": version}
+    return {"version": _get_current_version()}
 
-    # 回退到静态版本文件
+
+@router.get("/check-update")
+async def check_update():
+    """
+    检查系统更新
+
+    从 GitHub Tags 获取最新版本并与当前版本对比。
+
+    **返回字段**:
+    - `current_version`: 当前版本号
+    - `latest_version`: 最新版本号
+    - `has_update`: 是否有更新可用
+    - `release_url`: 最新版本的 GitHub 页面链接
+    """
+    import httpx
+
+    from src.clients.http_client import HTTPClientPool
+
+    current_version = _get_current_version()
+    github_repo = "Aethersailor/Aether"
+    github_tags_url = f"https://api.github.com/repos/{github_repo}/tags"
+
     try:
-        from src._version import __version__
+        async with HTTPClientPool.get_temp_client(
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+        ) as client:
+            response = await client.get(
+                github_tags_url,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": f"Aether/{current_version}",
+                },
+                params={"per_page": 10},
+            )
 
-        return {"version": __version__}
-    except ImportError:
-        return {"version": "unknown"}
+            if response.status_code != 200:
+                return {
+                    "current_version": current_version,
+                    "latest_version": None,
+                    "has_update": False,
+                    "release_url": None,
+                    "error": f"GitHub API 返回错误: {response.status_code}",
+                }
+
+            tags = response.json()
+            if not tags:
+                return {
+                    "current_version": current_version,
+                    "latest_version": None,
+                    "has_update": False,
+                    "release_url": None,
+                    "error": None,
+                }
+
+            # 找到最新的版本 tag（按版本号排序，而非时间）
+            version_tags = []
+            for tag in tags:
+                tag_name = tag.get("name", "")
+                if tag_name.startswith("v") or tag_name[0].isdigit():
+                    version_tags.append((tag_name, _parse_version(tag_name)))
+
+            if not version_tags:
+                return {
+                    "current_version": current_version,
+                    "latest_version": None,
+                    "has_update": False,
+                    "release_url": None,
+                    "error": None,
+                }
+
+            # 按版本号排序，取最大的
+            version_tags.sort(key=lambda x: x[1], reverse=True)
+            latest_tag = version_tags[0][0]
+            latest_version = latest_tag.lstrip("v")
+
+            current_tuple = _parse_version(current_version)
+            latest_tuple = _parse_version(latest_version)
+            has_update = latest_tuple > current_tuple
+
+            return {
+                "current_version": current_version,
+                "latest_version": latest_version,
+                "has_update": has_update,
+                "release_url": f"https://github.com/{github_repo}/releases/tag/{latest_tag}",
+                "error": None,
+            }
+
+    except httpx.TimeoutException:
+        return {
+            "current_version": current_version,
+            "latest_version": None,
+            "has_update": False,
+            "release_url": None,
+            "error": "检查更新超时",
+        }
+    except Exception as e:
+        return {
+            "current_version": current_version,
+            "latest_version": None,
+            "has_update": False,
+            "release_url": None,
+            "error": f"检查更新失败: {str(e)}",
+        }
 
 
 pipeline = ApiRequestPipeline()
