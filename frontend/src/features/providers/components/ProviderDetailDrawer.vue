@@ -168,13 +168,27 @@
                   class="divide-y divide-border/40"
                 >
                   <div
-                    v-for="{ key, endpoint } in allKeys"
+                    v-for="({ key, endpoint }, index) in allKeys"
                     :key="key.id"
-                    class="px-4 py-2.5 hover:bg-muted/30 transition-colors"
+                    class="px-4 py-2.5 hover:bg-muted/30 transition-colors group/item"
+                    :class="{
+                      'opacity-50': keyDragState.isDragging && keyDragState.draggedIndex === index,
+                      'bg-primary/5 border-l-2 border-l-primary': keyDragState.targetIndex === index && keyDragState.isDragging
+                    }"
+                    draggable="true"
+                    @dragstart="handleKeyDragStart($event, index)"
+                    @dragend="handleKeyDragEnd"
+                    @dragover="handleKeyDragOver($event, index)"
+                    @dragleave="handleKeyDragLeave"
+                    @drop="handleKeyDrop($event, index)"
                   >
                     <!-- 第一行：名称 + 状态 + 操作按钮 -->
                     <div class="flex items-center justify-between gap-2">
                       <div class="flex items-center gap-2 flex-1 min-w-0">
+                        <!-- 拖拽手柄 -->
+                        <div class="cursor-grab active:cursor-grabbing text-muted-foreground/30 group-hover/item:text-muted-foreground transition-colors shrink-0">
+                          <GripVertical class="w-4 h-4" />
+                        </div>
                         <span class="text-sm font-medium truncate">{{ key.name || '未命名密钥' }}</span>
                         <span class="text-xs font-mono text-muted-foreground">
                           {{ key.api_key_masked }}
@@ -570,12 +584,19 @@ const batchAssignDialogOpen = ref(false)
 // ModelAliasesTab 组件引用
 const modelAliasesTabRef = ref<InstanceType<typeof ModelAliasesTab> | null>(null)
 
-// 拖动排序相关状态
+// 拖动排序相关状态（旧的端点级别拖拽，保留以兼容）
 const dragState = ref({
   isDragging: false,
   draggedKeyId: null as string | null,
   targetKeyId: null as string | null,
   dragEndpointId: null as string | null
+})
+
+// 密钥列表拖拽排序状态
+const keyDragState = ref({
+  isDragging: false,
+  draggedIndex: null as number | null,
+  targetIndex: null as number | null
 })
 
 // 点击编辑优先级相关状态
@@ -1151,6 +1172,92 @@ async function savePriority(key: EndpointAPIKey) {
     emit('refresh')
   } catch (err: any) {
     showError(err.response?.data?.detail || '更新优先级失败', '错误')
+  }
+}
+
+// ===== 密钥列表拖拽排序 =====
+function handleKeyDragStart(event: DragEvent, index: number) {
+  keyDragState.value.isDragging = true
+  keyDragState.value.draggedIndex = index
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(index))
+  }
+}
+
+function handleKeyDragEnd() {
+  keyDragState.value.isDragging = false
+  keyDragState.value.draggedIndex = null
+  keyDragState.value.targetIndex = null
+}
+
+function handleKeyDragOver(event: DragEvent, index: number) {
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+  if (keyDragState.value.draggedIndex !== index) {
+    keyDragState.value.targetIndex = index
+  }
+}
+
+function handleKeyDragLeave() {
+  keyDragState.value.targetIndex = null
+}
+
+async function handleKeyDrop(event: DragEvent, targetIndex: number) {
+  event.preventDefault()
+
+  const draggedIndex = keyDragState.value.draggedIndex
+  if (draggedIndex === null || draggedIndex === targetIndex) {
+    handleKeyDragEnd()
+    return
+  }
+
+  const keys = allKeys.value.map(item => item.key)
+  if (draggedIndex < 0 || draggedIndex >= keys.length || targetIndex < 0 || targetIndex >= keys.length) {
+    handleKeyDragEnd()
+    return
+  }
+
+  const draggedKey = keys[draggedIndex]
+  const targetKey = keys[targetIndex]
+  const draggedPriority = draggedKey.internal_priority ?? 0
+  const targetPriority = targetKey.internal_priority ?? 0
+
+  // 如果是同组内拖拽（同优先级），忽略操作
+  if (draggedPriority === targetPriority) {
+    handleKeyDragEnd()
+    return
+  }
+
+  // 检查目标 key 是否属于一个"组"（除了被拖拽的 key，还有其他 key 与目标同优先级）
+  // 组的定义：2 个及以上同优先级的 key
+  const keysAtTargetPriority = keys.filter(k =>
+    k.id !== draggedKey.id && (k.internal_priority ?? 0) === targetPriority
+  )
+  // 如果有 2 个及以上 key 在目标优先级（不含被拖拽的），说明目标在组内
+  const targetIsInGroup = keysAtTargetPriority.length >= 2
+
+  handleKeyDragEnd()
+
+  try {
+    if (targetIsInGroup) {
+      // 目标在组内，被拖拽的 key 加入该组
+      await updateProviderKey(draggedKey.id, { internal_priority: targetPriority })
+    } else {
+      // 目标是单独的（或只有目标自己），交换优先级
+      await Promise.all([
+        updateProviderKey(draggedKey.id, { internal_priority: targetPriority }),
+        updateProviderKey(targetKey.id, { internal_priority: draggedPriority })
+      ])
+    }
+    showSuccess('优先级已更新')
+    await loadEndpoints()
+    emit('refresh')
+  } catch (err: any) {
+    showError(err.response?.data?.detail || '更新优先级失败', '错误')
+    await loadEndpoints()
   }
 }
 
