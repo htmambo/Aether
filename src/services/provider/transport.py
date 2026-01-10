@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 from src.core.api_format_metadata import get_auth_config, get_default_path, resolve_api_format
 from src.core.crypto import crypto_service
+from src.core.header_rules import apply_header_rules
 from src.core.enums import APIFormat
 from src.core.logger import logger
 
@@ -30,6 +31,16 @@ def build_provider_headers(
     根据 endpoint/key 构建请求头，并透传客户端自定义头。
     """
     headers: Dict[str, str] = {}
+    excluded_headers = {
+        "host",
+        "authorization",
+        "x-api-key",
+        "x-goog-api-key",
+        "content-length",
+        "transfer-encoding",
+    }
+
+
 
     # api_key 在数据库中是 NOT NULL，类型标注为 Optional 是 SQLAlchemy 限制
     decrypted_key = crypto_service.decrypt(key.api_key)  # type: ignore[arg-type]
@@ -46,18 +57,7 @@ def build_provider_headers(
     else:
         headers[auth_header] = decrypted_key
 
-    if endpoint.headers:
-        headers.update(endpoint.headers)
-
-    excluded_headers = {
-        "host",
-        "authorization",
-        "x-api-key",
-        "x-goog-api-key",
-        "content-length",
-        "transfer-encoding",
-    }
-
+    # 先合并所有原始头部（在应用规则之前）
     if original_headers:
         for name, value in original_headers.items():
             if name.lower() not in excluded_headers:
@@ -65,6 +65,22 @@ def build_provider_headers(
 
     if extra_headers:
         headers.update(extra_headers)
+
+    # 应用 endpoint 规则（在合并所有 headers 之后）
+    if endpoint.headers:
+        rule_keys = {"add", "remove", "replace_name", "replace_value"}
+        if isinstance(endpoint.headers, dict) and any(key in endpoint.headers for key in rule_keys):
+            # 新格式：按规则处理
+            # 保存认证头，防止规则修改
+            saved_auth_header = headers.get(auth_header) if auth_header in headers else None
+            # 应用规则
+            headers = apply_header_rules(headers, endpoint.headers)
+            # 恢复认证头
+            if saved_auth_header is not None:
+                headers[auth_header] = saved_auth_header
+        else:
+            # 旧格式：直接合并
+            headers.update(endpoint.headers)
 
     if "Content-Type" not in headers and "content-type" not in headers:
         headers["Content-Type"] = "application/json"

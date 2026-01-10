@@ -1,5 +1,5 @@
 import client from '../client'
-import type { ProviderEndpoint, ProxyConfig } from './types'
+import type { ProviderEndpoint, ProxyConfig, EndpointHeadersConfig } from './types'
 
 /**
  * 获取指定 Provider 的所有 Endpoints
@@ -27,7 +27,7 @@ export async function createEndpoint(
     api_format: string
     base_url: string
     custom_path?: string
-    headers?: Record<string, string>
+    headers?: EndpointHeadersConfig
     timeout?: number
     max_retries?: number
     is_active?: boolean
@@ -47,7 +47,7 @@ export async function updateEndpoint(
   data: Partial<{
     base_url: string
     custom_path: string | null
-    headers: Record<string, string>
+    headers: EndpointHeadersConfig
     timeout: number
     max_retries: number
     is_active: boolean

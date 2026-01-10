@@ -95,6 +95,15 @@
                     variant="ghost"
                     size="icon"
                     class="h-7 w-7"
+                    title="Headers配置"
+                    @click="openHeadersDialog(endpoint)"
+                  >
+                    <Settings class="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7"
                     :title="endpoint.is_active ? '停用' : '启用'"
                     :disabled="togglingEndpointId === endpoint.id"
                     @click="handleToggleEndpoint(endpoint)"
@@ -191,6 +200,13 @@
       </Button>
     </template>
   </Dialog>
+
+  <!-- Headers 配置对话框 -->
+  <EndpointHeadersDialog
+    v-model="headersDialogOpen"
+    :endpoint="selectedEndpoint"
+    @saved="handleHeadersSaved"
+  />
 </template>
 
 <script setup lang="ts">
@@ -207,6 +223,7 @@ import {
   SelectItem,
 } from '@/components/ui'
 import { Settings, Edit, Trash2, Check, X, Power } from 'lucide-vue-next'
+import EndpointHeadersDialog from './EndpointHeadersDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
 import {
@@ -242,6 +259,8 @@ const savingEndpointId = ref<string | null>(null)
 const deletingEndpointId = ref<string | null>(null)
 const togglingEndpointId = ref<string | null>(null)
 const formatSelectOpen = ref(false)
+const headersDialogOpen = ref(false)
+const selectedEndpoint = ref<ProviderEndpoint | null>(null)
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
@@ -411,5 +430,16 @@ function handleDialogUpdate(value: boolean) {
 
 function handleClose() {
   emit('update:modelValue', false)
+}
+
+// 打开 Headers 配置对话框
+function openHeadersDialog(endpoint: ProviderEndpoint) {
+  selectedEndpoint.value = endpoint
+  headersDialogOpen.value = true
+}
+
+// Headers 配置保存后刷新
+function handleHeadersSaved() {
+  emit('endpointUpdated')
 }
 </script>

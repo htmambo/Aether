@@ -1,0 +1,21 @@
+=== src/models/endpoint_models.py ===
+
+
+
+=== src/api/handlers/base/request_builder.py ===
+
+
+
+=== src/services/provider/transport.py ===
+
+
+
+=== src/api/handlers/base/endpoint_checker.py ===
+
+
+
+=== frontend/src/features/providers/components/EndpointFormDialog.vue ===
+
+
+
+=== frontend/src/api/endpoints/types.ts ===

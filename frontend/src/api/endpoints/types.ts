@@ -62,6 +62,28 @@ export interface ProxyConfig {
   enabled?: boolean  // 是否启用代理（false 时保留配置但不使用）
 }
 
+/**
+ * Headers 规则配置类型
+ */
+export interface HeaderReplaceValueRule {
+  search: string
+  replace: string
+  regex: boolean
+  case_sensitive?: boolean
+}
+
+export interface HeaderRules {
+  add?: Record<string, string>
+  remove?: string[]
+  replace_name?: Record<string, string>
+  replace_value?: Record<string, HeaderReplaceValueRule>
+}
+
+/**
+ * Headers 配置类型（支持旧格式和新格式）
+ */
+export type EndpointHeadersConfig = Record<string, string> | HeaderRules
+
 export interface ProviderEndpoint {
   id: string
   provider_id: string
@@ -69,7 +91,7 @@ export interface ProviderEndpoint {
   api_format: string
   base_url: string
   custom_path?: string  // 自定义请求路径（可选，为空则使用 API 格式默认路径）
-  headers?: Record<string, string>
+  headers?: EndpointHeadersConfig
   timeout: number
   max_retries: number
   is_active: boolean
