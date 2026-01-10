@@ -104,8 +104,10 @@ async function handleSave() {
 
   saving.value = true
   try {
+    // 使用 ?? 确保 null 会变成空对象，但空对象 {} 会被保留
+    // 这样清空规则时可以正确保存空对象到后端
     await updateEndpoint(props.endpoint.id, {
-      headers: localRules.value || undefined,
+      headers: localRules.value ?? {},
     })
     success('Headers 配置已保存')
     emit('saved')
