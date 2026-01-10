@@ -1,36 +1,35 @@
 <template>
-  <div class="space-y-4">
-    <!-- 操作按钮 -->
-    <div class="flex flex-wrap gap-2">
-      <Button variant="outline" size="sm" @click="openAddRuleDialog">
-        <Plus class="mr-2 h-4 w-4" />
+  <!-- 操作按钮 -->
+  <div class="flex flex-wrap gap-2">
+    <Button variant="outline" size="sm" @click="openAddRuleDialog">
+      <Plus class="mr-2 h-4 w-4" />
         新增 Header
-      </Button>
-      <Button variant="outline" size="sm" @click="openRemoveRuleDialog">
-        <Trash2 class="mr-2 h-4 w-4" />
+    </Button>
+    <Button variant="outline" size="sm" @click="openRemoveRuleDialog">
+      <Trash2 class="mr-2 h-4 w-4" />
         删除 Header
-      </Button>
-      <Button variant="outline" size="sm" @click="openRenameRuleDialog">
-        <Edit3 class="mr-2 h-4 w-4" />
+    </Button>
+    <Button variant="outline" size="sm" @click="openRenameRuleDialog">
+      <Edit3 class="mr-2 h-4 w-4" />
         重命名 Header
-      </Button>
-      <Button variant="outline" size="sm" @click="openReplaceValueRuleDialog">
-        <Replace class="mr-2 h-4 w-4" />
+    </Button>
+    <Button variant="outline" size="sm" @click="openReplaceValueRuleDialog">
+      <Replace class="mr-2 h-4 w-4" />
         替换 Header 值
-      </Button>
+    </Button>
+    <Button
+      v-if="hasRules"
+      variant="ghost"
+      size="sm"
+      @click="clearAllRules"
+    >
+      清空所有
+    </Button>
+  </div>
 
-      <Button
-        v-if="hasRules"
-        variant="ghost"
-        size="sm"
-        @click="clearAllRules"
-      >
-        清空所有
-      </Button>
-    </div>
-
-    <!-- 规则列表 - 添加滚动 -->
-    <div v-if="hasRules" class="max-h-[50vh] overflow-y-auto pr-2 scrollbar-thin space-y-3">
+  <!-- 规则列表 - 添加滚动 -->
+  <div v-if="hasRules" class="border border-border max-h-[50vh] overflow-y-auto p-2 scrollbar-thin">
+    <div class="space-y-3 space-x-3">
       <!-- Add Rules -->
       <div
         v-if="localRules.add && Object.keys(localRules.add).length > 0"
@@ -154,7 +153,8 @@
         </div>
       </div>
     </div>
-    <!-- 规则列表结束 -->
+  </div>
+  <!-- 规则列表结束 -->
 
     <!-- 空状态 -->
     <div
@@ -351,7 +351,6 @@
         </Button>
       </template>
     </Dialog>
-  </div>
 </template>
 
 <script setup lang="ts">
