@@ -45,6 +45,7 @@ export function useEscapeKey(
     // 执行回调，如果返回 true 则阻止其他监听器
     const handled = callback()
     if (handled === true) {
+      event.stopPropagation()
       event.stopImmediatePropagation()
     }
 
@@ -60,11 +61,13 @@ export function useEscapeKey(
   }
 
   function addEventListener() {
-    document.addEventListener('keydown', handleKeyDown)
+    // 使用捕获阶段（capture: true），让子组件的监听器优先于父组件执行
+    // 这样嵌套对话框中的子对话框会先处理 ESC 键
+    document.addEventListener('keydown', handleKeyDown, true)
   }
 
   function removeEventListener() {
-    document.removeEventListener('keydown', handleKeyDown)
+    document.removeEventListener('keydown', handleKeyDown, true)
   }
 
   onMounted(() => {

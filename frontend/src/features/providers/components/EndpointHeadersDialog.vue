@@ -2,8 +2,9 @@
   <Dialog
     :model-value="internalOpen"
     :title="`配置 Headers - ${endpoint?.api_format || ''}`"
-    :description="`为 ${endpoint?.base_url || ''} 配置请��� Headers 规则`"
+    :description="`为 ${endpoint?.base_url || ''} 配置请求 Headers 规则`"
     size="xl"
+    :z-index="70"
     @update:model-value="handleDialogUpdate"
   >
     <div class="space-y-4">
