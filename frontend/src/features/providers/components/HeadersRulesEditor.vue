@@ -172,6 +172,7 @@
     <!-- 添加规则对话框 -->
     <Dialog
       :model-value="showAddRuleDialog"
+      :z-index="80"
       @update:model-value="showAddRuleDialog = $event"
       title="新增 Header"
       :icon="Plus"
@@ -212,6 +213,7 @@
     <!-- 删除规则对话框 -->
     <Dialog
       :model-value="showRemoveRuleDialog"
+      :z-index="80"
       @update:model-value="showRemoveRuleDialog = $event"
       title="删除 Header"
       :icon="Trash2"
@@ -244,6 +246,7 @@
     <!-- 重命名规则对话框 -->
     <Dialog
       :model-value="showRenameRuleDialog"
+      :z-index="80"
       @update:model-value="showRenameRuleDialog = $event"
       title="重命名 Header"
       :icon="Edit3"
@@ -284,6 +287,7 @@
     <!-- 替换值规则对话框 -->
     <Dialog
       :model-value="showReplaceValueRuleDialog"
+      :z-index="80"
       @update:model-value="showReplaceValueRuleDialog = $event"
       title="替换 Header 值"
       :icon="Replace"
