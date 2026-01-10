@@ -29,8 +29,8 @@
       </Button>
     </div>
 
-    <!-- 规则列表 -->
-    <div v-if="hasRules" class="space-y-3">
+    <!-- 规则列表 - 添加滚动 -->
+    <div v-if="hasRules" class="max-h-[50vh] overflow-y-auto pr-2 scrollbar-thin space-y-3">
       <!-- Add Rules -->
       <div
         v-if="localRules.add && Object.keys(localRules.add).length > 0"
@@ -154,6 +154,7 @@
         </div>
       </div>
     </div>
+    <!-- 规则列表结束 -->
 
     <!-- 空状态 -->
     <div

@@ -8,10 +8,8 @@
     @update:model-value="handleDialogUpdate"
   >
     <div class="space-y-4">
-      <!-- 规则编辑器 - 添加最大高度和滚动 -->
-      <div class="max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin">
-        <HeadersRulesEditor v-model="localRules" />
-      </div>
+      <!-- 规则编辑器 -->
+      <HeadersRulesEditor v-model="localRules" />
 
       <!-- 说明文本 -->
       <div class="text-sm text-muted-foreground">
