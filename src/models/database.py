@@ -1288,12 +1288,8 @@ class ManagementToken(Base):
         Index("idx_management_tokens_user_id", "user_id"),
         Index("idx_management_tokens_is_active", "is_active"),
         UniqueConstraint("user_id", "name", name="uq_management_tokens_user_name"),
-        # IP 白名单必须为 NULL（不限制）或非空数组，禁止空数组
-        # 注意：JSON 类型的 NULL 可能被序列化为 JSON 'null'，需要同时处理
-        CheckConstraint(
-            "allowed_ips IS NULL OR allowed_ips::text = 'null' OR json_array_length(allowed_ips) > 0",
-            name="check_allowed_ips_not_empty",
-        ),
+        # Note: IP whitelist validation (NULL or non-empty array) is enforced at application level
+        # to maintain database compatibility between PostgreSQL and SQLite
     )
 
     @staticmethod
