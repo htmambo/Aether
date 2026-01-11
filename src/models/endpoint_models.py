@@ -21,7 +21,7 @@ class ProviderEndpointCreate(BaseModel):
     base_url: str = Field(..., min_length=1, max_length=500, description="API 基础 URL")
     custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
 
-    # 请求配���
+    # 请求配置
     headers: Optional[Dict[str, Any]] = Field(default=None, description="自定义请求头（支持规则格式）")
     timeout: int = Field(default=300, ge=10, le=600, description="超时时间（秒）")
     max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
@@ -31,6 +31,28 @@ class ProviderEndpointCreate(BaseModel):
 
     # 代理配置
     proxy: Optional[ProxyConfig] = Field(default=None, description="代理配置")
+
+    @field_validator("headers")
+    @classmethod
+    def validate_headers(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """验证 headers 字段中的 header name 是否符合 HTTP 规范"""
+        if v is None:
+            return v
+
+        # 检查是否是旧格式（直接的 headers 字典，无 add/remove/replace_name/replace_value 键）
+        if not any(key in v for key in ["add", "remove", "replace_name", "replace_value"]):
+            # 旧格式：直接验证所有 header name
+            from src.core.header_rules import validate_header_names_in_dict
+            validate_header_names_in_dict(v, "headers")
+        else:
+            # 新格式：使用 HeaderRules 进行验证（会自动验证所有子字段）
+            from src.core.header_rules import HeaderRules
+            try:
+                HeaderRules(**v)
+            except Exception as e:
+                raise ValueError(f"Headers 配置无效: {e}")
+
+        return v
 
     @field_validator("api_format")
     @classmethod
@@ -66,6 +88,28 @@ class ProviderEndpointUpdate(BaseModel):
     is_active: Optional[bool] = Field(default=None, description="是否启用")
     config: Optional[Dict[str, Any]] = Field(default=None, description="额外配置")
     proxy: Optional[ProxyConfig] = Field(default=None, description="代理配置")
+
+    @field_validator("headers")
+    @classmethod
+    def validate_headers(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """验证 headers 字段中的 header name 是否符合 HTTP 规范"""
+        if v is None:
+            return v
+
+        # 检查是否是旧格式（直接的 headers 字典，无 add/remove/replace_name/replace_value 键）
+        if not any(key in v for key in ["add", "remove", "replace_name", "replace_value"]):
+            # 旧格式：直接验证所有 header name
+            from src.core.header_rules import validate_header_names_in_dict
+            validate_header_names_in_dict(v, "headers")
+        else:
+            # 新格式：使用 HeaderRules 进行验证（会自动验证所有子字段）
+            from src.core.header_rules import HeaderRules
+            try:
+                HeaderRules(**v)
+            except Exception as e:
+                raise ValueError(f"Headers 配置无效: {e}")
+
+        return v
 
     @field_validator("base_url")
     @classmethod

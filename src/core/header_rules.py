@@ -21,6 +21,113 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 
+# HTTP Header Name 验证（RFC 7230, RFC 9110）
+# token = 1*tchar
+# tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
+#         "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+# 限制 header name 的最大长度（常见限制）
+MAX_HEADER_NAME_LENGTH = 128
+
+
+def is_valid_header_name(name: str) -> bool:
+    """
+    验证 HTTP header name 是否符合规范
+
+    根据 RFC 7230 和 RFC 9110：
+    - 必须是 token 格式
+    - 不能包含空格、控制字符、冒号、分号、逗号等特殊字符
+    - 只能包含：!#$%&'*+-.^_`|~ 字母和数字
+    - 建议不超过 128 个字符
+
+    Args:
+        name: 要验证的 header name
+
+    Returns:
+        是否有效
+    """
+    if not name:
+        return False
+
+    if len(name) > MAX_HEADER_NAME_LENGTH:
+        return False
+
+    return bool(HTTP_HEADER_NAME_PATTERN.match(name))
+
+
+def validate_header_names_in_dict(headers_dict: Optional[Dict[str, Any]], field_name: str = "headers") -> List[str]:
+    """
+    验证字典中的所有 header key 是否有效
+
+    Args:
+        headers_dict: 要验证的 headers 字典
+        field_name: 字段名称（用于错误提示）
+
+    Returns:
+        无效的 header name 列表
+
+    Raises:
+        ValueError: 如果发现无效的 header name
+    """
+    if not headers_dict:
+        return []
+
+    invalid_names = []
+    for key in headers_dict.keys():
+        if not isinstance(key, str):
+            invalid_names.append(str(key))
+            continue
+
+        if not is_valid_header_name(key):
+            invalid_names.append(key)
+
+    if invalid_names:
+        raise ValueError(
+            f"无效的 HTTP header name ({field_name}): {', '.join(repr(n) for n in invalid_names)}. "
+            f"Header name 必须符合 RFC 7230 规范，只能包含字母、数字和 !#$%&'*+-.^_`|~ 字符，"
+            f"不能包含空格、冒号、分号、逗号等特殊字符。"
+        )
+
+    return invalid_names
+
+
+def validate_header_names_in_list(headers_list: Optional[List[str]], field_name: str = "headers") -> List[str]:
+    """
+    验证列表中的所有 header name 是否有效
+
+    Args:
+        headers_list: 要验证的 headers 列表
+        field_name: 字段名称（用于错误提示）
+
+    Returns:
+        无效的 header name 列表
+
+    Raises:
+        ValueError: 如果发现无效的 header name
+    """
+    if not headers_list:
+        return []
+
+    invalid_names = []
+    for name in headers_list:
+        if not isinstance(name, str):
+            invalid_names.append(str(name))
+            continue
+
+        if not is_valid_header_name(name):
+            invalid_names.append(name)
+
+    if invalid_names:
+        raise ValueError(
+            f"无效的 HTTP header name ({field_name}): {', '.join(repr(n) for n in invalid_names)}. "
+            f"Header name 必须符合 RFC 7230 规范，只能包含字母、数字和 !#$%&'*+-.^_`|~ 字符，"
+            f"不能包含空格、冒号、分号、逗号等特殊字符。"
+        )
+
+    return invalid_names
+
+
 class ReplaceValueRule(BaseModel):
     """替换值的规则"""
     search: str = Field(..., description="要搜索的值")
@@ -49,6 +156,51 @@ class HeaderRules(BaseModel):
     replace_value: Optional[Dict[str, Union[ReplaceValueRule, Dict[str, Any]]]] = Field(
         default=None, description="参数值替换规则"
     )
+
+    @field_validator("add")
+    @classmethod
+    def validate_add(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        """验证 add 中的 header name"""
+        if v is not None:
+            validate_header_names_in_dict(v, "headers.add")
+        return v
+
+    @field_validator("remove")
+    @classmethod
+    def validate_remove(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """验证 remove 中的 header name"""
+        if v is not None:
+            validate_header_names_in_list(v, "headers.remove")
+        return v
+
+    @field_validator("replace_name")
+    @classmethod
+    def validate_replace_name(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        """验证 replace_name 中的 header name（包括 key 和 value）"""
+        if v is not None:
+            # 验证 key（旧名称）
+            validate_header_names_in_dict(v, "headers.replace_name")
+
+            # 验证 value（新名称）
+            for key, new_name in v.items():
+                if not isinstance(new_name, str):
+                    raise ValueError(
+                        f"headers.replace_name 的值必须是字符串，但 '{key}' 的值是 {type(new_name).__name__}"
+                    )
+                if not is_valid_header_name(new_name):
+                    raise ValueError(
+                        f"无效的 HTTP header name (headers.replace_name['{key}']): {repr(new_name)}. "
+                        f"Header name 必须符合 RFC 7230 规范。"
+                    )
+        return v
+
+    @field_validator("replace_value")
+    @classmethod
+    def validate_replace_value(cls, v: Optional[Dict[str, Union[ReplaceValueRule, Dict[str, Any]]]]) -> Optional[Dict[str, Union[ReplaceValueRule, Dict[str, Any]]]]:
+        """验证 replace_value 中的 header name"""
+        if v is not None:
+            validate_header_names_in_dict(v, "headers.replace_value")
+        return v
 
     def is_empty(self) -> bool:
         """检查是否没有任何规则"""
