@@ -72,17 +72,36 @@ def _setup_pool_monitoring(engine: Engine):
 
 
 def get_pool_status() -> dict:
-    """获取连接池状态"""
+    """
+    获取连接池状态
+
+    注意：SQLite 的 StaticPool 不支持 checkedout/size/overflow 等方法
+    对于 SQLite，返回简化的状态信息
+    """
     engine = _ensure_engine()
     pool = engine.pool
 
-    return {
-        "checked_out": pool.checkedout(),
-        "pool_size": pool.size(),
-        "overflow": pool.overflow(),
-        "max_capacity": config.db_pool_size + config.db_max_overflow,
-        "pool_timeout": config.db_pool_timeout,
-    }
+    # 检查连接池类型（PostgreSQL 的 QueuePool 支持 checkedout，SQLite 的 StaticPool 不支持）
+    if hasattr(pool, 'checkedout'):
+        # PostgreSQL QueuePool
+        return {
+            "checked_out": pool.checkedout(),
+            "pool_size": pool.size(),
+            "overflow": pool.overflow(),
+            "max_capacity": config.db_pool_size + config.db_max_overflow,
+            "pool_timeout": config.db_pool_timeout,
+            "pool_type": "QueuePool",
+        }
+    else:
+        # SQLite StaticPool 或其他不支持 checkedout 的连接池
+        return {
+            "checked_out": 0,
+            "pool_size": 1,
+            "overflow": 0,
+            "max_capacity": 1,
+            "pool_timeout": config.db_pool_timeout,
+            "pool_type": type(pool).__name__,
+        }
 
 
 def log_pool_status():
