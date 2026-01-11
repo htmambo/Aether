@@ -363,7 +363,12 @@ async function saveEndpointUrl(endpoint: ProviderEndpoint) {
     emit('endpointUpdated')
     cancelEdit()
   } catch (error: any) {
-    showError(error.response?.data?.detail || '更新失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "更新失败";
+    showError(message, "错误");
   } finally {
     savingEndpointId.value = null
   }
@@ -388,7 +393,12 @@ async function handleAddEndpoint() {
     newEndpoint.value = { api_format: '', base_url: url, custom_path: '' }
     emit('endpointCreated')
   } catch (error: any) {
-    showError(error.response?.data?.detail || '添加失败', '错误')
+    const message =
+        error.response?.data?.detail?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "添加失败";
+    showError(message, "错误");
   } finally {
     addingEndpoint.value = false
   }
@@ -403,7 +413,12 @@ async function handleToggleEndpoint(endpoint: ProviderEndpoint) {
     success(newStatus ? '端点已启用' : '端点已停用')
     emit('endpointUpdated')
   } catch (error: any) {
-    showError(error.response?.data?.detail || '操作失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "操作失败";
+    showError(message, "错误");
   } finally {
     togglingEndpointId.value = null
   }
@@ -417,7 +432,12 @@ async function handleDeleteEndpoint(endpoint: ProviderEndpoint) {
     success(`已删除 ${API_FORMAT_LABELS[endpoint.api_format] || endpoint.api_format} 端点`)
     emit('endpointUpdated')
   } catch (error: any) {
-    showError(error.response?.data?.detail || '删除失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "删除失败";
+    showError(message, "错误");
   } finally {
     deletingEndpointId.value = null
   }

@@ -113,7 +113,12 @@ async function handleSave() {
     emit('saved')
     handleClose()
   } catch (error: any) {
-    showError(error.response?.data?.detail || '保存失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "保存失败";
+    showError(message, "错误");
   } finally {
     saving.value = false
   }
