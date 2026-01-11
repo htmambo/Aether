@@ -95,6 +95,15 @@
                     variant="ghost"
                     size="icon"
                     class="h-7 w-7"
+                    title="Headers配置"
+                    @click="openHeadersDialog(endpoint)"
+                  >
+                    <Settings class="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7"
                     :title="endpoint.is_active ? '停用' : '启用'"
                     :disabled="togglingEndpointId === endpoint.id"
                     @click="handleToggleEndpoint(endpoint)"
@@ -191,6 +200,13 @@
       </Button>
     </template>
   </Dialog>
+
+  <!-- Headers 配置对话框 -->
+  <EndpointHeadersDialog
+    v-model="headersDialogOpen"
+    :endpoint="selectedEndpoint"
+    @saved="handleHeadersSaved"
+  />
 </template>
 
 <script setup lang="ts">
@@ -207,6 +223,7 @@ import {
   SelectItem,
 } from '@/components/ui'
 import { Settings, Edit, Trash2, Check, X, Power } from 'lucide-vue-next'
+import EndpointHeadersDialog from './EndpointHeadersDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
 import {
@@ -242,6 +259,8 @@ const savingEndpointId = ref<string | null>(null)
 const deletingEndpointId = ref<string | null>(null)
 const togglingEndpointId = ref<string | null>(null)
 const formatSelectOpen = ref(false)
+const headersDialogOpen = ref(false)
+const selectedEndpoint = ref<ProviderEndpoint | null>(null)
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
@@ -344,7 +363,12 @@ async function saveEndpointUrl(endpoint: ProviderEndpoint) {
     emit('endpointUpdated')
     cancelEdit()
   } catch (error: any) {
-    showError(error.response?.data?.detail || '更新失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "更新失败";
+    showError(message, "错误");
   } finally {
     savingEndpointId.value = null
   }
@@ -369,7 +393,12 @@ async function handleAddEndpoint() {
     newEndpoint.value = { api_format: '', base_url: url, custom_path: '' }
     emit('endpointCreated')
   } catch (error: any) {
-    showError(error.response?.data?.detail || '添加失败', '错误')
+    const message =
+        error.response?.data?.detail?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "添加失败";
+    showError(message, "错误");
   } finally {
     addingEndpoint.value = false
   }
@@ -384,7 +413,12 @@ async function handleToggleEndpoint(endpoint: ProviderEndpoint) {
     success(newStatus ? '端点已启用' : '端点已停用')
     emit('endpointUpdated')
   } catch (error: any) {
-    showError(error.response?.data?.detail || '操作失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "操作失败";
+    showError(message, "错误");
   } finally {
     togglingEndpointId.value = null
   }
@@ -398,7 +432,12 @@ async function handleDeleteEndpoint(endpoint: ProviderEndpoint) {
     success(`已删除 ${API_FORMAT_LABELS[endpoint.api_format] || endpoint.api_format} 端点`)
     emit('endpointUpdated')
   } catch (error: any) {
-    showError(error.response?.data?.detail || '删除失败', '错误')
+    const message =
+      error.response?.data?.detail[0]?.msg ||
+      error.response?.data?.detail ||
+      error.message ||
+      "删除失败";
+    showError(message, "错误");
   } finally {
     deletingEndpointId.value = null
   }
@@ -411,5 +450,16 @@ function handleDialogUpdate(value: boolean) {
 
 function handleClose() {
   emit('update:modelValue', false)
+}
+
+// 打开 Headers 配置对话框
+function openHeadersDialog(endpoint: ProviderEndpoint) {
+  selectedEndpoint.value = endpoint
+  headersDialogOpen.value = true
+}
+
+// Headers 配置保存后刷新
+function handleHeadersSaved() {
+  emit('endpointUpdated')
 }
 </script>

@@ -26,6 +26,7 @@ from collections import defaultdict
 
 import httpx
 
+from src.core.header_rules import apply_header_rules
 from src.core.logger import logger
 
 
@@ -58,20 +59,42 @@ def _truncate_repr(value: Any, limit: int = 1200) -> str:
 
 def build_safe_headers(
     base_headers: Dict[str, str],
-    extra_headers: Optional[Dict[str, str]],
+    extra_headers: Optional[Dict[str, Any]],
     protected_keys: Iterable[str],
 ) -> Dict[str, str]:
     """
     合并 extra_headers，但防止覆盖 protected_keys（大小写不敏感）。
+    支持高级 headers 规则处理。
     """
+    protected = {k.lower() for k in protected_keys}
     headers = dict(base_headers)
     if not extra_headers:
         return headers
 
-    protected = {k.lower() for k in protected_keys}
-    safe_headers = {k: v for k, v in extra_headers.items() if k.lower() not in protected}
-    headers.update(safe_headers)
-    return headers
+    # 检测是否为新格式（包含规则键）
+    rule_keys = {"add", "remove", "replace_name", "replace_value"}
+    is_new_format = (
+        isinstance(extra_headers, dict) and
+        any(key in extra_headers for key in rule_keys)
+    )
+
+    if is_new_format:
+        # 新格式：按规则处理，然后恢复受保护键
+        processed = apply_header_rules(headers, extra_headers)
+        # 恢复受保护键的原值
+        for key, value in base_headers.items():
+            if key.lower() in protected:
+                processed[key] = value
+        # 移除任何新写入的受保护键
+        for key in list(processed.keys()):
+            if key.lower() in protected and key not in base_headers:
+                processed.pop(key, None)
+        return processed
+    else:
+        # 旧格式：直接合并，但排除受保护键
+        safe_headers = {k: v for k, v in extra_headers.items() if k.lower() not in protected}
+        headers.update(safe_headers)
+        return headers
 
 
 async def run_endpoint_check(
