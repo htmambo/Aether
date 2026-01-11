@@ -27,11 +27,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
 
 from ..config import config
 from ..core.enums import AuthSource, ProviderBillingType, UserRole
+from .universal_types import UniversalJSON
 
 Base = declarative_base()
 
@@ -557,7 +557,7 @@ class Provider(Base):
     # - 300 秒足够覆盖极端场景（如超长上下文、复杂工具调用）
     timeout = Column(Integer, default=300, nullable=True)  # 请求超时（秒）
     max_retries = Column(Integer, default=2, nullable=True)  # 最大重试次数
-    proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password, enabled}
+    proxy = Column(UniversalJSON, nullable=True)  # 代理配置: {url, username, password, enabled}
 
     # 配置
     config = Column(JSON, nullable=True)  # 额外配置（如Azure deployment name等）
@@ -618,7 +618,7 @@ class ProviderEndpoint(Base):
     config = Column(JSON, nullable=True)  # 端点特定配置（不推荐使用，优先使用专用字段）
 
     # 代理配置
-    proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password}
+    proxy = Column(UniversalJSON, nullable=True)  # 代理配置: {url, username, password}
 
     # 时间戳
     created_at = Column(
@@ -706,7 +706,7 @@ class GlobalModel(Base):
     #     "input_modalities": ["text", "image"],
     #     "output_modalities": ["text"],
     # }
-    config = Column(JSONB, nullable=True, default=dict)
+    config = Column(UniversalJSON, nullable=True, default=dict)
 
     # 状态
     is_active = Column(Boolean, default=True, nullable=False)

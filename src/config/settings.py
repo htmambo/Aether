@@ -37,6 +37,12 @@ class Config:
         # 数据库配置 - 延迟验证，支持测试环境覆盖
         self._database_url = os.getenv("DATABASE_URL")
 
+        # SQLite 生产环境支持（仅用于特殊场景，默认禁止）
+        # 警告: SQLite 不适合生产环境，建议仅用于开发/测试
+        self.allow_sqlite_in_production = (
+            os.getenv("ALLOW_SQLITE_IN_PRODUCTION", "false").lower() == "true"
+        )
+
         # JWT配置
         self.jwt_secret_key = os.getenv("JWT_SECRET_KEY", None)
         self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
