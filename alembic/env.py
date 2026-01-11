@@ -75,6 +75,10 @@ def run_migrations_online() -> None:
     在线模式运行迁移
 
     在线模式下，直接连接数据库执行迁移
+
+    支持 SQLite 和 PostgreSQL:
+    - SQLite: 启用 PRAGMA（外键、WAL），使用 batch 格式
+    - PostgreSQL: 标准模式
     """
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -82,12 +86,44 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
+    # 检测数据库类型
+    is_sqlite = connectable.dialect.name == 'sqlite'
+
+    # SQLite PRAGMA 配置
+    if is_sqlite:
+        from sqlalchemy import event
+
+        @event.listens_for(connectable, "connect")
+        def set_sqlite_pragmas(dbapi_conn, connection_record):
+            """配置 SQLite PRAGMA"""
+            cursor = dbapi_conn.cursor()
+            try:
+                # 启用外键约束
+                cursor.execute("PRAGMA foreign_keys=ON")
+                # 启用 WAL 模式（提升并发性能）
+                # 内存数据库不支持 WAL，捕获异常
+                cursor.execute("PRAGMA journal_mode=WAL")
+                # 优化同步策略（性能与安全平衡）
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                # 增大缓存（64MB）
+                cursor.execute("PRAGMA cache_size=-64000")
+                # 设置锁超时（5秒）
+                cursor.execute("PRAGMA busy_timeout=5000")
+            except Exception as exc:
+                # 内存数据库或只读数据库可能不支持某些 PRAGMA
+                # 记录警告但不中断迁移
+                import sys
+                print(f"Warning: SQLite PRAGMA 配置失败（可能为内存库）: {exc}", file=sys.stderr)
+            finally:
+                cursor.close()
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,  # 比较列类型变更
             compare_server_default=True,  # 比较默认值变更
+            render_as_batch=is_sqlite,  # SQLite 需要 batch 模式
         )
 
         with context.begin_transaction():

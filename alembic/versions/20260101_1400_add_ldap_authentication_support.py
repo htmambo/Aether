@@ -17,7 +17,11 @@ depends_on = None
 
 
 def _type_exists(conn, type_name: str) -> bool:
-    """检查 PostgreSQL 类型是否存在"""
+    """检查 PostgreSQL 类型是否存在（仅 PostgreSQL）"""
+    is_sqlite = conn.dialect.name == 'sqlite'
+    if is_sqlite:
+        return False  # SQLite 不支持自定义类型
+
     result = conn.execute(
         text("SELECT 1 FROM pg_type WHERE typname = :name"),
         {"name": type_name}
@@ -26,56 +30,110 @@ def _type_exists(conn, type_name: str) -> bool:
 
 
 def _column_exists(conn, table_name: str, column_name: str) -> bool:
-    """检查列是否存在"""
-    result = conn.execute(
-        text("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = :table AND column_name = :column
-        """),
-        {"table": table_name, "column": column_name}
-    )
-    return result.scalar() is not None
+    """检查列是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = conn.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 pragma_table_info
+        result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+        columns = [row[1] for row in result.fetchall()]
+        return column_name in columns
+    else:
+        # PostgreSQL 使用 information_schema
+        result = conn.execute(
+            text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = :table AND column_name = :column
+            """),
+            {"table": table_name, "column": column_name}
+        )
+        return result.scalar() is not None
 
 
 def _index_exists(conn, index_name: str) -> bool:
-    """检查索引是否存在"""
-    result = conn.execute(
-        text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
-        {"name": index_name}
-    )
-    return result.scalar() is not None
+    """检查索引是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = conn.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 sqlite_master
+        result = conn.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'index' AND name = :name
+                )
+                """
+            ),
+            {"name": index_name}
+        )
+        return result.scalar()
+    else:
+        # PostgreSQL 使用 pg_indexes
+        result = conn.execute(
+            text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
+            {"name": index_name}
+        )
+        return result.scalar() is not None
 
 
 def _table_exists(conn, table_name: str) -> bool:
-    """检查表是否存在"""
-    result = conn.execute(
-        text("""
-            SELECT 1 FROM information_schema.tables
-            WHERE table_name = :name AND table_schema = 'public'
-        """),
-        {"name": table_name}
-    )
-    return result.scalar() is not None
+    """检查表是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = conn.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 sqlite_master
+        result = conn.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = :name
+                )
+                """
+            ),
+            {"name": table_name}
+        )
+        return result.scalar()
+    else:
+        # PostgreSQL 使用 information_schema
+        result = conn.execute(
+            text("""
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = :name AND table_schema = 'public'
+            """),
+            {"name": table_name}
+        )
+        return result.scalar() is not None
 
 
 def upgrade() -> None:
     """添加 LDAP 认证支持
 
-    1. 创建 authsource 枚举类型
+    1. 创建 authsource 枚举类型（仅 PostgreSQL）
     2. 在 users 表添加 auth_source 字段和 LDAP 标识字段
     3. 创建 ldap_configs 表
+
+    支持 PostgreSQL 和 SQLite。
     """
     conn = op.get_bind()
+    is_sqlite = conn.dialect.name == 'sqlite'
 
-    # 1. 创建 authsource 枚举类型（幂等）
-    if not _type_exists(conn, 'authsource'):
+    # 1. 创建 authsource 枚举类型（仅 PostgreSQL）
+    if not is_sqlite and not _type_exists(conn, 'authsource'):
         conn.execute(text("CREATE TYPE authsource AS ENUM ('local', 'ldap')"))
 
     # 2. 在 users 表添加字段（幂等）
     if not _column_exists(conn, 'users', 'auth_source'):
+        # 根据数据库类型选择列类型
+        if is_sqlite:
+            auth_source_type = sa.String(20)
+        else:
+            auth_source_type = sa.Enum('local', 'ldap', name='authsource', create_type=False)
+
         op.add_column('users', sa.Column(
             'auth_source',
-            sa.Enum('local', 'ldap', name='authsource', create_type=False),
+            auth_source_type,
             nullable=False,
             server_default='local'
         ))
@@ -97,7 +155,7 @@ def upgrade() -> None:
     if not _table_exists(conn, 'ldap_configs'):
         op.create_table(
             'ldap_configs',
-            sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+            sa.Column('id', sa.Integer(), nullable=False),
             sa.Column('server_url', sa.String(length=255), nullable=False),
             sa.Column('bind_dn', sa.String(length=255), nullable=False),
             sa.Column('bind_password_encrypted', sa.Text(), nullable=True),
@@ -110,8 +168,8 @@ def upgrade() -> None:
             sa.Column('is_exclusive', sa.Boolean(), nullable=False, server_default='false'),
             sa.Column('use_starttls', sa.Boolean(), nullable=False, server_default='false'),
             sa.Column('connect_timeout', sa.Integer(), nullable=False, server_default='10'),
-            sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
-            sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+            sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+            sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
             sa.PrimaryKeyConstraint('id')
         )
 

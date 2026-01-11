@@ -52,18 +52,27 @@ def constraint_exists(table_name: str, constraint_name: str) -> bool:
 
 
 def upgrade() -> None:
-    """应用迁移：创建 management_tokens 表"""
+    """应用迁移：创建 management_tokens 表
+
+    支持 PostgreSQL 和 SQLite。
+    """
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
+
     # 幂等性检查
     if table_exists("management_tokens"):
         # 表已存在，检查是否需要添加约束
-        if not constraint_exists("management_tokens", "uq_management_tokens_user_name"):
-            op.create_unique_constraint(
+        # SQLite 使用唯一索引代替唯一约束
+        if not index_exists("management_tokens", "uq_management_tokens_user_name"):
+            op.create_index(
                 "uq_management_tokens_user_name",
                 "management_tokens",
                 ["user_id", "name"],
+                unique=True,
             )
-        # 添加 IP 白名单非空检查约束
-        if not constraint_exists("management_tokens", "check_allowed_ips_not_empty"):
+        # 添加 IP 白名单非空检查约束（仅 PostgreSQL）
+        # SQLite 不支持复杂的 CHECK 约束，跳过
+        if not is_sqlite and not constraint_exists("management_tokens", "check_allowed_ips_not_empty"):
             op.create_check_constraint(
                 "check_allowed_ips_not_empty",
                 "management_tokens",
@@ -93,39 +102,51 @@ def upgrade() -> None:
     op.create_index('idx_management_tokens_user_id', 'management_tokens', ['user_id'], unique=False)
     op.create_index(op.f('ix_management_tokens_token_hash'), 'management_tokens', ['token_hash'], unique=True)
     # 添加用户名称唯一约束
-    op.create_unique_constraint(
+    # SQLite 使用唯一索引代替唯一约束
+    op.create_index(
         "uq_management_tokens_user_name",
         "management_tokens",
         ["user_id", "name"],
+        unique=True,
     )
-    # 添加 IP 白名单非空检查约束
+    # 添加 IP 白名单非空检查约束（仅 PostgreSQL）
     # 注意：JSON 类型的 NULL 可能被序列化为 JSON 'null'，需要同时处理
-    op.create_check_constraint(
-        "check_allowed_ips_not_empty",
-        "management_tokens",
-        "allowed_ips IS NULL OR allowed_ips::text = 'null' OR json_array_length(allowed_ips) > 0",
-    )
+    # SQLite 不支持复杂的 CHECK 约束，跳过
+    if not is_sqlite:
+        op.create_check_constraint(
+            "check_allowed_ips_not_empty",
+            "management_tokens",
+            "allowed_ips IS NULL OR allowed_ips::text = 'null' OR json_array_length(allowed_ips) > 0",
+        )
 
 
 def downgrade() -> None:
-    """回滚迁移：删除 management_tokens 表"""
+    """回滚迁移：删除 management_tokens 表
+
+    支持 PostgreSQL 和 SQLite。
+    """
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
+
     # 幂等性检查
     if not table_exists("management_tokens"):
         return
 
-    # 删除约束
-    if constraint_exists("management_tokens", "check_allowed_ips_not_empty"):
-        op.drop_constraint("check_allowed_ips_not_empty", "management_tokens", type_="check")
-    if constraint_exists("management_tokens", "uq_management_tokens_user_name"):
-        op.drop_constraint("uq_management_tokens_user_name", "management_tokens", type_="unique")
-
-    # 删除索引
+    # 删除索引（包括代替唯一约束的唯一索引）
+    if index_exists("management_tokens", "uq_management_tokens_user_name"):
+        op.drop_index("uq_management_tokens_user_name", table_name='management_tokens')
     if index_exists("management_tokens", "ix_management_tokens_token_hash"):
         op.drop_index(op.f('ix_management_tokens_token_hash'), table_name='management_tokens')
     if index_exists("management_tokens", "idx_management_tokens_user_id"):
         op.drop_index('idx_management_tokens_user_id', table_name='management_tokens')
     if index_exists("management_tokens", "idx_management_tokens_is_active"):
         op.drop_index('idx_management_tokens_is_active', table_name='management_tokens')
+
+    # 删除 CHECK 约束（仅 PostgreSQL）
+    # SQLite 不需要删除，因为根本没有创建
+    if not is_sqlite:
+        if constraint_exists("management_tokens", "check_allowed_ips_not_empty"):
+            op.drop_constraint("check_allowed_ips_not_empty", "management_tokens", type_="check")
 
     # 删除表
     op.drop_table('management_tokens')

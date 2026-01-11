@@ -17,19 +17,30 @@ depends_on = None
 
 
 def column_exists(bind, table_name: str, column_name: str) -> bool:
-    """检查列是否存在"""
-    result = bind.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = :table_name AND column_name = :column_name
-            )
-            """
-        ),
-        {"table_name": table_name, "column_name": column_name},
-    )
-    return result.scalar()
+    """检查列是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = bind.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 pragma_table_info
+        result = bind.execute(
+            sa.text(f"PRAGMA table_info({table_name})")
+        )
+        columns = [row[1] for row in result.fetchall()]
+        return column_name in columns
+    else:
+        # PostgreSQL 使用 information_schema
+        result = bind.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = :table_name AND column_name = :column_name
+                )
+                """
+            ),
+            {"table_name": table_name, "column_name": column_name},
+        )
+        return result.scalar()
 
 
 def upgrade() -> None:
@@ -38,8 +49,11 @@ def upgrade() -> None:
     1. 添加 config 列
     2. 把旧数据迁移到 config
     3. 删除旧列
+
+    支持 PostgreSQL 和 SQLite。
     """
     bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
 
     # 检查是否已经迁移过（config 列存在且旧列不存在）
     has_config = column_exists(bind, "global_models", "config")
@@ -51,23 +65,43 @@ def upgrade() -> None:
 
     # 1. 添加 config 列（使用 JSONB 类型，支持索引和更高效的查询）
     if not has_config:
-        op.add_column('global_models', sa.Column('config', postgresql.JSONB(), nullable=True))
+        # 根据数据库类型选择 JSON 类型
+        config_type = sa.JSON() if is_sqlite else postgresql.JSONB()
+        op.add_column('global_models', sa.Column('config', config_type, nullable=True))
 
     # 2. 迁移数据：把旧字段合并到 config JSON（仅当旧列存在时）
     if has_old_columns:
-        op.execute("""
-            UPDATE global_models
-            SET config = jsonb_strip_nulls(jsonb_build_object(
-                'streaming', COALESCE(default_supports_streaming, true),
-                'vision', CASE WHEN COALESCE(default_supports_vision, false) THEN true ELSE NULL END,
-                'function_calling', CASE WHEN COALESCE(default_supports_function_calling, false) THEN true ELSE NULL END,
-                'extended_thinking', CASE WHEN COALESCE(default_supports_extended_thinking, false) THEN true ELSE NULL END,
-                'image_generation', CASE WHEN COALESCE(default_supports_image_generation, false) THEN true ELSE NULL END,
-                'description', description,
-                'icon_url', icon_url,
-                'official_url', official_url
-            ))
-        """)
+        if not is_sqlite:
+            # PostgreSQL 使用 JSONB 函数
+            op.execute("""
+                UPDATE global_models
+                SET config = jsonb_strip_nulls(jsonb_build_object(
+                    'streaming', COALESCE(default_supports_streaming, true),
+                    'vision', CASE WHEN COALESCE(default_supports_vision, false) THEN true ELSE NULL END,
+                    'function_calling', CASE WHEN COALESCE(default_supports_function_calling, false) THEN true ELSE NULL END,
+                    'extended_thinking', CASE WHEN COALESCE(default_supports_extended_thinking, false) THEN true ELSE NULL END,
+                    'image_generation', CASE WHEN COALESCE(default_supports_image_generation, false) THEN true ELSE NULL END,
+                    'description', description,
+                    'icon_url', icon_url,
+                    'official_url', official_url
+                ))
+            """)
+        else:
+            # SQLite 使用 JSON 函数
+            op.execute("""
+                UPDATE global_models
+                SET config = json_object(
+                    'streaming', COALESCE(default_supports_streaming, 1),
+                    'vision', CASE WHEN COALESCE(default_supports_vision, 0) THEN 1 ELSE NULL END,
+                    'function_calling', CASE WHEN COALESCE(default_supports_function_calling, 0) THEN 1 ELSE NULL END,
+                    'extended_thinking', CASE WHEN COALESCE(default_supports_extended_thinking, 0) THEN 1 ELSE NULL END,
+                    'image_generation', CASE WHEN COALESCE(default_supports_image_generation, 0) THEN 1 ELSE NULL END,
+                    'description', description,
+                    'icon_url', icon_url,
+                    'official_url', official_url
+                )
+                WHERE 1=1
+            """)
 
         # 3. 删除旧列
         op.drop_column('global_models', 'default_supports_streaming')

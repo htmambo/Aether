@@ -61,20 +61,42 @@ def _index_exists(table_name: str, index_name: str) -> bool:
 
 
 def upgrade() -> None:
-    """Apply all consolidated schema changes"""
+    """Apply all consolidated schema changes
+
+    支持 PostgreSQL 和 SQLite。
+    """
     bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
 
     # ========== 1. provider_api_keys: 添加 provider_id 和 api_formats ==========
     if not _column_exists("provider_api_keys", "provider_id"):
         op.add_column("provider_api_keys", sa.Column("provider_id", sa.String(36), nullable=True))
 
         # 数据迁移：从 endpoint 获取 provider_id
-        op.execute("""
-            UPDATE provider_api_keys k
-            SET provider_id = e.provider_id
-            FROM provider_endpoints e
-            WHERE k.endpoint_id = e.id AND k.provider_id IS NULL
-        """)
+        if is_sqlite:
+            # SQLite 使用子查询语法
+            op.execute("""
+                UPDATE provider_api_keys
+                SET provider_id = (
+                    SELECT provider_id
+                    FROM provider_endpoints
+                    WHERE provider_endpoints.id = provider_api_keys.endpoint_id
+                )
+                WHERE provider_id IS NULL
+                  AND endpoint_id IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1 FROM provider_endpoints
+                      WHERE provider_endpoints.id = provider_api_keys.endpoint_id
+                  )
+            """)
+        else:
+            # PostgreSQL 使用 UPDATE...FROM 语法
+            op.execute("""
+                UPDATE provider_api_keys k
+                SET provider_id = e.provider_id
+                FROM provider_endpoints e
+                WHERE k.endpoint_id = e.id AND k.provider_id IS NULL
+            """)
 
         # 检查无法关联的孤儿 Key
         result = bind.execute(sa.text(
@@ -118,10 +140,12 @@ def upgrade() -> None:
             alembic_logger.warning("     SELECT ... FROM _orphan_api_keys_backup WHERE ...;")
             alembic_logger.warning("-" * 60)
 
-        # 设置 NOT NULL 并创建外键
-        op.alter_column("provider_api_keys", "provider_id", nullable=False)
+        # 设置 NOT NULL 并创建外键（仅 PostgreSQL）
+        # SQLite 不支持 ALTER COLUMN...NOT NULL，需要在创建表时设置
+        if not is_sqlite:
+            op.alter_column("provider_api_keys", "provider_id", nullable=False)
 
-        if not _constraint_exists("provider_api_keys", "fk_provider_api_keys_provider"):
+        if not is_sqlite and not _constraint_exists("provider_api_keys", "fk_provider_api_keys_provider"):
             op.create_foreign_key(
                 "fk_provider_api_keys_provider",
                 "provider_api_keys",
@@ -138,43 +162,70 @@ def upgrade() -> None:
         op.add_column("provider_api_keys", sa.Column("api_formats", sa.JSON(), nullable=True))
 
         # 数据迁移：从 endpoint 获取 api_format
-        op.execute("""
-            UPDATE provider_api_keys k
-            SET api_formats = json_build_array(e.api_format)
-            FROM provider_endpoints e
-            WHERE k.endpoint_id = e.id AND k.api_formats IS NULL
-        """)
+        if is_sqlite:
+            # SQLite 使用子查询语法 + JSON 函数
+            op.execute("""
+                UPDATE provider_api_keys
+                SET api_formats = (
+                    SELECT json_array(api_format)
+                    FROM provider_endpoints
+                    WHERE provider_endpoints.id = provider_api_keys.endpoint_id
+                )
+                WHERE api_formats IS NULL
+                  AND endpoint_id IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1 FROM provider_endpoints
+                      WHERE provider_endpoints.id = provider_api_keys.endpoint_id
+                  )
+            """)
+        else:
+            # PostgreSQL 使用 UPDATE...FROM 语法 + JSONB 函数
+            op.execute("""
+                UPDATE provider_api_keys k
+                SET api_formats = json_build_array(e.api_format)
+                FROM provider_endpoints e
+                WHERE k.endpoint_id = e.id AND k.api_formats IS NULL
+            """)
 
-        op.alter_column("provider_api_keys", "api_formats", nullable=False, server_default="[]")
+        # SQLite 不支持 ALTER COLUMN 设置 NOT NULL 和 DEFAULT
+        if not is_sqlite:
+            op.alter_column("provider_api_keys", "api_formats", nullable=False, server_default="[]")
 
-    # 修改 endpoint_id 为可空，外键改为 SET NULL
-    if _constraint_exists("provider_api_keys", "provider_api_keys_endpoint_id_fkey"):
+    # 修改 endpoint_id 为可空，外键改为 SET NULL（仅 PostgreSQL）
+    if not is_sqlite and _constraint_exists("provider_api_keys", "provider_api_keys_endpoint_id_fkey"):
         op.drop_constraint("provider_api_keys_endpoint_id_fkey", "provider_api_keys", type_="foreignkey")
+        # PostgreSQL 可以修改 nullable
         op.alter_column("provider_api_keys", "endpoint_id", nullable=True)
         # 不再重建外键，因为后面会删除这个字段
+    # SQLite 无法修改 nullable，跳过（已在 schema 中定义为可空）
 
     # ========== 2. provider_api_keys: 添加 rate_multipliers ==========
     if not _column_exists("provider_api_keys", "rate_multipliers"):
+        # 根据数据库类型选择 JSON 类型
+        rate_multipliers_type = sa.JSON() if is_sqlite else postgresql.JSON(astext_type=sa.Text())
         op.add_column(
             "provider_api_keys",
-            sa.Column("rate_multipliers", postgresql.JSON(astext_type=sa.Text()), nullable=True),
+            sa.Column("rate_multipliers", rate_multipliers_type, nullable=True),
         )
 
-        # 数据迁移：将 rate_multiplier 按 api_formats 转换
-        op.execute("""
-            UPDATE provider_api_keys
-            SET rate_multipliers = (
-                SELECT jsonb_object_agg(elem, rate_multiplier)
-                FROM jsonb_array_elements_text(api_formats::jsonb) AS elem
-            )
-            WHERE api_formats IS NOT NULL
-              AND api_formats::text != '[]'
-              AND api_formats::text != 'null'
-              AND rate_multipliers IS NULL
-        """)
+        # 数据迁移：将 rate_multiplier 按 api_formats 转换（仅 PostgreSQL）
+        if not is_sqlite:
+            op.execute("""
+                UPDATE provider_api_keys
+                SET rate_multipliers = (
+                    SELECT jsonb_object_agg(elem, rate_multiplier)
+                    FROM jsonb_array_elements_text(api_formats::jsonb) AS elem
+                )
+                WHERE api_formats IS NOT NULL
+                  AND api_formats::text != '[]'
+                  AND api_formats::text != 'null'
+                  AND rate_multipliers IS NULL
+            """)
 
     # ========== 3. models: global_model_id 改为可空 ==========
-    op.alter_column("models", "global_model_id", existing_type=sa.String(36), nullable=True)
+    # SQLite 不支持修改 nullable，跳过（已在 schema 中定义为可空）
+    if not is_sqlite:
+        op.alter_column("models", "global_model_id", existing_type=sa.String(36), nullable=True)
 
     # ========== 4. providers: 添加 timeout, max_retries, proxy ==========
     if not _column_exists("providers", "timeout"):
@@ -190,30 +241,33 @@ def upgrade() -> None:
         )
 
     if not _column_exists("providers", "proxy"):
+        # 根据数据库类型选择 JSON 类型
+        proxy_type = sa.JSON() if is_sqlite else postgresql.JSONB()
         op.add_column(
             "providers",
-            sa.Column("proxy", postgresql.JSONB(), nullable=True, comment="代理配置"),
+            sa.Column("proxy", proxy_type, nullable=True, comment="代理配置"),
         )
 
     # 从端点迁移数据到 provider
+    # 注意：这里不需要区分数据库类型，因为语法兼容
     op.execute("""
-        UPDATE providers p
+        UPDATE providers
         SET
             timeout = COALESCE(
-                p.timeout,
-                (SELECT MAX(e.timeout) FROM provider_endpoints e WHERE e.provider_id = p.id AND e.timeout IS NOT NULL),
+                timeout,
+                (SELECT MAX(e.timeout) FROM provider_endpoints e WHERE e.provider_id = providers.id AND e.timeout IS NOT NULL),
                 300
             ),
             max_retries = COALESCE(
-                p.max_retries,
-                (SELECT MAX(e.max_retries) FROM provider_endpoints e WHERE e.provider_id = p.id AND e.max_retries IS NOT NULL),
+                max_retries,
+                (SELECT MAX(e.max_retries) FROM provider_endpoints e WHERE e.provider_id = providers.id AND e.max_retries IS NOT NULL),
                 2
             ),
             proxy = COALESCE(
-                p.proxy,
-                (SELECT e.proxy FROM provider_endpoints e WHERE e.provider_id = p.id AND e.proxy IS NOT NULL ORDER BY e.created_at LIMIT 1)
+                proxy,
+                (SELECT e.proxy FROM provider_endpoints e WHERE e.provider_id = providers.id AND e.proxy IS NOT NULL ORDER BY e.created_at LIMIT 1)
             )
-        WHERE p.timeout IS NULL OR p.max_retries IS NULL
+        WHERE timeout IS NULL OR max_retries IS NULL
     """)
 
     # ========== 5. providers: display_name -> name ==========
@@ -251,29 +305,34 @@ def upgrade() -> None:
 
     # ========== 7. provider_api_keys: 健康度改为按格式存储 ==========
     if not _column_exists("provider_api_keys", "health_by_format"):
+        # 根据数据库类型选择 JSON 类型
+        json_type = sa.JSON() if is_sqlite else postgresql.JSONB(astext_type=sa.Text())
         op.add_column(
             "provider_api_keys",
             sa.Column(
                 "health_by_format",
-                postgresql.JSONB(astext_type=sa.Text()),
+                json_type,
                 nullable=True,
                 comment="按API格式存储的健康度数据",
             ),
         )
 
     if not _column_exists("provider_api_keys", "circuit_breaker_by_format"):
+        # 根据数据库类型选择 JSON 类型
+        json_type = sa.JSON() if is_sqlite else postgresql.JSONB(astext_type=sa.Text())
         op.add_column(
             "provider_api_keys",
             sa.Column(
                 "circuit_breaker_by_format",
-                postgresql.JSONB(astext_type=sa.Text()),
+                json_type,
                 nullable=True,
                 comment="按API格式存储的熔断器状态",
             ),
         )
 
-    # 数据迁移：如果存在旧字段，迁移数据到新结构
-    if _column_exists("provider_api_keys", "health_score"):
+    # 数据迁移：如果存在旧字段，迁移数据到新结构（仅 PostgreSQL）
+    # SQLite 跳过此步骤，因为新数据库不需要迁移旧数据
+    if not is_sqlite and _column_exists("provider_api_keys", "health_score"):
         op.execute("""
             UPDATE provider_api_keys
             SET health_by_format = (
@@ -297,7 +356,8 @@ def upgrade() -> None:
     # 不复制旧的 circuit_breaker_open 状态到所有 format，而是全部重置为 closed
     # 原因：旧的单一 circuit breaker 状态可能因某一个 format 失败而打开，
     #       如果复制到所有 format，会导致其他正常工作的 format 被错误标记为不可用
-    if _column_exists("provider_api_keys", "circuit_breaker_open"):
+    # （仅 PostgreSQL）
+    if not is_sqlite and _column_exists("provider_api_keys", "circuit_breaker_open"):
         op.execute("""
             UPDATE provider_api_keys
             SET circuit_breaker_by_format = (
@@ -320,32 +380,47 @@ def upgrade() -> None:
         """)
 
     # 设置默认空对象
-    op.execute("""
-        UPDATE provider_api_keys
-        SET health_by_format = '{}'::jsonb
-        WHERE health_by_format IS NULL
-    """)
-    op.execute("""
-        UPDATE provider_api_keys
-        SET circuit_breaker_by_format = '{}'::jsonb
-        WHERE circuit_breaker_by_format IS NULL
-    """)
+    if is_sqlite:
+        # SQLite 使用 JSON 函数
+        op.execute("""
+            UPDATE provider_api_keys
+            SET health_by_format = json_object()
+            WHERE health_by_format IS NULL
+        """)
+        op.execute("""
+            UPDATE provider_api_keys
+            SET circuit_breaker_by_format = json_object()
+            WHERE circuit_breaker_by_format IS NULL
+        """)
+    else:
+        # PostgreSQL 使用 JSONB
+        op.execute("""
+            UPDATE provider_api_keys
+            SET health_by_format = '{}'::jsonb
+            WHERE health_by_format IS NULL
+        """)
+        op.execute("""
+            UPDATE provider_api_keys
+            SET circuit_breaker_by_format = '{}'::jsonb
+            WHERE circuit_breaker_by_format IS NULL
+        """)
 
-    # 创建 GIN 索引
-    if not _index_exists("provider_api_keys", "ix_provider_api_keys_health_by_format"):
-        op.create_index(
-            "ix_provider_api_keys_health_by_format",
-            "provider_api_keys",
-            ["health_by_format"],
-            postgresql_using="gin",
-        )
-    if not _index_exists("provider_api_keys", "ix_provider_api_keys_circuit_breaker_by_format"):
-        op.create_index(
-            "ix_provider_api_keys_circuit_breaker_by_format",
-            "provider_api_keys",
-            ["circuit_breaker_by_format"],
-            postgresql_using="gin",
-        )
+    # 创建 GIN 索引（仅 PostgreSQL）
+    if not is_sqlite:
+        if not _index_exists("provider_api_keys", "ix_provider_api_keys_health_by_format"):
+            op.create_index(
+                "ix_provider_api_keys_health_by_format",
+                "provider_api_keys",
+                ["health_by_format"],
+                postgresql_using="gin",
+            )
+        if not _index_exists("provider_api_keys", "ix_provider_api_keys_circuit_breaker_by_format"):
+            op.create_index(
+                "ix_provider_api_keys_circuit_breaker_by_format",
+                "provider_api_keys",
+                ["circuit_breaker_by_format"],
+                postgresql_using="gin",
+            )
 
     # 删除旧字段
     old_health_columns = [
@@ -378,19 +453,26 @@ def upgrade() -> None:
     # ========== 10. provider_api_keys: 删除 endpoint_id ==========
     # Key 不再与 Endpoint 绑定，通过 provider_id + api_formats 关联
     if _column_exists("provider_api_keys", "endpoint_id"):
-        # 确保外键已删除（前面可能已经删除）
-        try:
-            bind = op.get_bind()
-            inspector = inspect(bind)
-            for fk in inspector.get_foreign_keys("provider_api_keys"):
-                constrained = fk.get("constrained_columns") or []
-                if "endpoint_id" in constrained:
-                    name = fk.get("name")
-                    if name:
-                        op.drop_constraint(name, "provider_api_keys", type_="foreignkey")
-        except Exception:
-            pass  # 外键可能已经不存在
-        op.drop_column("provider_api_keys", "endpoint_id")
+        if not is_sqlite:
+            # PostgreSQL: 先删除外键，再删除列
+            try:
+                bind = op.get_bind()
+                inspector = inspect(bind)
+                for fk in inspector.get_foreign_keys("provider_api_keys"):
+                    constrained = fk.get("constrained_columns") or []
+                    if "endpoint_id" in constrained:
+                        name = fk.get("name")
+                        if name:
+                            op.drop_constraint(name, "provider_api_keys", type_="foreignkey")
+            except Exception:
+                pass  # 外键可能已经不存在
+            op.drop_column("provider_api_keys", "endpoint_id")
+        else:
+            # SQLite: 使用批量模式重建表来删除列和外键
+            # 因为 SQLite 不支持直接删除有外键约束的列
+            with op.batch_alter_table("provider_api_keys", recreate="auto") as batch_op:
+                # SQLite 会自动重建表，保留其他列
+                batch_op.drop_column("endpoint_id")
 
     # ========== 11. provider_endpoints: 删除废弃的 max_concurrent 列 ==========
     if _column_exists("provider_endpoints", "max_concurrent"):
@@ -412,8 +494,11 @@ def downgrade() -> None:
     Downgrade is complex due to data migrations.
     For safety, this only removes new columns without restoring old structure.
     Manual intervention may be required for full rollback.
+
+    支持 PostgreSQL 和 SQLite。
     """
     bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
 
     # 12. 恢复 providers RPM 相关字段
     if not _column_exists("providers", "rpm_limit"):
@@ -479,7 +564,9 @@ def downgrade() -> None:
         UPDATE providers
         SET name = LOWER(REPLACE(REPLACE(display_name, ' ', '_'), '-', '_'))
     """)
-    op.alter_column("providers", "name", nullable=False)
+    # SQLite 不支持修改 nullable，跳过
+    if not is_sqlite:
+        op.alter_column("providers", "name", nullable=False)
     op.create_index("ix_providers_name", "providers", ["name"], unique=True)
 
     # 4. 删除 providers 的 timeout, max_retries, proxy
@@ -499,7 +586,9 @@ def downgrade() -> None:
         alembic_logger.warning(f"[WARN] 发现 {orphan_model_count} 个无 global_model_id 的独立模型，将被删除")
         op.execute("DELETE FROM models WHERE global_model_id IS NULL")
         alembic_logger.info(f"已删除 {orphan_model_count} 个独立模型")
-    op.alter_column("models", "global_model_id", nullable=False)
+    # SQLite 不支持修改 nullable，跳过
+    if not is_sqlite:
+        op.alter_column("models", "global_model_id", nullable=False)
 
     # 2. 删除 rate_multipliers
     if _column_exists("provider_api_keys", "rate_multipliers"):
@@ -508,15 +597,16 @@ def downgrade() -> None:
     # 1. 删除 provider_id 和 api_formats
     if _index_exists("provider_api_keys", "idx_provider_api_keys_provider_id"):
         op.drop_index("idx_provider_api_keys_provider_id", table_name="provider_api_keys")
-    if _constraint_exists("provider_api_keys", "fk_provider_api_keys_provider"):
+    # 删除外键约束（仅 PostgreSQL）
+    if not is_sqlite and _constraint_exists("provider_api_keys", "fk_provider_api_keys_provider"):
         op.drop_constraint("fk_provider_api_keys_provider", "provider_api_keys", type_="foreignkey")
     if _column_exists("provider_api_keys", "api_formats"):
         op.drop_column("provider_api_keys", "api_formats")
     if _column_exists("provider_api_keys", "provider_id"):
         op.drop_column("provider_api_keys", "provider_id")
 
-    # 恢复 endpoint_id 外键（简化版：仅创建外键，不强制 NOT NULL）
-    if _column_exists("provider_api_keys", "endpoint_id"):
+    # 恢复 endpoint_id 外键（简化版：仅创建外键，不强制 NOT NULL）- 仅 PostgreSQL
+    if not is_sqlite and _column_exists("provider_api_keys", "endpoint_id"):
         if not _constraint_exists("provider_api_keys", "provider_api_keys_endpoint_id_fkey"):
             op.create_foreign_key(
                 "provider_api_keys_endpoint_id_fkey",

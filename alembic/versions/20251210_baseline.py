@@ -6,6 +6,8 @@ Create Date: 2024-12-10
 
 This is the consolidated baseline migration that creates all tables from scratch.
 Includes all schema changes up to circuit breaker v2.
+
+Supports both PostgreSQL and SQLite databases.
 """
 
 from alembic import op
@@ -20,25 +22,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create ENUM types (with IF NOT EXISTS for idempotency)
-    op.execute("DO $$ BEGIN CREATE TYPE userrole AS ENUM ('admin', 'user'); EXCEPTION WHEN duplicate_object THEN NULL; END $$")
-    op.execute(
-        "DO $$ BEGIN CREATE TYPE providerbillingtype AS ENUM ('monthly_quota', 'pay_as_you_go', 'free_tier'); EXCEPTION WHEN duplicate_object THEN NULL; END $$"
-    )
+    # 检测数据库类型
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
+
+    # 创建 ENUM 类型（仅 PostgreSQL）
+    if not is_sqlite:
+        op.execute("DO $$ BEGIN CREATE TYPE userrole AS ENUM ('admin', 'user'); EXCEPTION WHEN duplicate_object THEN NULL; END $$")
+        op.execute(
+            "DO $$ BEGIN CREATE TYPE providerbillingtype AS ENUM ('monthly_quota', 'pay_as_you_go', 'free_tier'); EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+        )
 
     # ==================== users ====================
+    # 根据数据库类型选择 role 列的类型
+    role_column_type = sa.String(20) if is_sqlite else postgresql.ENUM("admin", "user", name="userrole", create_type=False)
+
     op.create_table(
         "users",
         sa.Column("id", sa.String(36), primary_key=True, index=True),
         sa.Column("email", sa.String(255), unique=True, index=True, nullable=False),
         sa.Column("username", sa.String(100), unique=True, index=True, nullable=False),
         sa.Column("password_hash", sa.String(255), nullable=False),
-        sa.Column(
-            "role",
-            postgresql.ENUM("admin", "user", name="userrole", create_type=False),
-            nullable=False,
-            server_default="user",
-        ),
+        sa.Column("role", role_column_type, nullable=False, server_default="user"),
         sa.Column("allowed_providers", sa.JSON, nullable=True),
         sa.Column("allowed_endpoints", sa.JSON, nullable=True),
         sa.Column("allowed_models", sa.JSON, nullable=True),
@@ -58,6 +63,11 @@ def upgrade() -> None:
     )
 
     # ==================== providers ====================
+    # 根据数据库类型选择 billing_type 列的类型
+    billing_type_column = sa.String(50) if is_sqlite else postgresql.ENUM(
+        "monthly_quota", "pay_as_you_go", "free_tier", name="providerbillingtype", create_type=False
+    )
+
     op.create_table(
         "providers",
         sa.Column("id", sa.String(36), primary_key=True, index=True),
@@ -65,14 +75,7 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(100), nullable=False),
         sa.Column("description", sa.Text, nullable=True),
         sa.Column("website", sa.String(500), nullable=True),
-        sa.Column(
-            "billing_type",
-            postgresql.ENUM(
-                "monthly_quota", "pay_as_you_go", "free_tier", name="providerbillingtype", create_type=False
-            ),
-            nullable=False,
-            server_default="pay_as_you_go",
-        ),
+        sa.Column("billing_type", billing_type_column, nullable=False, server_default="pay_as_you_go"),
         sa.Column("monthly_quota_usd", sa.Float, nullable=True),
         sa.Column("monthly_used_usd", sa.Float, server_default="0.0"),
         sa.Column("quota_reset_day", sa.Integer, server_default="30"),
@@ -747,6 +750,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 检测数据库类型
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
+
     # Drop tables in reverse order (respecting foreign key dependencies)
     op.drop_table("provider_usage_tracking")
     op.drop_table("api_key_provider_mappings")
@@ -770,6 +777,7 @@ def downgrade() -> None:
     op.drop_table("providers")
     op.drop_table("users")
 
-    # Drop ENUM types
-    op.execute("DROP TYPE IF EXISTS providerbillingtype")
-    op.execute("DROP TYPE IF EXISTS userrole")
+    # Drop ENUM types（仅 PostgreSQL）
+    if not is_sqlite:
+        op.execute("DROP TYPE IF EXISTS providerbillingtype")
+        op.execute("DROP TYPE IF EXISTS userrole")

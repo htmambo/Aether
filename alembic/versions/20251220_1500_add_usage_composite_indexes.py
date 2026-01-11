@@ -20,13 +20,22 @@ def upgrade() -> None:
 
     注意：这些索引已经在 baseline 迁移中创建。
     此迁移仅用于从旧版本升级的场景，新安装会跳过。
+
+    支持 PostgreSQL 和 SQLite。
     """
     conn = op.get_bind()
+    is_sqlite = conn.dialect.name == 'sqlite'
 
     # 检查 usage 表是否存在
-    result = conn.execute(text(
-        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'usage')"
-    ))
+    if is_sqlite:
+        result = conn.execute(text(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage')"
+        ))
+    else:
+        result = conn.execute(text(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'usage')"
+        ))
+
     if not result.scalar():
         # 表不存在，跳过
         return
@@ -40,9 +49,15 @@ def upgrade() -> None:
 
     # 分别检查并创建每个索引
     for index_name, index_def in indexes:
-        result = conn.execute(text(
-            f"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = '{index_name}')"
-        ))
+        if is_sqlite:
+            result = conn.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = '{index_name}')"
+            ))
+        else:
+            result = conn.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = '{index_name}')"
+            ))
+
         if result.scalar():
             continue  # 索引已存在，跳过
 

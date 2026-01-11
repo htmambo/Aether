@@ -27,51 +27,98 @@ depends_on = None
 
 
 def column_exists(bind, table_name: str, column_name: str) -> bool:
-    """检查列是否存在"""
-    result = bind.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = :table_name AND column_name = :column_name
-            )
-            """
-        ),
-        {"table_name": table_name, "column_name": column_name},
-    )
-    return result.scalar()
+    """检查列是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = bind.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 pragma_table_info
+        result = bind.execute(
+            sa.text(f"PRAGMA table_info({table_name})")
+        )
+        columns = [row[1] for row in result.fetchall()]
+        return column_name in columns
+    else:
+        # PostgreSQL 使用 information_schema
+        result = bind.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = :table_name AND column_name = :column_name
+                )
+                """
+            ),
+            {"table_name": table_name, "column_name": column_name},
+        )
+        return result.scalar()
 
 
 def table_exists(bind, table_name: str) -> bool:
-    """检查表是否存在"""
-    result = bind.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_name = :table_name
-            )
-            """
-        ),
-        {"table_name": table_name},
-    )
-    return result.scalar()
+    """检查表是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = bind.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 sqlite_master
+        result = bind.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = :table_name
+                )
+                """
+            ),
+            {"table_name": table_name},
+        )
+        return result.scalar()
+    else:
+        # PostgreSQL 使用 information_schema
+        result = bind.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = :table_name
+                )
+                """
+            ),
+            {"table_name": table_name},
+        )
+        return result.scalar()
 
 
 def index_exists(bind, index_name: str) -> bool:
-    """检查索引是否存在"""
-    result = bind.execute(
-        sa.text(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM pg_indexes
-                WHERE indexname = :index_name
-            )
-            """
-        ),
-        {"index_name": index_name},
-    )
-    return result.scalar()
+    """检查索引是否存在（支持 PostgreSQL 和 SQLite）"""
+    is_sqlite = bind.dialect.name == 'sqlite'
+
+    if is_sqlite:
+        # SQLite 使用 sqlite_master
+        result = bind.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'index' AND name = :index_name
+                )
+                """
+            ),
+            {"index_name": index_name},
+        )
+        return result.scalar()
+    else:
+        # PostgreSQL 使用 pg_indexes
+        result = bind.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE indexname = :index_name
+                )
+                """
+            ),
+            {"index_name": index_name},
+        )
+        return result.scalar()
 
 
 def upgrade() -> None:

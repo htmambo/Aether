@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import Pool, QueuePool
 
 from ..config import config
+from .engine_factory import DatabaseEngineFactory
 from src.core.logger import logger
 from ..models.database import Base, SystemConfig, User, UserRole
 
@@ -71,17 +72,36 @@ def _setup_pool_monitoring(engine: Engine):
 
 
 def get_pool_status() -> dict:
-    """获取连接池状态"""
+    """
+    获取连接池状态
+
+    注意：SQLite 的 StaticPool 不支持 checkedout/size/overflow 等方法
+    对于 SQLite，返回简化的状态信息
+    """
     engine = _ensure_engine()
     pool = engine.pool
 
-    return {
-        "checked_out": pool.checkedout(),
-        "pool_size": pool.size(),
-        "overflow": pool.overflow(),
-        "max_capacity": config.db_pool_size + config.db_max_overflow,
-        "pool_timeout": config.db_pool_timeout,
-    }
+    # 检查连接池类型（PostgreSQL 的 QueuePool 支持 checkedout，SQLite 的 StaticPool 不支持）
+    if hasattr(pool, 'checkedout'):
+        # PostgreSQL QueuePool
+        return {
+            "checked_out": pool.checkedout(),
+            "pool_size": pool.size(),
+            "overflow": pool.overflow(),
+            "max_capacity": config.db_pool_size + config.db_max_overflow,
+            "pool_timeout": config.db_pool_timeout,
+            "pool_type": "QueuePool",
+        }
+    else:
+        # SQLite StaticPool 或其他不支持 checkedout 的连接池
+        return {
+            "checked_out": 0,
+            "pool_size": 1,
+            "overflow": 0,
+            "max_capacity": 1,
+            "pool_timeout": config.db_pool_timeout,
+            "pool_type": type(pool).__name__,
+        }
 
 
 def log_pool_status():
@@ -114,35 +134,23 @@ def _ensure_engine() -> Engine:
     if _engine is not None:
         return _engine
 
-    # 获取数据库配置
-    DATABASE_URL = config.database_url
-
-    # 验证数据库类型（生产环境要求 PostgreSQL，但允许测试环境使用其他数据库）
-    is_production = config.environment == "production"
-    if is_production and not DATABASE_URL.startswith("postgresql://"):
-        raise ValueError("生产环境只支持 PostgreSQL 数据库，请配置正确的 DATABASE_URL")
-
-    # 创建引擎
-    _engine = create_engine(
-        DATABASE_URL,
-        poolclass=QueuePool,  # 使用队列连接池
-        pool_size=config.db_pool_size,  # 连接池大小
-        max_overflow=config.db_max_overflow,  # 最大溢出连接数
-        pool_timeout=config.db_pool_timeout,  # 连接超时（秒）
-        pool_recycle=config.db_pool_recycle,  # 连接回收时间（秒）
-        pool_pre_ping=True,  # 检查连接活性
-        echo=False,  # 关闭SQL日志输出（太冗长）
+    # 使用工厂创建引擎（自动适配 SQLite 和 PostgreSQL）
+    _engine = DatabaseEngineFactory.create_engine(
+        url=config.database_url,
+        environment=config.environment,
+        allow_sqlite_in_production=getattr(config, 'allow_sqlite_in_production', False),
     )
 
-    # 设置连接池监控
-    _setup_pool_monitoring(_engine)
+    # 设置连接池监控（仅 PostgreSQL）
+    if _engine.pool and hasattr(_engine.pool, 'checkedout'):
+        _setup_pool_monitoring(_engine)
 
     # 创建会话工厂
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
     _log_pool_capacity()
 
-    logger.debug(f"数据库引擎已初始化: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'local'}")
+    logger.debug(f"数据库引擎已初始化: {config.database_url.split('@')[-1] if '@' in config.database_url else 'local'}")
 
     return _engine
 
@@ -180,32 +188,11 @@ def _ensure_async_engine() -> AsyncEngine:
     if _async_engine is not None:
         return _async_engine
 
-    # 获取数据库配置并转换为异步URL
-    DATABASE_URL = config.database_url
-
-    # 转换同步URL为异步URL（postgresql:// -> postgresql+asyncpg://）
-    if DATABASE_URL.startswith("postgresql://"):
-        ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-    elif DATABASE_URL.startswith("sqlite:///"):
-        ASYNC_DATABASE_URL = DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
-    else:
-        raise ValueError(f"不支持的数据库类型: {DATABASE_URL}")
-
-    # 验证数据库类型（生产环境要求 PostgreSQL）
-    is_production = config.environment == "production"
-    if is_production and not ASYNC_DATABASE_URL.startswith("postgresql+asyncpg://"):
-        raise ValueError("生产环境只支持 PostgreSQL 数据库，请配置正确的 DATABASE_URL")
-
-    # 创建异步引擎
-    _async_engine = create_async_engine(
-        ASYNC_DATABASE_URL,
-        # AsyncEngine 不能使用 QueuePool；默认使用 AsyncAdaptedQueuePool
-        pool_size=config.db_pool_size,
-        max_overflow=config.db_max_overflow,
-        pool_timeout=config.db_pool_timeout,
-        pool_recycle=config.db_pool_recycle,
-        pool_pre_ping=True,
-        echo=False,
+    # 使用工厂创建异步引擎（自动适配 SQLite 和 PostgreSQL）
+    _async_engine = DatabaseEngineFactory.create_async_engine(
+        url=config.database_url,
+        environment=config.environment,
+        allow_sqlite_in_production=getattr(config, 'allow_sqlite_in_production', False),
     )
 
     # 创建异步会话工厂
@@ -217,7 +204,7 @@ def _ensure_async_engine() -> AsyncEngine:
         autoflush=False,
     )
 
-    logger.debug(f"异步数据库引擎已初始化: {ASYNC_DATABASE_URL.split('@')[-1] if '@' in ASYNC_DATABASE_URL else 'local'}")
+    logger.debug(f"异步数据库引擎已初始化: {config.database_url.split('@')[-1] if '@' in config.database_url else 'local'}")
 
     return _async_engine
 
