@@ -9,6 +9,7 @@
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import urlencode
 
+from src.api.handlers.base.endpoint_checker import build_safe_headers
 from src.core.api_format_metadata import get_auth_config, get_default_path, resolve_api_format
 from src.core.crypto import crypto_service
 from src.core.header_rules import apply_header_rules
@@ -25,7 +26,7 @@ def build_provider_headers(
     key: "ProviderAPIKey",
     original_headers: Optional[Dict[str, str]] = None,
     *,
-    extra_headers: Optional[Dict[str, str]] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
     """
     根据 endpoint/key 构建请求头，并透传客户端自定义头。
@@ -63,8 +64,9 @@ def build_provider_headers(
             if name.lower() not in excluded_headers:
                 headers[name] = value
 
+    # 使用 build_safe_headers 处理 extra_headers，支持规则格式
     if extra_headers:
-        headers.update(extra_headers)
+        headers = build_safe_headers(headers, extra_headers, protected_keys=(auth_header,))
 
     # 应用 endpoint 规则（在合并所有 headers 之后）
     if endpoint.headers:

@@ -16,6 +16,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
+from src.api.handlers.base.endpoint_checker import build_safe_headers
 from src.core.crypto import crypto_service
 from src.core.header_rules import apply_header_rules
 
@@ -67,7 +68,7 @@ class RequestBuilder(ABC):
         endpoint: Any,
         key: Any,
         *,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, str]:
         """构建请求头"""
         pass
@@ -81,7 +82,7 @@ class RequestBuilder(ABC):
         *,
         mapped_model: Optional[str] = None,
         is_stream: bool = False,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
         """
         构建完整的请求（请求体 + 请求头）
@@ -134,7 +135,7 @@ class PassthroughRequestBuilder(RequestBuilder):
         endpoint: Any,
         key: Any,
         *,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, str]:
         """
         透传请求头 - 清理敏感头部（黑名单），透传其他所有头部
@@ -188,7 +189,7 @@ class PassthroughRequestBuilder(RequestBuilder):
 
         # 4. 添加额外头部
         if extra_headers:
-            headers.update(extra_headers)
+            headers = build_safe_headers(headers, extra_headers, protected_keys=(auth_header,))
 
         # 5. 确保有 Content-Type
         if "Content-Type" not in headers and "content-type" not in headers:
