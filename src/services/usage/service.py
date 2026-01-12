@@ -1771,6 +1771,12 @@ class UsageService:
         """
         from sqlalchemy import text
 
+        # 检测数据库方言（SQLite 需要使用兼容 SQL）
+        # 参考 get_interval_timeline 的实现方式
+        bind = db.bind
+        dialect = bind.dialect.name if bind is not None else "sqlite"
+        is_sqlite = dialect == "sqlite"
+
         # 计算时间范围
         start_date = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -1778,12 +1784,219 @@ class UsageService:
         # 按 user_id 或 api_key_id 分组，计算同一组内连续请求的时间差
         group_by_field = "api_key_id" if api_key_id else "user_id"
 
-        # 构建过滤条件
+        # 构建过滤条件和参数（确保 filter_id 与 group_by_field 一致）
         filter_clause = ""
-        if user_id or api_key_id:
+        filter_id = None
+        if api_key_id:
+            filter_id = api_key_id
+            filter_clause = f"AND {group_by_field} = :filter_id"
+        elif user_id:
+            filter_id = user_id
             filter_clause = f"AND {group_by_field} = :filter_id"
 
-        sql = text(f"""
+        if is_sqlite:
+            # SQLite 兼容实现：
+            # 1) 时间差：使用 julianday(created_at) 计算分钟差
+            # 2) 聚合过滤：使用 SUM(CASE WHEN ... THEN 1 ELSE 0 END)
+            # 3) 百分位数：SQLite 无 PERCENTILE_CONT，改为在 Python 中计算
+            import math
+            from collections import defaultdict
+
+            stats_sql = text(f"""
+                WITH user_requests AS (
+                    SELECT
+                        {group_by_field} as group_id,
+                        created_at,
+                        LAG(created_at) OVER (
+                            PARTITION BY {group_by_field}
+                            ORDER BY created_at
+                        ) as prev_request_at
+                    FROM usage
+                    WHERE status = 'completed'
+                      AND created_at > :start_date
+                      AND {group_by_field} IS NOT NULL
+                      {filter_clause}
+                ),
+                intervals AS (
+                    SELECT
+                        group_id,
+                        (julianday(created_at) - julianday(prev_request_at)) * 1440.0 as interval_minutes
+                    FROM user_requests
+                    WHERE prev_request_at IS NOT NULL
+                ),
+                user_stats AS (
+                    SELECT
+                        group_id,
+                        COUNT(*) as request_count,
+                        SUM(CASE WHEN interval_minutes <= 5 THEN 1 ELSE 0 END) as within_5min,
+                        SUM(CASE WHEN interval_minutes > 5 AND interval_minutes <= 15 THEN 1 ELSE 0 END) as within_15min,
+                        SUM(CASE WHEN interval_minutes > 15 AND interval_minutes <= 30 THEN 1 ELSE 0 END) as within_30min,
+                        SUM(CASE WHEN interval_minutes > 30 AND interval_minutes <= 60 THEN 1 ELSE 0 END) as within_60min,
+                        SUM(CASE WHEN interval_minutes > 60 THEN 1 ELSE 0 END) as over_60min,
+                        AVG(interval_minutes) as avg_interval,
+                        MIN(interval_minutes) as min_interval,
+                        MAX(interval_minutes) as max_interval
+                    FROM intervals
+                    GROUP BY group_id
+                    HAVING COUNT(*) >= 2
+                )
+                SELECT * FROM user_stats
+                ORDER BY request_count DESC
+            """)
+
+            params: Dict[str, Any] = {
+                "start_date": start_date,
+            }
+            if filter_id:
+                params["filter_id"] = filter_id
+
+            stats_result = db.execute(stats_sql, params)
+            stats_rows = stats_result.fetchall()
+
+            # 基础统计先落地，百分位数后续补齐
+            stats_by_group: Dict[str, Tuple[Any, ...]] = {}
+            ordered_group_ids: List[Any] = []
+            for row in stats_rows:
+                (
+                    group_id,
+                    request_count,
+                    within_5min,
+                    within_15min,
+                    within_30min,
+                    within_60min,
+                    over_60min,
+                    avg_interval,
+                    min_interval,
+                    max_interval,
+                ) = row
+                key = str(group_id)
+                ordered_group_ids.append(group_id)
+                stats_by_group[key] = (
+                    request_count,
+                    within_5min,
+                    within_15min,
+                    within_30min,
+                    within_60min,
+                    over_60min,
+                    avg_interval,
+                    min_interval,
+                    max_interval,
+                )
+
+            def percentile_cont(values: List[float], p: float) -> Optional[float]:
+                """
+                兼容 PostgreSQL PERCENTILE_CONT 的连续分位数计算：
+                - 对排序后的值做线性插值
+                - p in [0, 1]
+                """
+                if not values:
+                    return None
+                values_sorted = sorted(values)
+                if p <= 0:
+                    return values_sorted[0]
+                if p >= 1:
+                    return values_sorted[-1]
+                k = (len(values_sorted) - 1) * p
+                f = int(math.floor(k))
+                c = int(math.ceil(k))
+                if f == c:
+                    return values_sorted[f]
+                return values_sorted[f] * (c - k) + values_sorted[c] * (k - f)
+
+            # 取回所有 interval_minutes，用于计算百分位数
+            intervals_sql = text(f"""
+                WITH user_requests AS (
+                    SELECT
+                        {group_by_field} as group_id,
+                        created_at,
+                        LAG(created_at) OVER (
+                            PARTITION BY {group_by_field}
+                            ORDER BY created_at
+                        ) as prev_request_at
+                    FROM usage
+                    WHERE status = 'completed'
+                      AND created_at > :start_date
+                      AND {group_by_field} IS NOT NULL
+                      {filter_clause}
+                ),
+                intervals AS (
+                    SELECT
+                        group_id,
+                        (julianday(created_at) - julianday(prev_request_at)) * 1440.0 as interval_minutes
+                    FROM user_requests
+                    WHERE prev_request_at IS NOT NULL
+                ),
+                eligible_groups AS (
+                    SELECT group_id
+                    FROM intervals
+                    GROUP BY group_id
+                    HAVING COUNT(*) >= 2
+                )
+                SELECT
+                    i.group_id,
+                    i.interval_minutes
+                FROM intervals i
+                WHERE i.group_id IN (SELECT group_id FROM eligible_groups)
+            """)
+
+            interval_result = db.execute(intervals_sql, params)
+            interval_rows = interval_result.fetchall()
+
+            intervals_by_group: Dict[str, List[float]] = defaultdict(list)
+            for group_id, interval_minutes in interval_rows:
+                if interval_minutes is None:
+                    continue
+                key = str(group_id)
+                if key not in stats_by_group:
+                    continue
+                try:
+                    intervals_by_group[key].append(float(interval_minutes))
+                except (TypeError, ValueError):
+                    continue
+
+            rows: List[Tuple[Any, ...]] = []
+            for group_id in ordered_group_ids:
+                key = str(group_id)
+                stats = stats_by_group.get(key)
+                if stats is None:
+                    continue
+                (
+                    request_count,
+                    within_5min,
+                    within_15min,
+                    within_30min,
+                    within_60min,
+                    over_60min,
+                    avg_interval,
+                    min_interval,
+                    max_interval,
+                ) = stats
+
+                group_intervals = intervals_by_group.get(key, [])
+                median_interval = percentile_cont(group_intervals, 0.5)
+                p75_interval = percentile_cont(group_intervals, 0.75)
+                p90_interval = percentile_cont(group_intervals, 0.90)
+
+                rows.append(
+                    (
+                        group_id,
+                        request_count,
+                        within_5min,
+                        within_15min,
+                        within_30min,
+                        within_60min,
+                        over_60min,
+                        median_interval,
+                        p75_interval,
+                        p90_interval,
+                        avg_interval,
+                        min_interval,
+                        max_interval,
+                    )
+                )
+        else:
+            # PostgreSQL 版本：保留原有语法与能力（FILTER + PERCENTILE_CONT）
+            sql = text(f"""
             WITH user_requests AS (
                 SELECT
                     {group_by_field} as group_id,
@@ -1828,16 +2041,14 @@ class UsageService:
             ORDER BY request_count DESC
         """)
 
-        params: Dict[str, Any] = {
-            "start_date": start_date,
-        }
-        if user_id:
-            params["filter_id"] = user_id
-        elif api_key_id:
-            params["filter_id"] = api_key_id
+            params: Dict[str, Any] = {
+                "start_date": start_date,
+            }
+            if filter_id:
+                params["filter_id"] = filter_id
 
-        result = db.execute(sql, params)
-        rows = result.fetchall()
+            result = db.execute(sql, params)
+            rows = result.fetchall()
 
         # 收集所有 user_id 以便批量查询用户信息
         group_ids = [row[0] for row in rows]
@@ -1902,13 +2113,13 @@ class UsageService:
                     "over_60min": round(over_60min / total_intervals * 100, 1),
                 },
                 "percentiles": {
-                    "p50": round(float(median_interval), 2) if median_interval else None,
-                    "p75": round(float(p75_interval), 2) if p75_interval else None,
-                    "p90": round(float(p90_interval), 2) if p90_interval else None,
+                    "p50": round(float(median_interval), 2) if median_interval is not None else None,
+                    "p75": round(float(p75_interval), 2) if p75_interval is not None else None,
+                    "p90": round(float(p90_interval), 2) if p90_interval is not None else None,
                 },
-                "avg_interval_minutes": round(float(avg_interval), 2) if avg_interval else None,
-                "min_interval_minutes": round(float(min_interval), 2) if min_interval else None,
-                "max_interval_minutes": round(float(max_interval), 2) if max_interval else None,
+                "avg_interval_minutes": round(float(avg_interval), 2) if avg_interval is not None else None,
+                "min_interval_minutes": round(float(min_interval), 2) if min_interval is not None else None,
+                "max_interval_minutes": round(float(max_interval), 2) if max_interval is not None else None,
                 "recommended_ttl_minutes": recommended_ttl,
                 "recommendation_reason": UsageService._get_ttl_recommendation_reason(
                     recommended_ttl, p75_interval, p90_interval
@@ -2104,12 +2315,28 @@ class UsageService:
         Returns:
             包含时间线数据点的字典，每个数据点包含 model 字段用于按模型区分颜色
         """
-        from sqlalchemy import text
+        from sqlalchemy import DateTime, Float, String, text
 
         # 检测数据库方言
         bind = db.bind
         dialect = bind.dialect.name if bind is not None else "sqlite"
         is_sqlite = dialect == "sqlite"
+
+        # Helper function to ensure consistent UTC datetime formatting
+        def format_datetime(dt: Optional[datetime]) -> Optional[str]:
+            """Format datetime to ISO string, ensuring UTC aware output."""
+            if dt is None:
+                return None
+            # Defensive: ensure dt is a datetime object
+            if not isinstance(dt, datetime):
+                logger.warning(f"Unexpected datetime type: {type(dt)}, skipping row")
+                return None
+            # If naive (SQLite), treat as UTC; if aware (PostgreSQL), convert to UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt.isoformat()
 
         start_date = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -2188,7 +2415,13 @@ class UsageService:
                     JOIN user_limits ul ON fi.user_id = ul.user_id
                     WHERE fi.rn <= ul.user_limit
                     ORDER BY fi.created_at
-                """)
+                """).columns(
+                    created_at=DateTime(timezone=True),
+                    user_id=String(),
+                    model=String(),
+                    username=String(),
+                    interval_minutes=Float()
+                )
             else:
                 # PostgreSQL 版本：保留原有语法
                 sql = text(f"""
@@ -2245,7 +2478,13 @@ class UsageService:
                     JOIN user_limits ul ON fi.user_id = ul.user_id
                     WHERE fi.rn <= ul.user_limit
                     ORDER BY fi.created_at
-                """)
+                """).columns(
+                    created_at=DateTime(timezone=True),
+                    user_id=String(),
+                    model=String(),
+                    username=String(),
+                    interval_minutes=Float()
+                )
         else:
             # 普通视图：返回时间、间隔和模型信息
             sql = text(f"""
@@ -2273,7 +2512,11 @@ class UsageService:
                   AND {interval_calc} <= 120
                 ORDER BY created_at
                 LIMIT :limit
-            """)
+            """).columns(
+                created_at=DateTime(timezone=True),
+                model=String(),
+                interval_minutes=Float()
+            )
 
         params: Dict[str, Any] = {"start_date": start_date, "limit": limit}
         if user_id:
@@ -2290,8 +2533,12 @@ class UsageService:
         if include_user_info and not user_id:
             for row in rows:
                 created_at, row_user_id, model, username, interval_minutes = row
+                # Format datetime with consistent UTC timezone handling
+                x_value = format_datetime(created_at)
+                if x_value is None:
+                    continue  # Skip rows with invalid created_at
                 point_data: Dict[str, Any] = {
-                    "x": created_at.isoformat(),
+                    "x": x_value,
                     "y": round(float(interval_minutes), 2),
                     "user_id": str(row_user_id),
                 }
@@ -2304,8 +2551,12 @@ class UsageService:
         else:
             for row in rows:
                 created_at, model, interval_minutes = row
+                # Format datetime with consistent UTC timezone handling
+                x_value = format_datetime(created_at)
+                if x_value is None:
+                    continue  # Skip rows with invalid created_at
                 point_data = {
-                    "x": created_at.isoformat(),
+                    "x": x_value,
                     "y": round(float(interval_minutes), 2)
                 }
                 if model:
