@@ -16,12 +16,12 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
 from src.database import create_session
-from src.models.database import AuditLog, Usage
+from src.models.database import AuditLog, RequestCandidate, Usage
 from src.services.system.config import SystemConfigService
 from src.services.system.scheduler import get_scheduler
 from src.services.system.stats_aggregator import StatsAggregatorService
@@ -489,12 +489,23 @@ class CleanupScheduler:
             auto_delete = SystemConfigService.get_config(db, "auto_delete_expired_keys", False)
             keys_cleaned = ApiKeyService.cleanup_expired_keys(db, auto_delete=auto_delete)
 
+            # 6. 清理 request_candidates（默认仅保留最近 30 天）
+            candidates_retention_days = max(
+                SystemConfigService.get_config(db, "request_candidates_retention_days", 30),
+                7,  # 最少保留 7 天，防止误配置删除过多
+            )
+            candidates_cutoff = now - timedelta(days=candidates_retention_days)
+            candidates_deleted = await self._cleanup_request_candidates(
+                db, candidates_cutoff, batch_size
+            )
+
             logger.info(
                 f"清理完成: 压缩 {body_compressed} 条, "
                 f"清理压缩字段 {compressed_cleaned} 条, "
                 f"清理header {header_cleaned} 条, "
                 f"删除记录 {records_deleted} 条, "
-                f"清理过期Keys {keys_cleaned} 条"
+                f"清理过期Keys {keys_cleaned} 条, "
+                f"清理候选日志 {candidates_deleted} 条"
             )
 
         except Exception as e:
@@ -502,6 +513,67 @@ class CleanupScheduler:
             db.rollback()
         finally:
             db.close()
+
+    async def _cleanup_request_candidates(
+        self, db: Session, cutoff_time: datetime, batch_size: int
+    ) -> int:
+        """清理 request_candidates 过期记录（分批删除，避免长事务）"""
+        total_deleted = 0
+
+        logger.info(f"开始清理 {cutoff_time.isoformat()} 之前的候选日志(request_candidates)...")
+
+        while True:
+            records_to_delete = (
+                db.query(RequestCandidate.id)
+                .filter(RequestCandidate.created_at < cutoff_time)
+                .limit(batch_size)
+                .all()
+            )
+
+            if not records_to_delete:
+                break
+
+            record_ids = [r.id for r in records_to_delete]
+            result = db.execute(
+                delete(RequestCandidate)
+                .where(RequestCandidate.id.in_(record_ids))
+                .execution_options(synchronize_session=False)
+            )
+
+            rows_deleted = int(result.rowcount or 0)
+            db.commit()
+
+            total_deleted += rows_deleted
+            logger.debug(f"已删除 {rows_deleted} 条候选日志，累计 {total_deleted} 条")
+
+            await asyncio.sleep(0.05)
+
+        if total_deleted > 0:
+            self._maybe_checkpoint_sqlite_wal(db)
+            logger.info(f"候选日志清理完成，共删除 {total_deleted} 条记录")
+        else:
+            logger.info("无需清理的候选日志(request_candidates)")
+
+        return total_deleted
+
+    @staticmethod
+    def _maybe_checkpoint_sqlite_wal(db: Session) -> None:
+        """SQLite WAL 模式下，尝试 checkpoint + truncate，避免 wal 文件长期膨胀"""
+        try:
+            bind = getattr(db, "bind", None)
+            if bind is None or bind.dialect.name != "sqlite":
+                return
+
+            row = db.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            db.commit()
+
+            if row is not None and len(row) >= 3:
+                busy, log, checkpointed = row[0], row[1], row[2]
+                logger.info(
+                    f"SQLite WAL checkpoint(TRUNCATE) 结果: busy={busy}, log={log}, checkpointed={checkpointed}"
+                )
+        except Exception as exc:
+            logger.warning(f"SQLite WAL checkpoint(TRUNCATE) 失败: {exc}")
 
     async def _cleanup_body_fields(
         self, db: Session, cutoff_time: datetime, batch_size: int

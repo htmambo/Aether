@@ -2106,70 +2106,146 @@ class UsageService:
         """
         from sqlalchemy import text
 
+        # 检测数据库方言
+        bind = db.bind
+        dialect = bind.dialect.name if bind is not None else "sqlite"
+        is_sqlite = dialect == "sqlite"
+
         start_date = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         # 构建用户过滤条件
         user_filter = "AND u.user_id = :user_id" if user_id else ""
 
+        # SQLite 使用 julianday 计算时间差，PostgreSQL 使用 EXTRACT
+        # julianday 返回天数差，需要乘以 1440 转换为分钟（24 * 60）
+        if is_sqlite:
+            interval_calc = "(julianday(created_at) - julianday(prev_request_at)) * 1440.0"
+            type_cast_float = "CAST({expr} AS REAL)"
+            type_cast_int = "CAST({expr} AS INTEGER)"
+        else:
+            interval_calc = "EXTRACT(EPOCH FROM (created_at - prev_request_at)) / 60.0"
+            type_cast_float = "{expr}::float"
+            type_cast_int = "{expr}::int"
+
         # 根据是否需要用户信息选择不同的查询
         if include_user_info and not user_id:
             # 管理员视图：返回带用户信息的数据点
             # 使用按比例采样，保持每个用户的数据量比例不变
-            sql = text(f"""
-                WITH request_intervals AS (
+            if is_sqlite:
+                # SQLite 版本：使用 CAST 替代 :: 类型转换
+                sql = text(f"""
+                    WITH request_intervals AS (
+                        SELECT
+                            u.created_at,
+                            u.user_id,
+                            u.model,
+                            usr.username,
+                            LAG(u.created_at) OVER (
+                                PARTITION BY u.user_id
+                                ORDER BY u.created_at
+                            ) as prev_request_at
+                        FROM usage u
+                        LEFT JOIN users usr ON u.user_id = usr.id
+                        WHERE u.status = 'completed'
+                          AND u.created_at > :start_date
+                          AND u.user_id IS NOT NULL
+                          {user_filter}
+                    ),
+                    filtered_intervals AS (
+                        SELECT
+                            created_at,
+                            user_id,
+                            model,
+                            username,
+                            {interval_calc} as interval_minutes,
+                            ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at) as rn
+                        FROM request_intervals
+                        WHERE prev_request_at IS NOT NULL
+                          AND {interval_calc} <= 120
+                    ),
+                    total_count AS (
+                        SELECT COUNT(*) as cnt FROM filtered_intervals
+                    ),
+                    user_totals AS (
+                        SELECT user_id, COUNT(*) as user_cnt FROM filtered_intervals GROUP BY user_id
+                    ),
+                    user_limits AS (
+                        SELECT
+                            ut.user_id,
+                            CASE WHEN tc.cnt <= :limit THEN ut.user_cnt
+                                 ELSE CAST(MAX(CEIL(CAST(ut.user_cnt AS REAL) * :limit / tc.cnt), 1) AS INTEGER)
+                                END as user_limit
+                        FROM user_totals ut, total_count tc
+                        GROUP BY ut.user_id, tc.cnt
+                    )
                     SELECT
-                        u.created_at,
-                        u.user_id,
-                        u.model,
-                        usr.username,
-                        LAG(u.created_at) OVER (
-                            PARTITION BY u.user_id
-                            ORDER BY u.created_at
-                        ) as prev_request_at
-                    FROM usage u
-                    LEFT JOIN users usr ON u.user_id = usr.id
-                    WHERE u.status = 'completed'
-                      AND u.created_at > :start_date
-                      AND u.user_id IS NOT NULL
-                      {user_filter}
-                ),
-                filtered_intervals AS (
+                        fi.created_at,
+                        fi.user_id,
+                        fi.model,
+                        fi.username,
+                        fi.interval_minutes
+                    FROM filtered_intervals fi
+                    JOIN user_limits ul ON fi.user_id = ul.user_id
+                    WHERE fi.rn <= ul.user_limit
+                    ORDER BY fi.created_at
+                """)
+            else:
+                # PostgreSQL 版本：保留原有语法
+                sql = text(f"""
+                    WITH request_intervals AS (
+                        SELECT
+                            u.created_at,
+                            u.user_id,
+                            u.model,
+                            usr.username,
+                            LAG(u.created_at) OVER (
+                                PARTITION BY u.user_id
+                                ORDER BY u.created_at
+                            ) as prev_request_at
+                        FROM usage u
+                        LEFT JOIN users usr ON u.user_id = usr.id
+                        WHERE u.status = 'completed'
+                          AND u.created_at > :start_date
+                          AND u.user_id IS NOT NULL
+                          {user_filter}
+                    ),
+                    filtered_intervals AS (
+                        SELECT
+                            created_at,
+                            user_id,
+                            model,
+                            username,
+                            {interval_calc} as interval_minutes,
+                            ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at) as rn
+                        FROM request_intervals
+                        WHERE prev_request_at IS NOT NULL
+                          AND {interval_calc} <= 120
+                    ),
+                    total_count AS (
+                        SELECT COUNT(*) as cnt FROM filtered_intervals
+                    ),
+                    user_totals AS (
+                        SELECT user_id, COUNT(*) as user_cnt FROM filtered_intervals GROUP BY user_id
+                    ),
+                    user_limits AS (
+                        SELECT
+                            ut.user_id,
+                            CASE WHEN tc.cnt <= :limit THEN ut.user_cnt
+                                 ELSE GREATEST(CEIL(ut.user_cnt::float * :limit / tc.cnt), 1)::int
+                                END as user_limit
+                        FROM user_totals ut, total_count tc
+                    )
                     SELECT
-                        created_at,
-                        user_id,
-                        model,
-                        username,
-                        EXTRACT(EPOCH FROM (created_at - prev_request_at)) / 60.0 as interval_minutes,
-                        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at) as rn
-                    FROM request_intervals
-                    WHERE prev_request_at IS NOT NULL
-                      AND EXTRACT(EPOCH FROM (created_at - prev_request_at)) / 60.0 <= 120
-                ),
-                total_count AS (
-                    SELECT COUNT(*) as cnt FROM filtered_intervals
-                ),
-                user_totals AS (
-                    SELECT user_id, COUNT(*) as user_cnt FROM filtered_intervals GROUP BY user_id
-                ),
-                user_limits AS (
-                    SELECT
-                        ut.user_id,
-                        CASE WHEN tc.cnt <= :limit THEN ut.user_cnt
-                             ELSE GREATEST(CEIL(ut.user_cnt::float * :limit / tc.cnt), 1)::int
-                        END as user_limit
-                    FROM user_totals ut, total_count tc
-                )
-                SELECT
-                    fi.created_at,
-                    fi.user_id,
-                    fi.model,
-                    fi.username,
-                    fi.interval_minutes
-                FROM filtered_intervals fi
-                JOIN user_limits ul ON fi.user_id = ul.user_id
-                WHERE fi.rn <= ul.user_limit
-                ORDER BY fi.created_at
-            """)
+                        fi.created_at,
+                        fi.user_id,
+                        fi.model,
+                        fi.username,
+                        fi.interval_minutes
+                    FROM filtered_intervals fi
+                    JOIN user_limits ul ON fi.user_id = ul.user_id
+                    WHERE fi.rn <= ul.user_limit
+                    ORDER BY fi.created_at
+                """)
         else:
             # 普通视图：返回时间、间隔和模型信息
             sql = text(f"""
@@ -2191,10 +2267,10 @@ class UsageService:
                 SELECT
                     created_at,
                     model,
-                    EXTRACT(EPOCH FROM (created_at - prev_request_at)) / 60.0 as interval_minutes
+                    {interval_calc} as interval_minutes
                 FROM request_intervals
                 WHERE prev_request_at IS NOT NULL
-                  AND EXTRACT(EPOCH FROM (created_at - prev_request_at)) / 60.0 <= 120
+                  AND {interval_calc} <= 120
                 ORDER BY created_at
                 LIMIT :limit
             """)

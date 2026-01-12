@@ -61,6 +61,7 @@ class DatabaseEngineFactory:
     SQLITE_PRAGMAS = {
         "foreign_keys": "ON",           # 启用外键约束
         "journal_mode": "WAL",          # 使用 WAL 模式（提升并发）
+        "journal_size_limit": 67108864, # 限制 WAL 文件体积（64MB），避免长期膨胀
         "synchronous": "NORMAL",        # 性能模式（安全性与性能平衡）
         "cache_size": -64000,           # 64MB 负值表示 KB
         "busy_timeout": 5000,           # 5秒锁超时（毫秒）

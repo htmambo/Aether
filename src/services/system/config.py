@@ -102,6 +102,10 @@ class SystemConfigService:
             "value": 365,
             "description": "完整日志保留天数，超过此天数后删除整条记录（保留核心统计）",
         },
+        "request_candidates_retention_days": {
+            "value": 30,
+            "description": "候选日志(request_candidates)保留天数，超过此天数将被自动删除",
+        },
         "enable_auto_cleanup": {
             "value": True,
             "description": "是否启用自动清理任务，每天凌晨执行分级清理",
