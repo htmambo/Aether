@@ -14,6 +14,7 @@ from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.chat_adapter_base import ChatAdapterBase, register_adapter
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
+from src.api.handlers.base.endpoint_checker import build_safe_headers
 from src.core.logger import logger
 from src.core.optimization_utils import TokenCounter
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
@@ -163,21 +164,18 @@ class ClaudeChatAdapter(ChatAdapterBase):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 Claude API 支持的模型列表"""
-        headers = {
-            "x-api-key": api_key,
-            "Authorization": f"Bearer {api_key}",
-            "anthropic-version": "2023-06-01",
-        }
-        if extra_headers:
-            # 防止 extra_headers 覆盖认证头
-            safe_headers = {
-                k: v for k, v in extra_headers.items()
-                if k.lower() not in ("x-api-key", "authorization", "anthropic-version")
-            }
-            headers.update(safe_headers)
+        headers = build_safe_headers(
+            {
+                "x-api-key": api_key,
+                "Authorization": f"Bearer {api_key}",
+                "anthropic-version": "2023-06-01",
+            },
+            extra_headers,
+            protected_keys=("x-api-key", "authorization", "anthropic-version"),
+        )
 
         # 构建 /v1/models URL
         base_url = base_url.rstrip("/")

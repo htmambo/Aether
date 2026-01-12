@@ -11,6 +11,7 @@ from fastapi import Request
 
 from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_adapter
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
+from src.api.handlers.base.endpoint_checker import build_safe_headers
 from src.api.handlers.claude.adapter import ClaudeCapabilityDetector, ClaudeChatAdapter
 from src.config.settings import config
 
@@ -112,13 +113,15 @@ class ClaudeCliAdapter(CliAdapterBase):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 Claude API 支持的模型列表（带 CLI User-Agent）"""
         # 复用 ClaudeChatAdapter 的实现，添加 CLI User-Agent
-        cli_headers = {"User-Agent": config.internal_user_agent_claude_cli}
-        if extra_headers:
-            cli_headers.update(extra_headers)
+        cli_headers = build_safe_headers(
+            {"User-Agent": config.internal_user_agent_claude_cli},
+            extra_headers,
+            protected_keys=(),
+        )
         models, error = await ClaudeChatAdapter.fetch_models(
             client, base_url, api_key, cli_headers
         )

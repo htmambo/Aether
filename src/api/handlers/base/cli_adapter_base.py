@@ -510,7 +510,7 @@ class CliAdapterBase(ApiAdapter):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """
         查询上游 API 支持的模型列表
@@ -540,7 +540,7 @@ class CliAdapterBase(ApiAdapter):
         base_url: str,
         api_key: str,
         request_data: Dict[str, Any],
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
         # 用量计算参数
         db: Optional[Any] = None,
         user: Optional[Any] = None,

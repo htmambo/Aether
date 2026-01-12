@@ -114,16 +114,16 @@ class OpenAIChatAdapter(ChatAdapterBase):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 OpenAI 兼容 API 支持的模型列表"""
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-        }
-        if extra_headers:
-            # 防止 extra_headers 覆盖 Authorization
-            safe_headers = {k: v for k, v in extra_headers.items() if k.lower() != "authorization"}
-            headers.update(safe_headers)
+        headers = build_safe_headers(
+            {
+                "Authorization": f"Bearer {api_key}",
+            },
+            extra_headers,
+            protected_keys=("authorization",),
+        )
 
         # 构建 /v1/models URL
         base_url = base_url.rstrip("/")

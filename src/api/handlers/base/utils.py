@@ -5,6 +5,7 @@ Handler 基础工具函数
 import json
 from typing import Any, Dict, Optional
 
+from src.api.handlers.base.endpoint_checker import build_safe_headers
 from src.core.exceptions import EmbeddedErrorException, ProviderNotAvailableException
 from src.core.logger import logger
 
@@ -77,7 +78,7 @@ def extract_cache_creation_tokens(usage: Dict[str, Any]) -> int:
     return old_format
 
 
-def build_sse_headers(extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def build_sse_headers(extra_headers: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """
     构建 SSE（text/event-stream）推荐响应头，用于减少代理缓冲带来的卡顿/成段输出。
 
@@ -89,9 +90,11 @@ def build_sse_headers(extra_headers: Optional[Dict[str, str]] = None) -> Dict[st
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
     }
-    if extra_headers:
-        headers.update(extra_headers)
-    return headers
+    return build_safe_headers(
+        headers,
+        extra_headers,
+        protected_keys=(),
+    )
 
 
 def check_html_response(line: str) -> bool:
