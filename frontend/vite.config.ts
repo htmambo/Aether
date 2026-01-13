@@ -52,6 +52,27 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     proxy: {
+      // FastAPI 文档（仅开发模式下由 Vite 代理，生产环境需由后端/反向代理直接提供）
+      '/docs': {
+        target: 'http://localhost:8084',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/docs/oauth2-redirect': {
+        target: 'http://localhost:8084',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/openapi.json': {
+        target: 'http://localhost:8084',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/redoc': {
+        target: 'http://localhost:8084',
+        changeOrigin: true,
+        secure: false,
+      },
       // 只代理真正的 API 路径
       // 注意：本地开发时后端默认运行在 8084 端口（见 src/config/settings.py）
       // 如果使用 Docker，则通过 APP_PORT 环境变量映射（默认 80）
