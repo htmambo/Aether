@@ -21,126 +21,128 @@
   </div>
 
   <!-- 规则列表 - 添加滚动 -->
-  <div v-if="hasRules" class="border border-border max-h-[50vh] overflow-y-auto p-2 scrollbar-thin">
-    <div class="space-y-3 space-x-3">
-      <!-- Add Rules -->
-      <div
-        v-if="localRules.add && Object.keys(localRules.add).length > 0"
-        class="rounded-lg border bg-muted/50 p-3"
-      >
-        <div class="mb-2 flex items-center gap-2">
-          <Plus class="h-4 w-4 text-green-600" />
-          <span class="text-sm font-medium"
-            >新增 Headers ({{ Object.keys(localRules.add).length }})</span
-          >
-        </div>
-        <div class="space-y-1">
-          <div
-            v-for="[key, value] in Object.entries(localRules.add)"
-            :key="`add-${key}`"
-            class="flex items-center justify-between rounded bg-background px-2 py-1 text-sm"
-          >
-            <div class="flex flex-row items-center gap-2">
-              <span class="font-medium">{{ key }}</span
-              >:
-              <span class="text-muted-foreground">{{ value }}</span>
+  <div v-if="hasRules" class="rounded-lg border border-border overflow-hidden">
+    <div class="max-h-[50vh] overflow-y-auto p-2 scrollbar-thin">
+      <div class="space-y-3">
+        <!-- Add Rules -->
+        <div
+          v-if="localRules.add && Object.keys(localRules.add).length > 0"
+          class="rounded-lg border bg-muted/50 p-3"
+        >
+          <div class="mb-2 flex items-center gap-2">
+            <Plus class="h-4 w-4 text-green-600" />
+            <span class="text-sm font-medium"
+              >新增 Headers ({{ Object.keys(localRules.add).length }})</span
+            >
+          </div>
+          <div class="space-y-1">
+            <div
+              v-for="[key, value] in Object.entries(localRules.add)"
+              :key="`add-${key}`"
+              class="flex items-center justify-between rounded bg-background px-2 py-1 text-sm"
+            >
+              <div class="flex flex-row items-center gap-2">
+                <span class="font-medium">{{ key }}</span
+                >:
+                <span class="text-muted-foreground">{{ value }}</span>
+              </div>
+              <Button variant="ghost" size="icon" class="h-6 w-6" @click="removeRule('add', key)">
+                <X class="h-3 w-3" />
+              </Button>
             </div>
-            <Button variant="ghost" size="icon" class="h-6 w-6" @click="removeRule('add', key)">
-              <X class="h-3 w-3" />
-            </Button>
           </div>
         </div>
-      </div>
 
-      <!-- Remove Rules -->
-      <div
-        v-if="localRules.remove && localRules.remove.length > 0"
-        class="rounded-lg border bg-muted/50 p-3"
-      >
-        <div class="mb-2 flex items-center gap-2">
-          <Trash2 class="h-4 w-4 text-red-600" />
-          <span class="text-sm font-medium">删除 Headers ({{ localRules.remove.length }})</span>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <Badge
-            v-for="(key, idx) in localRules.remove"
-            :key="`remove-${idx}`"
-            variant="secondary"
-            class="flex items-center gap-1"
-          >
-            {{ key }}
-            <button class="ml-1 hover:text-destructive" @click="removeRule('remove', idx)">
-              <X class="h-3 w-3" />
-            </button>
-          </Badge>
-        </div>
-      </div>
-
-      <!-- Rename Rules -->
-      <div
-        v-if="localRules.replace_name && Object.keys(localRules.replace_name).length > 0"
-        class="rounded-lg border bg-muted/50 p-3"
-      >
-        <div class="mb-2 flex items-center gap-2">
-          <Edit3 class="h-4 w-4 text-blue-600" />
-          <span class="text-sm font-medium"
-            >重命名 Headers ({{ Object.keys(localRules.replace_name).length }})</span
-          >
-        </div>
-        <div class="space-y-1">
-          <div
-            v-for="[oldName, newName] in Object.entries(localRules.replace_name)"
-            :key="`rename-${oldName}`"
-            class="flex items-center justify-between rounded bg-background px-2 py-1 text-sm"
-          >
-            <div class="flex items-center gap-2">
-              <span class="font-medium">{{ oldName }}</span>
-              <ArrowRight class="h-3 w-3 text-muted-foreground" />
-              <span class="text-muted-foreground">{{ newName }}</span>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-6 w-6"
-              @click="removeRule('replace_name', oldName)"
+        <!-- Remove Rules -->
+        <div
+          v-if="localRules.remove && localRules.remove.length > 0"
+          class="rounded-lg border bg-muted/50 p-3"
+        >
+          <div class="mb-2 flex items-center gap-2">
+            <Trash2 class="h-4 w-4 text-red-600" />
+            <span class="text-sm font-medium">删除 Headers ({{ localRules.remove.length }})</span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <Badge
+              v-for="(key, idx) in localRules.remove"
+              :key="`remove-${idx}`"
+              variant="secondary"
+              class="flex items-center gap-1"
             >
-              <X class="h-3 w-3" />
-            </Button>
+              {{ key }}
+              <button class="ml-1 hover:text-destructive" @click="removeRule('remove', idx)">
+                <X class="h-3 w-3" />
+              </button>
+            </Badge>
           </div>
         </div>
-      </div>
 
-      <!-- Replace Value Rules -->
-      <div
-        v-if="localRules.replace_value && Object.keys(localRules.replace_value).length > 0"
-        class="rounded-lg border bg-muted/50 p-3"
-      >
-        <div class="mb-2 flex items-center gap-2">
-          <Replace class="h-4 w-4 text-orange-600" />
-          <span class="text-sm font-medium"
-            >替换 Header 值 ({{ Object.keys(localRules.replace_value).length }})</span
-          >
-        </div>
-        <div class="space-y-1">
-          <div
-            v-for="[headerName, rule] in Object.entries(localRules.replace_value)"
-            :key="`replace-${headerName}`"
-            class="flex items-center justify-between rounded bg-background px-2 py-1 text-sm"
-          >
-            <div class="flex flex-col">
-              <span class="font-medium">{{ headerName }}</span>
-              <span class="text-xs text-muted-foreground">
-                {{ rule.regex ? '正则' : '字符串' }}: {{ rule.search }} → {{ rule.replace }}
-              </span>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-6 w-6"
-              @click="removeRule('replace_value', headerName)"
+        <!-- Rename Rules -->
+        <div
+          v-if="localRules.replace_name && Object.keys(localRules.replace_name).length > 0"
+          class="rounded-lg border bg-muted/50 p-3"
+        >
+          <div class="mb-2 flex items-center gap-2">
+            <Edit3 class="h-4 w-4 text-blue-600" />
+            <span class="text-sm font-medium"
+              >重命名 Headers ({{ Object.keys(localRules.replace_name).length }})</span
             >
-              <X class="h-3 w-3" />
-            </Button>
+          </div>
+          <div class="space-y-1">
+            <div
+              v-for="[oldName, newName] in Object.entries(localRules.replace_name)"
+              :key="`rename-${oldName}`"
+              class="flex items-center justify-between rounded bg-background px-2 py-1 text-sm"
+            >
+              <div class="flex items-center gap-2">
+                <span class="font-medium">{{ oldName }}</span>
+                <ArrowRight class="h-3 w-3 text-muted-foreground" />
+                <span class="text-muted-foreground">{{ newName }}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-6 w-6"
+                @click="removeRule('replace_name', oldName)"
+              >
+                <X class="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Replace Value Rules -->
+        <div
+          v-if="localRules.replace_value && Object.keys(localRules.replace_value).length > 0"
+          class="rounded-lg border bg-muted/50 p-3"
+        >
+          <div class="mb-2 flex items-center gap-2">
+            <Replace class="h-4 w-4 text-orange-600" />
+            <span class="text-sm font-medium"
+              >替换 Header 值 ({{ Object.keys(localRules.replace_value).length }})</span
+            >
+          </div>
+          <div class="space-y-1">
+            <div
+              v-for="[headerName, rule] in Object.entries(localRules.replace_value)"
+              :key="`replace-${headerName}`"
+              class="flex items-center justify-between rounded bg-background px-2 py-1 text-sm"
+            >
+              <div class="flex flex-col">
+                <span class="font-medium">{{ headerName }}</span>
+                <span class="text-xs text-muted-foreground">
+                  {{ rule.regex ? '正则' : '字符串' }}: {{ rule.search }} → {{ rule.replace }}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-6 w-6"
+                @click="removeRule('replace_value', headerName)"
+              >
+                <X class="h-3 w-3" />
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -199,8 +201,13 @@
       <p class="text-sm text-muted-foreground">删除指定的 headers（大小写不敏感）</p>
 
       <div class="space-y-2">
-        <Label for="remove-header-name">Header 名称</Label>
-        <Input id="remove-header-name" v-model="removeRuleForm.name" placeholder="User-Agent" />
+        <Label for="remove-header-name">Header 名称（每行一个 key）</Label>
+        <Textarea
+          id="remove-header-name"
+          v-model="removeRuleForm.name"
+          placeholder="User-Agent\nX-Api-Key"
+          class="min-h-[120px]"
+        />
       </div>
     </div>
 
@@ -290,10 +297,12 @@
   import { Dialog } from '@/components/ui';
   import Button from '@/components/ui/button.vue';
   import Input from '@/components/ui/input.vue';
+  import Textarea from '@/components/ui/textarea.vue';
   import Label from '@/components/ui/label.vue';
   import Badge from '@/components/ui/badge.vue';
   import Switch from '@/components/ui/switch.vue';
   import { Plus, Trash2, Edit3, Replace, X, ArrowRight, Settings } from 'lucide-vue-next';
+  import { splitHeaderKeysLines } from '@/features/providers/utils/headerKeys';
 
   type HeaderRules = {
     add?: Record<string, string>;
@@ -411,12 +420,20 @@
   }
 
   function confirmRemoveRule() {
-    if (!removeRuleForm.value.name) return;
+    const keys = splitHeaderKeysLines(removeRuleForm.value.name);
+    if (keys.length === 0) return;
 
     if (!localRules.value.remove) {
       localRules.value.remove = [];
     }
-    localRules.value.remove.push(removeRuleForm.value.name);
+
+    const existingLower = new Set(localRules.value.remove.map((key) => key.trim().toLowerCase()));
+    for (const key of keys) {
+      const lower = key.toLowerCase();
+      if (existingLower.has(lower)) continue;
+      localRules.value.remove.push(key);
+      existingLower.add(lower);
+    }
     showRemoveRuleDialog.value = false;
   }
 
