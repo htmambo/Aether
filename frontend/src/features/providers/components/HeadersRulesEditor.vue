@@ -302,7 +302,7 @@
   import Badge from '@/components/ui/badge.vue';
   import Switch from '@/components/ui/switch.vue';
   import { Plus, Trash2, Edit3, Replace, X, ArrowRight, Settings } from 'lucide-vue-next';
-  import { splitHeaderKeysLines } from '@/features/providers/utils/headerKeys';
+  import { mergeHeaderKeysUniqueSorted, splitHeaderKeysLines } from '@/features/providers/utils/headerKeys';
 
   type HeaderRules = {
     add?: Record<string, string>;
@@ -423,17 +423,7 @@
     const keys = splitHeaderKeysLines(removeRuleForm.value.name);
     if (keys.length === 0) return;
 
-    if (!localRules.value.remove) {
-      localRules.value.remove = [];
-    }
-
-    const existingLower = new Set(localRules.value.remove.map((key) => key.trim().toLowerCase()));
-    for (const key of keys) {
-      const lower = key.toLowerCase();
-      if (existingLower.has(lower)) continue;
-      localRules.value.remove.push(key);
-      existingLower.add(lower);
-    }
+    localRules.value.remove = mergeHeaderKeysUniqueSorted(localRules.value.remove ?? [], keys);
     showRemoveRuleDialog.value = false;
   }
 
