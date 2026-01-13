@@ -391,7 +391,6 @@ class AdminUpdateGlobalModelAdapter(AdminApiAdapter):
                 raise InvalidRequestException("该模型正在被其他操作更新，请稍后重试")
             raise
         old_model_name = old_global_model.name if old_global_model else None
-        new_model_name = self.payload.name if self.payload.name else old_model_name
 
         # 执行更新（此时仍持有行锁）
         global_model = GlobalModelService.update_global_model(
@@ -407,13 +406,8 @@ class AdminUpdateGlobalModelAdapter(AdminApiAdapter):
         from src.services.cache.invalidation import get_cache_invalidation_service
 
         cache_service = get_cache_invalidation_service()
-        # 同步清理新旧两个名称的缓存（防止名称变更时的竞态）
         if old_model_name:
-            cache_service.on_global_model_changed(old_model_name, self.global_model_id)
-        if new_model_name and new_model_name != old_model_name:
-            cache_service.on_global_model_changed(new_model_name, self.global_model_id)
-        # 异步失效更多缓存
-        await cache_service.on_global_model_changed_async(global_model.name, global_model.id)
+            await cache_service.on_global_model_changed(old_model_name, self.global_model_id)
 
         return GlobalModelResponse.model_validate(global_model)
 
@@ -461,8 +455,7 @@ class AdminDeleteGlobalModelAdapter(AdminApiAdapter):
 
         cache_service = get_cache_invalidation_service()
         if model_name:
-            cache_service.on_global_model_changed(model_name, model_id)
-            await cache_service.on_global_model_changed_async(model_name, model_id)
+            await cache_service.on_global_model_changed(model_name, model_id)
 
         return None
 
