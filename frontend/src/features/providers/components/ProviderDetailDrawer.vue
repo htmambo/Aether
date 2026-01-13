@@ -380,6 +380,14 @@
                 @batch-assign="handleBatchAssign"
               />
 
+              <!-- 模型名称映射（Provider 侧 provider_model_mappings） -->
+              <ProviderModelAliasesTab
+                v-if="provider"
+                :key="`model-aliases-${provider.id}`"
+                :provider="provider"
+                @refresh="loadAliasMappingPreview"
+              />
+
               <!-- 别名映射预览 -->
               <Card
                 v-if="aliasMappingLoading || (aliasMappingPreview && aliasMappingPreview.total_matches > 0)"
@@ -609,6 +617,7 @@ import {
   KeyFormDialog,
   KeyAllowedModelsEditDialog,
   ModelsTab,
+  ProviderModelAliasesTab,
   BatchAssignModelsDialog
 } from '@/features/providers/components'
 import EndpointFormDialog from '@/features/providers/components/EndpointFormDialog.vue'
