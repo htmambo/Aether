@@ -11,9 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
-from src.api.handlers.base.chat_adapter_base import get_adapter_class
-from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
 from src.config.constants import TimeoutDefaults
+from src.core.adapter_resolver import get_adapter_class_for_format
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.database.database import get_db
@@ -45,21 +44,6 @@ class TestModelRequest(BaseModel):
 
 
 # ============ API Endpoints ============
-
-
-def _get_adapter_for_format(api_format: str):
-    """根据 API 格式获取对应的 Adapter 类"""
-    # 先检查 Chat Adapter 注册表
-    adapter_class = get_adapter_class(api_format)
-    if adapter_class:
-        return adapter_class
-
-    # 再检查 CLI Adapter 注册表
-    cli_adapter_class = get_cli_adapter_class(api_format)
-    if cli_adapter_class:
-        return cli_adapter_class
-
-    return None
 
 
 @router.post("/models")
@@ -184,7 +168,7 @@ async def query_available_models(
 
         try:
             # 获取对应的 Adapter 类并调用 fetch_models
-            adapter_class = _get_adapter_for_format(api_format)
+            adapter_class = get_adapter_class_for_format(api_format)
             if not adapter_class:
                 return [], f"Unknown API format: {api_format}"
             models, error = await adapter_class.fetch_models(
@@ -327,7 +311,7 @@ async def test_model(
 
     try:
         # 获取对应的 Adapter 类
-        adapter_class = _get_adapter_for_format(endpoint.api_format)
+        adapter_class = get_adapter_class_for_format(endpoint.api_format)
         if not adapter_class:
             return {
                 "success": False,
@@ -347,7 +331,7 @@ async def test_model(
         if request.api_format and request.api_format != endpoint.api_format:
             logger.debug(f"[test-model] 请求指定 API Format: {request.api_format}")
             # 重新获取适配器
-            adapter_class = _get_adapter_for_format(request.api_format)
+            adapter_class = get_adapter_class_for_format(request.api_format)
             if not adapter_class:
                 return {
                     "success": False,
@@ -381,6 +365,7 @@ async def test_model(
                 endpoint_config["api_key"],
                 check_request,
                 endpoint_config.get("extra_headers"),
+                timeout=endpoint_config.get("timeout"),
                 # 用量计算参数（现在强制记录）
                 db=db,
                 user=current_user,

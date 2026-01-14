@@ -109,16 +109,25 @@ class GeminiCliAdapter(CliAdapterBase):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 Gemini API 支持的模型列表（带 CLI User-Agent）"""
-        # 复用 GeminiChatAdapter 的实现，添加 CLI User-Agent
-        cli_headers = {"User-Agent": config.internal_user_agent_gemini_cli}
+        # 复用 GeminiChatAdapter 的实现，叠加 CLI User-Agent（不破坏 headers 规则格式）
+        from src.core.header_rules import merge_legacy_headers
+
+        rule_keys = {"add", "remove", "replace_name", "replace_value"}
+        rules = None
         if extra_headers:
-            cli_headers.update(extra_headers)
-        models, error = await GeminiChatAdapter.fetch_models(
-            client, base_url, api_key, cli_headers
+            if isinstance(extra_headers, dict) and any(k in extra_headers for k in rule_keys):
+                rules = extra_headers
+            else:
+                rules = {"add": extra_headers}
+
+        combined_headers = merge_legacy_headers(
+            headers={"User-Agent": config.internal_user_agent_gemini_cli},
+            rules=rules,
         )
+        models, error = await GeminiChatAdapter.fetch_models(client, base_url, api_key, combined_headers)
         # 更新 api_format 为 CLI 格式
         for m in models:
             m["api_format"] = cls.FORMAT_ID

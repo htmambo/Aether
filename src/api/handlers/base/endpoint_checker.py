@@ -36,6 +36,20 @@ _SENSITIVE_HEADER_KEYS = {
     "x-goog-api-key",
 }
 
+# 安全规则：这些头部不允许被 endpoint.headers / extra_headers 注入或覆盖。
+# 级别最高，必须始终生效。
+_GLOBAL_PROTECTED_HEADER_KEYS = {
+    "host",
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    # 不接受客户端/自定义指定 accept-encoding，避免与 httpx 解压能力不匹配
+    "accept-encoding",
+}
+
 
 def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
     redacted: Dict[str, str] = {}
@@ -66,7 +80,7 @@ def build_safe_headers(
     合并 extra_headers，但防止覆盖 protected_keys（大小写不敏感）。
     支持高级 headers 规则处理。
     """
-    protected = {k.lower() for k in protected_keys}
+    protected = {k.lower() for k in protected_keys} | _GLOBAL_PROTECTED_HEADER_KEYS
     headers = dict(base_headers)
     if not extra_headers:
         return headers
@@ -110,6 +124,7 @@ async def run_endpoint_check(
     provider_id: Optional[str] = None,
     db: Optional[Any] = None,  # Session对象，需要时才导入
     user: Optional[Any] = None,  # User对象
+    timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     执行端点检查（重构版本，使用新的架构）：
@@ -130,7 +145,8 @@ async def run_endpoint_check(
         provider_id=provider_id,
         db=db,
         user=user,
-        request_id=str(uuid.uuid4())[:8]
+        request_id=str(uuid.uuid4())[:8],
+        timeout=timeout,
     )
 
     # 使用协调器执行检查
@@ -559,7 +575,8 @@ class EndpointCheckRequest:
     db: Optional[Any] = None
     user: Optional[Any] = None
     request_id: Optional[str] = None
-    timeout: float = 30.0
+    # 注意：如果未显式传入，则由执行器的默认 timeout 决定
+    timeout: Optional[float] = None
 
 
 @dataclass
@@ -587,7 +604,8 @@ class HttpRequestExecutor:
 
         try:
             # 使用httpx进行异步请求
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            effective_timeout = request.timeout if request.timeout is not None else self.timeout
+            async with httpx.AsyncClient(timeout=effective_timeout) as client:
                 response = await client.post(
                     url=request.url,
                     json=request.json_body,
@@ -1075,7 +1093,8 @@ class ConfigurableEndpointChecker:
     async def check_endpoint(self, request: EndpointCheckRequest) -> EndpointCheckResult:
         """根据配置执行端点检查"""
         # 应用配置到请求
-        request.timeout = self.config.timeout
+        if request.timeout is None:
+            request.timeout = self.config.timeout
 
         # 如果启用了结构化日志，使用结构化日志记录
         if self.config.enable_structured_logging:

@@ -163,21 +163,21 @@ class ClaudeChatAdapter(ChatAdapterBase):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 Claude API 支持的模型列表"""
-        headers = {
+        from src.api.handlers.base.endpoint_checker import build_safe_headers
+
+        base_headers = {
             "x-api-key": api_key,
             "Authorization": f"Bearer {api_key}",
             "anthropic-version": "2023-06-01",
         }
-        if extra_headers:
-            # 防止 extra_headers 覆盖认证头
-            safe_headers = {
-                k: v for k, v in extra_headers.items()
-                if k.lower() not in ("x-api-key", "authorization", "anthropic-version")
-            }
-            headers.update(safe_headers)
+        headers = build_safe_headers(
+            base_headers=base_headers,
+            extra_headers=extra_headers,
+            protected_keys=("x-api-key", "authorization", "anthropic-version"),
+        )
 
         # 构建 /v1/models URL
         base_url = base_url.rstrip("/")

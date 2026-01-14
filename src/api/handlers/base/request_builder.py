@@ -17,7 +17,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 from src.core.crypto import crypto_service
-from src.core.header_rules import apply_header_rules
 
 # ==============================================================================
 # 统一的头部配置常量
@@ -139,62 +138,16 @@ class PassthroughRequestBuilder(RequestBuilder):
         """
         透传请求头 - 清理敏感头部（黑名单），透传其他所有头部
         """
-        from src.core.api_format_metadata import get_auth_config, resolve_api_format
+        # 统一实现：复用 services/provider/transport.py 的通用头部构建逻辑，
+        # 避免在多个链路里出现“规则处理/安全规则/认证头保护”不一致。
+        from src.services.provider.transport import build_provider_headers
 
-        headers: Dict[str, str] = {}
-
-        # 1. 根据 API 格式自动设置认证头
-        decrypted_key = crypto_service.decrypt(key.api_key)
-        api_format = getattr(endpoint, "api_format", None)
-        resolved_format = resolve_api_format(api_format)
-        auth_header, auth_type = (
-            get_auth_config(resolved_format) if resolved_format else ("Authorization", "bearer")
+        return build_provider_headers(
+            endpoint=endpoint,
+            key=key,
+            original_headers=original_headers,
+            extra_headers=extra_headers,
         )
-
-        if auth_type == "bearer":
-            headers[auth_header] = f"Bearer {decrypted_key}"
-        else:
-            headers[auth_header] = decrypted_key
-
-        # 2. 透传原始头部（排除敏感头部 - 黑名单模式）
-        if original_headers:
-            for name, value in original_headers.items():
-                lower_name = name.lower()
-
-                # 跳过敏感头部
-                if lower_name in SENSITIVE_HEADERS:
-                    continue
-
-                headers[name] = value
-
-        # 3. 处理 endpoint 配置的头部/规则（应用在透传头之后，以便规则能影响透传头）
-        endpoint_headers_config = getattr(endpoint, "headers", None)
-        if endpoint_headers_config:
-            rule_keys = {"add", "remove", "replace_name", "replace_value"}
-            if isinstance(endpoint_headers_config, dict) and any(
-                key in endpoint_headers_config for key in rule_keys
-            ):
-                # 新格式：按规则处理（注意：规则不能修改敏感认证头）
-                # 先保存当前的认证头
-                saved_auth_header = headers.get(auth_header)
-                # 应用规则
-                headers = apply_header_rules(headers, endpoint_headers_config)
-                # 恢复认证头，防止规则修改
-                if saved_auth_header is not None:
-                    headers[auth_header] = saved_auth_header
-            else:
-                # 旧格式：直接合并
-                headers.update(endpoint_headers_config)
-
-        # 4. 添加额外头部
-        if extra_headers:
-            headers.update(extra_headers)
-
-        # 5. 确保有 Content-Type
-        if "Content-Type" not in headers and "content-type" not in headers:
-            headers["Content-Type"] = "application/json"
-
-        return headers
 
 
 # ==============================================================================

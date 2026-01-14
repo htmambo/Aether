@@ -139,7 +139,7 @@
                       v-if="provider.quota_reset_day"
                       class="text-muted-foreground"
                     >
-                      每月 {{ provider.quota_reset_day }} 号重置
+                      每 {{ provider.quota_reset_day }} 天重置
                     </span>
                   </div>
                 </div>

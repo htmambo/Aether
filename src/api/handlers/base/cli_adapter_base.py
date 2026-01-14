@@ -541,6 +541,7 @@ class CliAdapterBase(ApiAdapter):
         api_key: str,
         request_data: Dict[str, Any],
         extra_headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
         # 用量计算参数
         db: Optional[Any] = None,
         user: Optional[Any] = None,
@@ -600,6 +601,7 @@ class CliAdapterBase(ApiAdapter):
             headers=headers,
             json_body=body,
             api_format=cls.name,
+            timeout=timeout,
             # 用量计算参数（现在强制记录）
             db=db,
             user=user,

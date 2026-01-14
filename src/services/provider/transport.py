@@ -38,6 +38,8 @@ def build_provider_headers(
         "x-goog-api-key",
         "content-length",
         "transfer-encoding",
+        "connection",
+        "accept-encoding",
     }
 
 
@@ -56,6 +58,7 @@ def build_provider_headers(
         headers[auth_header] = f"Bearer {decrypted_key}"
     else:
         headers[auth_header] = decrypted_key
+    saved_auth_header = headers.get(auth_header) if auth_header in headers else None
 
     # 先合并所有原始头部（在应用规则之前）
     if original_headers:
@@ -67,20 +70,20 @@ def build_provider_headers(
         headers.update(extra_headers)
 
     # 应用 endpoint 规则（在合并所有 headers 之后）
+    # 支持两种格式：
+    # - 旧格式：{"X-Foo": "bar"}（语义等价于 rules.add，且不会覆盖已存在的 header）
+    # - 新格式：{"add": {...}, "remove": [...], "replace_name": {...}, "replace_value": {...}}
     if endpoint.headers:
-        rule_keys = {"add", "remove", "replace_name", "replace_value"}
-        if isinstance(endpoint.headers, dict) and any(key in endpoint.headers for key in rule_keys):
-            # 新格式：按规则处理
-            # 保存认证头，防止规则修改
-            saved_auth_header = headers.get(auth_header) if auth_header in headers else None
-            # 应用规则
-            headers = apply_header_rules(headers, endpoint.headers)
-            # 恢复认证头
-            if saved_auth_header is not None:
-                headers[auth_header] = saved_auth_header
-        else:
-            # 旧格式：直接合并
-            headers.update(endpoint.headers)
+        headers = apply_header_rules(headers, endpoint.headers)
+        if saved_auth_header is not None:
+            headers[auth_header] = saved_auth_header
+
+    # 安全规则：自定义 headers 不能引入/覆盖敏感头部（大小写不敏感）
+    for name in list(headers.keys()):
+        if name.lower() in excluded_headers:
+            headers.pop(name, None)
+    if saved_auth_header is not None:
+        headers[auth_header] = saved_auth_header
 
     if "Content-Type" not in headers and "content-type" not in headers:
         headers["Content-Type"] = "application/json"

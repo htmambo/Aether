@@ -37,17 +37,9 @@ KEY_FETCH_TIMEOUT_SECONDS = 120
 
 def _get_adapter_for_format(api_format: str) -> Optional[type]:
     """根据 API 格式获取对应的 Adapter 类"""
-    # 延迟导入避免循环依赖
-    from src.api.handlers.base.chat_adapter_base import get_adapter_class
-    from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
+    from src.core.adapter_resolver import get_adapter_class_for_format
 
-    adapter_class = get_adapter_class(api_format)
-    if adapter_class:
-        return adapter_class
-    cli_adapter_class = get_cli_adapter_class(api_format)
-    if cli_adapter_class:
-        return cli_adapter_class
-    return None
+    return get_adapter_class_for_format(api_format)
 
 
 class ModelFetchScheduler:

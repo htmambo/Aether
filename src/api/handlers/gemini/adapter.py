@@ -160,7 +160,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         client: httpx.AsyncClient,
         base_url: str,
         api_key: str,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 Gemini API 支持的模型列表"""
         # 兼容 base_url 已包含 /v1beta 的情况
@@ -170,9 +170,11 @@ class GeminiChatAdapter(ChatAdapterBase):
         else:
             models_url = f"{base_url_clean}/v1beta/models?key={api_key}"
 
-        headers: Dict[str, str] = {}
-        if extra_headers:
-            headers.update(extra_headers)
+        headers = build_safe_headers(
+            base_headers={},
+            extra_headers=extra_headers,
+            protected_keys=(),
+        )
 
         try:
             response = await client.get(models_url, headers=headers)
@@ -245,6 +247,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         api_key: str,
         request_data: Dict[str, Any],
         extra_headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
         # 用量计算参数
         db: Optional[Any] = None,
         user: Optional[Any] = None,
@@ -280,6 +283,7 @@ class GeminiChatAdapter(ChatAdapterBase):
             headers=headers,
             json_body=body,
             api_format=cls.name,
+            timeout=timeout,
             # 用量计算参数（现在强制记录）
             db=db,
             user=user,

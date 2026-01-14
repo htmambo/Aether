@@ -134,7 +134,7 @@ async def create_provider(request: Request, db: Session = Depends(get_db)):
     - `website`: 官网地址（可选）
     - `billing_type`: 计费类型（可选，pay_as_you_go/subscription/prepaid，默认 pay_as_you_go）
     - `monthly_quota_usd`: 月度配额（美元）（可选）
-    - `quota_reset_day`: 配额重置日期（1-31）（可选）
+    - `quota_reset_day`: 配额重置周期（天数，1-365）（可选，例如 7=每周、30=每月）
     - `quota_last_reset_at`: 上次配额重置时间（可选）
     - `quota_expires_at`: 配额过期时间（可选）
     - `provider_priority`: 提供商优先级（数字越小优先级越高，默认 100）
@@ -170,7 +170,7 @@ async def update_provider(provider_id: str, request: Request, db: Session = Depe
     - `website`: 官网地址
     - `billing_type`: 计费类型（pay_as_you_go/subscription/prepaid）
     - `monthly_quota_usd`: 月度配额（美元）
-    - `quota_reset_day`: 配额重置日期（1-31）
+    - `quota_reset_day`: 配额重置周期（天数，1-365）（例如 7=每周、30=每月）
     - `quota_last_reset_at`: 上次配额重置时间
     - `quota_expires_at`: 配额过期时间
     - `provider_priority`: 提供商优先级

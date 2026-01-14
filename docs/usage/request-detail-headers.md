@@ -5,6 +5,8 @@
 - **客户端请求头**（`request_headers`）
 - **提供商请求头**（`provider_request_headers`）
 
+如果你想了解“请求详情抽屉”里每个 Tab 的字段含义与排障方法，见：`docs/usage/request-detail-drawer.md`
+
 ## 1. 客户端请求头（Client Request Headers）
 
 **代表什么**  
@@ -34,7 +36,7 @@ Aether 选中某个 Provider Endpoint 后，向上游提供商发起 HTTP 请求
    - 应用 endpoint 配置的 headers 规则（add/remove/replace_*）
    - 兜底补齐 `Content-Type`
    
-   参考：`src/api/handlers/base/request_builder.py:146`
+   参考：`src/api/handlers/base/request_builder.py`、`src/services/provider/transport.py`
 3. 构建得到的 `provider_headers` 会存入上下文/变量，并传给用量记录逻辑写库到 `Usage.provider_request_headers`（可能脱敏）  
    参考：`src/api/handlers/base/chat_handler_base.py:459`、`src/models/database.py:340`、`src/services/usage/service.py:266`
 
@@ -45,15 +47,24 @@ Aether 选中某个 Provider Endpoint 后，向上游提供商发起 HTTP 请求
 1. **认证头不同**
    - 客户端 → Aether 的认证（例如 `Authorization`/`x-api-key`）用于 Aether 自己鉴权
    - Aether → Provider 的认证头由 Aether 基于 ProviderAPIKey **重新注入**，并且会过滤客户端侧敏感认证头，避免误透传  
-   参考：`src/api/handlers/base/request_builder.py:154`、`src/api/handlers/base/request_builder.py:165`
+   参考：`src/services/provider/transport.py`
 
 2. **安全/协议相关头被清理**
    `host`、`content-length`、`accept-encoding` 等在出站时会被过滤或重建，以避免上游兼容性问题  
-   参考：`src/api/handlers/base/request_builder.py:28`
+   参考：`src/api/handlers/base/endpoint_checker.py`
 
 3. **端点 Header 规则会修改出站 headers**
    提供商管理里的 endpoint headers 配置（新格式规则 add/remove/replace_*）会在出站阶段应用，从而导致差异  
-   参考：`src/api/handlers/base/request_builder.py:170`、`src/core/header_rules.py:1`
+   参考：`src/core/header_rules.py`、`src/api/handlers/base/endpoint_checker.py`
+
+## 3.1 “最高安全规则”：哪些 headers 永远不能被自定义规则覆盖？
+
+出站 headers 会遵守系统内置的“最高安全规则”（优先级最高）：
+
+1. **认证类 headers**：例如 `Authorization`、`x-api-key`、`x-goog-api-key`（由系统根据 Provider Key 注入并保护）。
+2. **协议/连接类 headers**：例如 `Host`、`Content-Length`、`Accept-Encoding` 等（由 HTTP 客户端栈重建或过滤）。
+
+因此，即使你在 Endpoint 的 headers 规则里添加了这些 headers，也可能被拦截或被系统值覆盖，这是预期行为。
 
 ## 4. 记录与脱敏：为什么有时为空/值看起来不完整
 
@@ -68,4 +79,3 @@ Aether 选中某个 Provider Endpoint 后，向上游提供商发起 HTTP 请求
 
 请求详情页会将两份 headers 做对比展示（Diff/并排），用于定位“哪些 headers 被添加/删除/改写”。  
 参考：`frontend/src/features/usage/components/RequestDetailDrawer/RequestHeadersContent.vue:18`
-
