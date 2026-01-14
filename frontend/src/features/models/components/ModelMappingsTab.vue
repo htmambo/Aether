@@ -382,41 +382,36 @@ function matchPattern(pattern: string, text: string): boolean {
   }
 }
 
-// 获取指定映射匹配的 Key 列表
+// 获取指定映射匹配的 Key 列表（使用全局 Key 白名单数据做实时匹配）
 function getMatchedKeysForMapping(mapping: string): MatchedKeyForMapping[] {
   if (!routingData.value || !mapping.trim()) return []
 
-  // 使用 Map 按 keyId 去重并合并匹配结果
   const keyMap = new Map<string, MatchedKeyForMapping>()
 
-  for (const provider of routingData.value.providers) {
-    for (const endpoint of provider.endpoints) {
-      for (const key of endpoint.keys) {
-        if (!key.allowed_models || key.allowed_models.length === 0) continue
+  // 使用 all_keys_whitelist 进行实时匹配（包含所有 Provider 的 Key）
+  for (const keyItem of routingData.value.all_keys_whitelist || []) {
+    if (!keyItem.allowed_models || keyItem.allowed_models.length === 0) continue
 
-        const matchedModels: string[] = []
-        for (const allowedModel of key.allowed_models) {
-          if (matchPattern(mapping, allowedModel)) {
-            matchedModels.push(allowedModel)
-          }
-        }
+    const matchedModels: string[] = []
+    for (const allowedModel of keyItem.allowed_models) {
+      if (matchPattern(mapping, allowedModel)) {
+        matchedModels.push(allowedModel)
+      }
+    }
 
-        if (matchedModels.length > 0) {
-          const existing = keyMap.get(key.id)
-          if (existing) {
-            // 合并匹配结果（去重）
-            const mergedModels = new Set([...existing.matchedModels, ...matchedModels])
-            existing.matchedModels = Array.from(mergedModels)
-          } else {
-            keyMap.set(key.id, {
-              keyId: key.id,
-              keyName: key.name,
-              maskedKey: key.masked_key,
-              providerName: provider.name,
-              matchedModels,
-            })
-          }
-        }
+    if (matchedModels.length > 0) {
+      const existing = keyMap.get(keyItem.key_id)
+      if (existing) {
+        const mergedModels = new Set([...existing.matchedModels, ...matchedModels])
+        existing.matchedModels = Array.from(mergedModels)
+      } else {
+        keyMap.set(keyItem.key_id, {
+          keyId: keyItem.key_id,
+          keyName: keyItem.key_name,
+          maskedKey: keyItem.masked_key,
+          providerName: keyItem.provider_name,
+          matchedModels,
+        })
       }
     }
   }
