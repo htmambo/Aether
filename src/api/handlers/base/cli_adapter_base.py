@@ -600,7 +600,7 @@ class CliAdapterBase(ApiAdapter):
             url=url,
             headers=headers,
             json_body=body,
-            api_format=cls.name,
+            api_format=cls.FORMAT_ID,
             timeout=timeout,
             # 用量计算参数（现在强制记录）
             db=db,

@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from src.api.handlers.base.utils import filter_proxy_response_headers
 from src.core.logger import logger
 from src.models.database import ApiKey, User
 from src.services.request.result import RequestResult
@@ -94,7 +95,7 @@ class UsageRecorder:
             target_model = metadata.model
 
         # 非流式成功时，返回给客户端的是提供商响应头（透传）+ content-type
-        client_response_headers = dict(metadata.provider_response_headers) if metadata.provider_response_headers else {}
+        client_response_headers = filter_proxy_response_headers(metadata.provider_response_headers)
         client_response_headers["content-type"] = "application/json"
 
         await UsageService.record_usage(

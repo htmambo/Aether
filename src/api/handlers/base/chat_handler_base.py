@@ -35,7 +35,7 @@ from src.api.handlers.base.response_parser import ResponseParser
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.stream_processor import StreamProcessor
 from src.api.handlers.base.stream_telemetry import StreamTelemetryRecorder
-from src.api.handlers.base.utils import build_sse_headers
+from src.api.handlers.base.utils import build_sse_headers, filter_proxy_response_headers
 from src.config.settings import config
 from src.core.error_utils import extract_client_error_message
 from src.core.exceptions import (
@@ -387,7 +387,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             # 透传提供商的响应头给客户端
             # 同时添加必要的 SSE 头以确保流式传输正常工作
-            client_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+            client_headers = filter_proxy_response_headers(ctx.response_headers)
             # 添加/覆盖 SSE 必需的头
             client_headers.update(build_sse_headers())
             client_headers["content-type"] = "text/event-stream"
@@ -429,8 +429,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             provider_api_format=str(endpoint.api_format) if endpoint.api_format else None,
         )
 
-        # 获取模型映射（优先使用别名匹配到的模型，其次是 Provider 级别的映射）
-        mapped_model = candidate.alias_matched_model if candidate else None
+        # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
+        mapped_model = candidate.mapping_matched_model if candidate else None
         if not mapped_model:
             mapped_model = await self._get_mapped_model(
                 source_model=ctx.model,
@@ -663,8 +663,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             provider_name = str(provider.name)
 
-            # 获取模型映射（优先使用别名匹配到的模型，其次是 Provider 级别的映射）
-            mapped_model = candidate.alias_matched_model if candidate else None
+            # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
+            mapped_model = candidate.mapping_matched_model if candidate else None
             if not mapped_model:
                 mapped_model = await self._get_mapped_model(
                     source_model=model,
@@ -849,7 +849,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             # 非流式成功时，返回给客户端的是提供商响应头（透传）
             # JSONResponse 会自动设置 content-type，但我们记录实际返回的完整头
-            client_response_headers = dict(response_headers) if response_headers else {}
+            client_response_headers = filter_proxy_response_headers(response_headers)
             client_response_headers["content-type"] = "application/json"
 
             total_cost = await self.telemetry.record_success(
@@ -888,7 +888,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             return JSONResponse(
                 status_code=status_code,
                 content=response_json,
-                headers=response_headers if response_headers else None,
+                headers=client_response_headers,
             )
 
         except Exception as e:

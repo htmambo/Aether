@@ -212,6 +212,10 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
         if not key:
             raise NotFoundException(f"Key {self.key_id} 不存在")
 
+        # 检查是否开启了 auto_fetch_models（用于后续立即获取模型）
+        auto_fetch_enabled_before = key.auto_fetch_models
+        auto_fetch_enabled_after = self.key_data.auto_fetch_models if "auto_fetch_models" in self.key_data.model_fields_set else auto_fetch_enabled_before
+
         update_data = self.key_data.model_dump(exclude_unset=True)
         if "api_key" in update_data:
             update_data["api_key"] = crypto_service.encrypt(update_data["api_key"])
@@ -223,12 +227,10 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
                 update_data["learned_rpm_limit"] = None
                 logger.info("Key %s 切换为自适应 RPM 模式", self.key_id)
 
-        # 统一处理 allowed_models：空列表/空字典 -> None（表示不限制）
+        # 统一处理 allowed_models：空列表 -> None（表示不限制）
         if "allowed_models" in update_data:
             am = update_data["allowed_models"]
-            if am is not None and (
-                (isinstance(am, list) and len(am) == 0) or (isinstance(am, dict) and len(am) == 0)
-            ):
+            if isinstance(am, list) and len(am) == 0:
                 update_data["allowed_models"] = None
 
         # 统一处理 locked_models：空列表 -> None
@@ -243,6 +245,38 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
 
         db.commit()
         db.refresh(key)
+
+        # 处理 auto_fetch_models 的开启和关闭
+        if not auto_fetch_enabled_before and auto_fetch_enabled_after:
+            # 刚刚开启了 auto_fetch_models，立即触发一次模型获取
+            logger.info("[AUTO_FETCH] Key %s 开启自动获取模型，立即触发模型获取", self.key_id)
+            try:
+                from src.services.model.fetch_scheduler import get_model_fetch_scheduler
+                scheduler = get_model_fetch_scheduler()
+                # 在后台异步执行，不阻塞当前请求
+                import asyncio
+                asyncio.create_task(scheduler._fetch_models_for_key_by_id(self.key_id))
+            except Exception as e:
+                logger.error(f"触发模型获取失败: {e}")
+                # 不抛出异常，避免影响 Key 更新操作
+        elif auto_fetch_enabled_before and not auto_fetch_enabled_after:
+            # 关闭了 auto_fetch_models，只保留锁定的模型，清除自动获取的模型
+            locked = key.locked_models or []
+            if locked:
+                key.allowed_models = locked
+                logger.info(
+                    "[AUTO_FETCH] Key %s 关闭自动获取模型，保留 %d 个锁定模型",
+                    self.key_id,
+                    len(locked),
+                )
+            else:
+                key.allowed_models = None
+                logger.info(
+                    "[AUTO_FETCH] Key %s 关闭自动获取模型，无锁定模型，清空 allowed_models",
+                    self.key_id,
+                )
+            db.commit()
+            db.refresh(key)
 
         # 任何字段更新都清除缓存，确保缓存一致性
         # 包括 is_active、allowed_models、capabilities 等影响权限和行为的字段
@@ -573,5 +607,18 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             f"[OK] 添加 Key: Provider={self.provider_id}, "
             f"Formats={self.key_data.api_formats}, Key=***{self.key_data.api_key[-4:]}, ID={new_key.id}"
         )
+
+        # 如果开启了 auto_fetch_models，立即触发一次模型获取
+        if self.key_data.auto_fetch_models:
+            logger.info("[AUTO_FETCH] 新 Key %s 开启自动获取模型，立即触发模型获取", new_key.id)
+            try:
+                from src.services.model.fetch_scheduler import get_model_fetch_scheduler
+                scheduler = get_model_fetch_scheduler()
+                # 在后台异步执行，不阻塞当前请求
+                import asyncio
+                asyncio.create_task(scheduler._fetch_models_for_key_by_id(new_key.id))
+            except Exception as e:
+                logger.error(f"触发模型获取失败: {e}")
+                # 不抛出异常，避免影响 Key 创建操作
 
         return _build_key_response(new_key, api_key_plain=self.key_data.api_key)

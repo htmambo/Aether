@@ -94,6 +94,40 @@ def build_sse_headers(extra_headers: Optional[Dict[str, str]] = None) -> Dict[st
     return headers
 
 
+_PROXY_RESPONSE_HEADER_BLOCKLIST = frozenset(
+    {
+        # Body-dependent headers: 我们会重编码响应体（JSONResponse / SSE），不能透传上游值
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+        "content-type",
+        # Hop-by-hop headers (RFC 7230)
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "upgrade",
+    }
+)
+
+
+def filter_proxy_response_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """
+    过滤上游响应头中不应透传给客户端的字段。
+
+    主要用于“解析/转换后再返回”的场景：
+    - 非流式：我们会 `resp.json()` 后再由 `JSONResponse` 重新序列化
+    - 流式：我们会解析/重组 SSE 行再输出
+
+    如果透传上游的 `content-length/content-encoding/...`，会导致客户端解码失败或等待更多字节。
+    """
+    if not headers:
+        return {}
+    return {k: v for k, v in headers.items() if k.lower() not in _PROXY_RESPONSE_HEADER_BLOCKLIST}
+
+
 def check_html_response(line: str) -> bool:
     """
     检查行是否为 HTML 响应（base_url 配置错误的常见症状）

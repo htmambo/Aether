@@ -44,6 +44,7 @@ from src.api.handlers.base.utils import (
     build_sse_headers,
     check_html_response,
     check_prefetched_response_error,
+    filter_proxy_response_headers,
 )
 from src.config.constants import StreamDefaults
 from src.config.settings import config
@@ -381,7 +382,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             # 透传提供商的响应头给客户端
             # 同时添加必要的 SSE 头以确保流式传输正常工作
-            client_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+            client_headers = filter_proxy_response_headers(ctx.response_headers)
             # 添加/覆盖 SSE 必需的头
             client_headers.update(build_sse_headers())
             client_headers["content-type"] = "text/event-stream"
@@ -436,8 +437,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
         ctx.provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
         ctx.client_api_format = ctx.api_format  # 已在 process_stream 中设置
 
-        # 获取模型映射（优先使用别名匹配到的模型，其次是 Provider 级别的映射）
-        mapped_model = candidate.alias_matched_model if candidate else None
+        # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
+        mapped_model = candidate.mapping_matched_model if candidate else None
         if not mapped_model:
             mapped_model = await self._get_mapped_model(
                 source_model=ctx.model,
@@ -1379,7 +1380,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     self._finalize_stream_metadata(ctx)
 
                     # 流式成功时，返回给客户端的是提供商响应头 + SSE 必需头
-                    client_response_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+                    client_response_headers = filter_proxy_response_headers(ctx.response_headers)
                     client_response_headers.update({
                         "Cache-Control": "no-cache, no-transform",
                         "X-Accel-Buffering": "no",
@@ -1437,6 +1438,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     if ctx.status_code and ctx.status_code >= 400:
                         # 请求链路追踪使用 upstream_response（原始响应），回退到 error_message（友好消息）
                         trace_error_message = ctx.upstream_response or ctx.error_message or f"HTTP {ctx.status_code}"
+                        extra_data = {
+                            "stream_completed": False,
+                            "chunk_count": ctx.chunk_count,
+                            "data_count": ctx.data_count,
+                        }
+                        if ctx.first_byte_time_ms is not None:
+                            extra_data["first_byte_time_ms"] = ctx.first_byte_time_ms
                         RequestCandidateService.mark_candidate_failed(
                             db=bg_db,
                             candidate_id=ctx.attempt_id,
@@ -1446,23 +1454,22 @@ class CliMessageHandlerBase(BaseMessageHandler):
                             error_message=trace_error_message,
                             status_code=ctx.status_code,
                             latency_ms=response_time_ms,
-                            extra_data={
-                                "stream_completed": False,
-                                "chunk_count": ctx.chunk_count,
-                                "data_count": ctx.data_count,
-                            },
+                            extra_data=extra_data,
                         )
                     else:
+                        extra_data = {
+                            "stream_completed": True,
+                            "chunk_count": ctx.chunk_count,
+                            "data_count": ctx.data_count,
+                        }
+                        if ctx.first_byte_time_ms is not None:
+                            extra_data["first_byte_time_ms"] = ctx.first_byte_time_ms
                         RequestCandidateService.mark_candidate_success(
                             db=bg_db,
                             candidate_id=ctx.attempt_id,
                             status_code=ctx.status_code,
                             latency_ms=response_time_ms,
-                            extra_data={
-                                "stream_completed": True,
-                                "chunk_count": ctx.chunk_count,
-                                "data_count": ctx.data_count,
-                            },
+                            extra_data=extra_data,
                         )
 
             finally:
@@ -1563,8 +1570,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
 
-            # 获取模型映射（优先使用别名匹配到的模型，其次是 Provider 级别的映射）
-            mapped_model = candidate.alias_matched_model if candidate else None
+            # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
+            mapped_model = candidate.mapping_matched_model if candidate else None
             if not mapped_model:
                 mapped_model = await self._get_mapped_model(
                     source_model=model,
@@ -1769,7 +1776,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             actual_request_body = provider_request_body or original_request_body
 
             # 非流式成功时，返回给客户端的是提供商响应头（透传）
-            client_response_headers = dict(response_headers) if response_headers else {}
+            client_response_headers = filter_proxy_response_headers(response_headers)
             client_response_headers["content-type"] = "application/json"
 
             total_cost = await self.telemetry.record_success(
@@ -1805,7 +1812,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             return JSONResponse(
                 status_code=status_code,
                 content=response_json,
-                headers=response_headers if response_headers else None,
+                headers=client_response_headers,
             )
 
         except Exception as e:

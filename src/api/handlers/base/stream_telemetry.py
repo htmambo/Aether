@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.api.handlers.base.base_handler import MessageTelemetry
 from src.api.handlers.base.stream_context import StreamContext
+from src.api.handlers.base.utils import filter_proxy_response_headers
 from src.config.settings import config
 from src.core.logger import logger
 from src.database import get_db
@@ -155,7 +156,7 @@ class StreamTelemetryRecorder:
     ) -> None:
         """记录成功的请求"""
         # 流式成功时，返回给客户端的是提供商响应头 + SSE 必需头
-        client_response_headers = dict(ctx.response_headers) if ctx.response_headers else {}
+        client_response_headers = filter_proxy_response_headers(ctx.response_headers)
         client_response_headers.update({
             "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
@@ -240,16 +241,20 @@ class StreamTelemetryRecorder:
 
         from src.services.request.candidate import RequestCandidateService
 
+        extra_data: Dict[str, Any] = {
+            "stream_completed": ctx.is_success(),
+            "data_count": ctx.data_count,
+        }
+        if ctx.first_byte_time_ms is not None:
+            extra_data["first_byte_time_ms"] = ctx.first_byte_time_ms
+
         if ctx.is_success():
             RequestCandidateService.mark_candidate_success(
                 db=db,
                 candidate_id=ctx.attempt_id,
                 status_code=ctx.status_code,
                 latency_ms=response_time_ms,
-                extra_data={
-                    "stream_completed": True,
-                    "data_count": ctx.data_count,
-                },
+                extra_data=extra_data,
             )
         else:
             error_type = "client_disconnected" if ctx.status_code == 499 else "stream_error"
@@ -262,10 +267,7 @@ class StreamTelemetryRecorder:
                 error_message=trace_error_message,
                 status_code=ctx.status_code,
                 latency_ms=response_time_ms,
-                extra_data={
-                    "stream_completed": False,
-                    "data_count": ctx.data_count,
-                },
+                extra_data=extra_data,
             )
 
     async def _update_usage_status_on_error(

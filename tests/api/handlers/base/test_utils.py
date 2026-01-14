@@ -2,7 +2,11 @@
 
 import pytest
 
-from src.api.handlers.base.utils import build_sse_headers, extract_cache_creation_tokens
+from src.api.handlers.base.utils import (
+    build_sse_headers,
+    extract_cache_creation_tokens,
+    filter_proxy_response_headers,
+)
 
 
 class TestExtractCacheCreationTokens:
@@ -102,3 +106,32 @@ class TestBuildSSEHeaders:
         headers = build_sse_headers({"X-Test": "1", "Cache-Control": "custom"})
         assert headers["X-Test"] == "1"
         assert headers["Cache-Control"] == "custom"
+
+
+class TestFilterProxyResponseHeaders:
+    def test_none_returns_empty(self) -> None:
+        assert filter_proxy_response_headers(None) == {}
+
+    def test_filters_blocklisted_headers_case_insensitive(self) -> None:
+        headers = {
+            "Content-Length": "123",
+            "content-encoding": "gzip",
+            "Transfer-Encoding": "chunked",
+            "Connection": "keep-alive",
+            "Keep-Alive": "timeout=5",
+            "Content-Type": "application/json",
+            "X-Request-Id": "abc",
+            "Anthropic-RateLimit-Requests-Remaining": "10",
+        }
+
+        result = filter_proxy_response_headers(headers)
+
+        assert "Content-Length" not in result
+        assert "content-encoding" not in result
+        assert "Transfer-Encoding" not in result
+        assert "Connection" not in result
+        assert "Keep-Alive" not in result
+        assert "Content-Type" not in result
+
+        assert result["X-Request-Id"] == "abc"
+        assert result["Anthropic-RateLimit-Requests-Remaining"] == "10"
