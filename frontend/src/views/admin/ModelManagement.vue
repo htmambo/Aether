@@ -421,8 +421,6 @@
       ref="modelDetailDrawerRef"
       :model="selectedModel"
       :open="!!selectedModel"
-      :providers="selectedModelProviders"
-      :loading-providers="loadingModelProviders"
       :has-blocking-dialog-open="hasBlockingDialogOpen"
       :capabilities="capabilities"
       @update:open="handleDrawerOpenChange"
@@ -432,7 +430,6 @@
       @edit-provider="openEditProviderImplementation"
       @delete-provider="confirmDeleteProviderImplementation"
       @toggle-provider-status="toggleProviderStatus"
-      @refresh-providers="refreshSelectedModelProviders"
     />
 
     <!-- 批量添加关联提供商对话框 -->
@@ -996,13 +993,6 @@ async function loadModelProviders(_globalModelId: string) {
     selectedModelProviders.value = []
   } finally {
     loadingModelProviders.value = false
-  }
-}
-
-// 刷新当前选中模型的关联提供商
-async function refreshSelectedModelProviders() {
-  if (selectedModel.value) {
-    await loadModelProviders(selectedModel.value.id)
   }
 }
 

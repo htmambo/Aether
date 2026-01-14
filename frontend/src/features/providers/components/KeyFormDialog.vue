@@ -8,7 +8,7 @@
     @update:model-value="handleDialogUpdate"
   >
     <form
-      class="space-y-4"
+      class="space-y-3"
       autocomplete="off"
       @submit.prevent="handleSave"
     >
@@ -219,6 +219,23 @@
           </button>
         </div>
       </div>
+
+      <!-- 自动获取模型 -->
+      <div class="flex items-center justify-between py-2 px-3 rounded-md border border-border/60 bg-muted/30">
+        <div class="space-y-0.5">
+          <Label class="text-sm font-medium">自动获取模型</Label>
+          <p class="text-xs text-muted-foreground">
+            系统将定时从上游获取可用模型, 但无法默认接受提供商模型
+          </p>
+          <p
+            v-if="showAutoFetchWarning"
+            class="text-xs text-amber-600 dark:text-amber-400"
+          >
+            已配置的模型权限将在下次获取时被覆盖
+          </p>
+        </div>
+        <Switch v-model="form.auto_fetch_models" />
+      </div>
     </form>
 
     <template #footer>
@@ -240,7 +257,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { Dialog, Button, Input, Label } from '@/components/ui'
+import { Dialog, Button, Input, Label, Switch } from '@/components/ui'
 import { Key, SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
@@ -277,6 +294,21 @@ const { success, error: showError } = useToast()
 // 排序后的可用 API 格式列表
 const sortedApiFormats = computed(() => sortApiFormats(props.availableApiFormats))
 
+// 显示自动获取模型警告：编辑模式下，原本未启用但现在启用，且已有 allowed_models
+const showAutoFetchWarning = computed(() => {
+  if (!props.editingKey) return false
+  // 原本已启用，不需要警告
+  if (props.editingKey.auto_fetch_models) return false
+  // 现在未启用，不需要警告
+  if (!form.value.auto_fetch_models) return false
+  // 检查是否有已配置的模型权限
+  const allowedModels = props.editingKey.allowed_models
+  if (!allowedModels) return false
+  if (Array.isArray(allowedModels) && allowedModels.length === 0) return false
+  if (typeof allowedModels === 'object' && Object.keys(allowedModels).length === 0) return false
+  return true
+})
+
 const isOpen = computed(() => props.open)
 const saving = ref(false)
 const formNonce = ref(createFieldNonce())
@@ -303,7 +335,8 @@ const form = ref({
   max_probe_interval_minutes: 32,
   note: '',
   is_active: true,
-  capabilities: {} as Record<string, boolean>
+  capabilities: {} as Record<string, boolean>,
+  auto_fetch_models: false
 })
 
 // 加载能力列表
@@ -404,7 +437,8 @@ function resetForm() {
     max_probe_interval_minutes: 32,
     note: '',
     is_active: true,
-    capabilities: {}
+    capabilities: {},
+    auto_fetch_models: false
   }
 }
 
@@ -435,7 +469,8 @@ function loadKeyData() {
     max_probe_interval_minutes: props.editingKey.max_probe_interval_minutes ?? 32,
     note: props.editingKey.note || '',
     is_active: props.editingKey.is_active,
-    capabilities: { ...(props.editingKey.capabilities || {}) }
+    capabilities: { ...(props.editingKey.capabilities || {}) },
+    auto_fetch_models: props.editingKey.auto_fetch_models ?? false
   }
 }
 
@@ -514,7 +549,8 @@ async function handleSave() {
         max_probe_interval_minutes: form.value.max_probe_interval_minutes,
         note: form.value.note,
         is_active: form.value.is_active,
-        capabilities: capabilitiesData
+        capabilities: capabilitiesData,
+        auto_fetch_models: form.value.auto_fetch_models
       }
 
       if (form.value.api_key.trim()) {
@@ -535,7 +571,8 @@ async function handleSave() {
         cache_ttl_minutes: form.value.cache_ttl_minutes,
         max_probe_interval_minutes: form.value.max_probe_interval_minutes,
         note: form.value.note,
-        capabilities: capabilitiesData || undefined
+        capabilities: capabilitiesData || undefined,
+        auto_fetch_models: form.value.auto_fetch_models
       })
       success('密钥已添加', '成功')
       // 添加模式：不关闭对话框，只清除名称和密钥以便继续添加

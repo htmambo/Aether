@@ -1079,6 +1079,12 @@ class ProviderAPIKey(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=True)  # 过期时间
 
+    # 自动获取模型配置
+    auto_fetch_models = Column(Boolean, default=False, nullable=False)  # 是否启用自动获取模型
+    last_models_fetch_at = Column(DateTime(timezone=True), nullable=True)  # 最后获取时间
+    last_models_fetch_error = Column(Text, nullable=True)  # 最后获取错误信息
+    locked_models = Column(JSON, nullable=True)  # 被锁定的模型列表（刷新时不会被删除）
+
     # 时间戳
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

@@ -166,10 +166,12 @@ async def lifespan(app: FastAPI):
     logger.info("启动月卡额度重置调度器...")
     from src.services.system.cleanup_scheduler import get_cleanup_scheduler
     from src.services.usage.quota_scheduler import get_quota_scheduler
+    from src.services.model.fetch_scheduler import get_model_fetch_scheduler
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     quota_scheduler = get_quota_scheduler()
     cleanup_scheduler = get_cleanup_scheduler()
+    model_fetch_scheduler = get_model_fetch_scheduler()
     task_coordinator = StartupTaskCoordinator(redis_client)
 
     # 启动额度调度器
@@ -188,6 +190,15 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("检测到其他 worker 已运行清理调度器，本实例跳过")
         cleanup_scheduler = None
+
+    # 启动模型自动获取调度器
+    model_fetch_scheduler_active = await task_coordinator.acquire("model_fetch_scheduler")
+    if model_fetch_scheduler_active:
+        logger.info("启动模型自动获取调度器...")
+        await model_fetch_scheduler.start()
+    else:
+        logger.info("检测到其他 worker 已运行模型获取调度器，本实例跳过")
+        model_fetch_scheduler = None
 
     # 启动统一的定时任务调度器
     from src.services.system.scheduler import get_scheduler
@@ -219,6 +230,12 @@ async def lifespan(app: FastAPI):
         await quota_scheduler.stop()
     if task_coordinator:
         await task_coordinator.release("quota_scheduler")
+
+    # 停止模型自动获取调度器
+    if model_fetch_scheduler:
+        logger.info("停止模型自动获取调度器...")
+        await model_fetch_scheduler.stop()
+        await task_coordinator.release("model_fetch_scheduler")
 
     # 停止统一的定时任务调度器
     logger.info("停止定时任务调度器...")

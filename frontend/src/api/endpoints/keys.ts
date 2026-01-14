@@ -95,6 +95,7 @@ export async function addProviderKey(
     allowed_models?: AllowedModels
     capabilities?: Record<string, boolean>
     note?: string
+    auto_fetch_models?: boolean  // 是否启用自动获取模型
   }
 ): Promise<EndpointAPIKey> {
   const response = await client.post(`/api/admin/endpoints/providers/${providerId}/keys`, data)
@@ -118,9 +119,11 @@ export async function updateProviderKey(
     cache_ttl_minutes: number
     max_probe_interval_minutes: number
     allowed_models: AllowedModels
+    locked_models: string[]  // 被锁定的模型列表
     capabilities: Record<string, boolean> | null
     is_active: boolean
     note: string
+    auto_fetch_models: boolean  // 是否启用自动获取模型
   }>
 ): Promise<EndpointAPIKey> {
   const response = await client.put(`/api/admin/endpoints/keys/${keyId}`, data)

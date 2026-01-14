@@ -182,6 +182,11 @@ export interface EndpointAPIKey {
   half_open_successes?: number
   half_open_failures?: number
   request_results_window?: Array<{ ts: number; ok: boolean }>  // 请求结果滑动窗口
+  // 自动获取模型
+  auto_fetch_models?: boolean  // 是否启用自动获取模型
+  last_models_fetch_at?: string  // 最后获取模型时间
+  last_models_fetch_error?: string  // 最后获取模型错误信息
+  locked_models?: string[]  // 被锁定的模型列表
 }
 
 // 按格式的健康度数据
@@ -219,6 +224,8 @@ export interface EndpointAPIKeyUpdate {
   max_probe_interval_minutes?: number
   note?: string
   is_active?: boolean
+  auto_fetch_models?: boolean  // 是否启用自动获取模型
+  locked_models?: string[]  // 被锁定的模型列表
 }
 
 export interface EndpointHealthDetail {

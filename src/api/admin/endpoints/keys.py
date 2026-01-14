@@ -29,6 +29,7 @@ from src.models.endpoint_models import (
 router = APIRouter(tags=["Provider Keys"])
 pipeline = ApiRequestPipeline()
 
+
 @router.put("/keys/{key_id}", response_model=EndpointAPIKeyResponse)
 async def update_endpoint_key(
     key_id: str,
@@ -226,10 +227,15 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
         if "allowed_models" in update_data:
             am = update_data["allowed_models"]
             if am is not None and (
-                (isinstance(am, list) and len(am) == 0)
-                or (isinstance(am, dict) and len(am) == 0)
+                (isinstance(am, list) and len(am) == 0) or (isinstance(am, dict) and len(am) == 0)
             ):
                 update_data["allowed_models"] = None
+
+        # 统一处理 locked_models：空列表 -> None
+        if "locked_models" in update_data:
+            lm = update_data["locked_models"]
+            if isinstance(lm, list) and len(lm) == 0:
+                update_data["locked_models"] = None
 
         for field, value in update_data.items():
             setattr(key, field, value)
@@ -430,9 +436,7 @@ def _build_key_response(
 
     # 计算整体健康度（取所有格式中的最低值）
     if health_by_format:
-        health_scores = [
-            float(h.get("health_score") or 1.0) for h in health_by_format.values()
-        ]
+        health_scores = [float(h.get("health_score") or 1.0) for h in health_by_format.values()]
         min_health_score = min(health_scores) if health_scores else 1.0
         # 取最大的连续失败次数
         max_consecutive = max(
@@ -441,9 +445,7 @@ def _build_key_response(
         )
         # 取最近的失败时间
         failure_times = [
-            h.get("last_failure_at")
-            for h in health_by_format.values()
-            if h.get("last_failure_at")
+            h.get("last_failure_at") for h in health_by_format.values() if h.get("last_failure_at")
         ]
         last_failure = max(failure_times) if failure_times else None
     else:
@@ -462,7 +464,11 @@ def _build_key_response(
             "avg_response_time_ms": round(avg_response_time_ms, 2),
             "is_adaptive": is_adaptive,
             "effective_limit": (
-                (key.learned_rpm_limit if key.learned_rpm_limit is not None else RPMDefaults.INITIAL_LIMIT)
+                (
+                    key.learned_rpm_limit
+                    if key.learned_rpm_limit is not None
+                    else RPMDefaults.INITIAL_LIMIT
+                )
                 if is_adaptive
                 else key.rpm_limit
             ),
@@ -545,6 +551,8 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             capabilities=self.key_data.capabilities if self.key_data.capabilities else None,
             cache_ttl_minutes=self.key_data.cache_ttl_minutes,
             max_probe_interval_minutes=self.key_data.max_probe_interval_minutes,
+            auto_fetch_models=self.key_data.auto_fetch_models,
+            locked_models=self.key_data.locked_models if self.key_data.locked_models else None,
             request_count=0,
             success_count=0,
             error_count=0,

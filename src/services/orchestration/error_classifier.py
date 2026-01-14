@@ -241,7 +241,7 @@ class ErrorClassifier:
 
         return result
 
-    def _is_client_error(self, error_text: Optional[str]) -> bool:
+    def is_client_error(self, error_text: Optional[str]) -> bool:
         """
         检测错误响应是否为客户端错误（不应重试）
 
@@ -471,7 +471,7 @@ class ErrorClassifier:
             )
 
         # 400 错误：检查是否为客户端请求错误（不应重试）
-        if status == 400 and self._is_client_error(error_response_text):
+        if status == 400 and self.is_client_error(error_response_text):
             logger.info(f"检测到客户端请求错误，不进行重试: {extracted_message}")
             return UpstreamClientException(
                 message=extracted_message or "请求无效",

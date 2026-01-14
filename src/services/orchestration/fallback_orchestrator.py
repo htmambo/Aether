@@ -33,6 +33,7 @@ from src.core.enums import APIFormat
 from src.core.error_utils import extract_error_message
 from src.core.exceptions import (
     ConcurrencyLimitError,
+    EmbeddedErrorException,
     ProviderNotAvailableException,
     UpstreamClientException,
 )
@@ -352,6 +353,54 @@ class FallbackOrchestrator:
                 skip_reason=f"并发限制: {str(cause)}",
             )
             return "break"
+
+        # 处理嵌入式错误（流式响应中检测到的错误）
+        # 需要检查错误消息是否为客户端错误（如 prompt is too long），这类错误不应重试
+        if isinstance(cause, EmbeddedErrorException):
+            error_message = cause.error_message or ""
+            if self._error_classifier.is_client_error(error_message):
+                logger.warning(
+                    f"  [{request_id}] 嵌入式客户端错误，停止重试: {error_message[:200]}"
+                )
+                # 转换为 UpstreamClientException
+                client_error = UpstreamClientException(
+                    message=error_message or "请求无效",
+                    provider_name=str(provider.name),
+                    status_code=200,  # 嵌入式错误的 HTTP 状态码通常是 200
+                    upstream_error=error_message,
+                )
+                RequestCandidateService.mark_candidate_failed(
+                    db=self.db,
+                    candidate_id=candidate_record_id,
+                    error_type="UpstreamClientException",
+                    error_message=error_message,
+                    status_code=200,
+                    latency_ms=elapsed_ms,
+                    concurrent_requests=captured_key_concurrent,
+                )
+                client_error.request_metadata = {
+                    "provider": provider.name,
+                    "provider_id": str(provider.id),
+                    "provider_endpoint_id": str(endpoint.id),
+                    "provider_api_key_id": str(key.id),
+                    "api_format": api_format.value if hasattr(api_format, "value") else str(api_format),
+                }
+                raise client_error
+            else:
+                # 非客户端错误（服务端错误），记录失败并允许重试/故障转移
+                logger.warning(
+                    f"  [{request_id}] 嵌入式服务端错误，尝试重试: {error_message[:200]}"
+                )
+                RequestCandidateService.mark_candidate_failed(
+                    db=self.db,
+                    candidate_id=candidate_record_id,
+                    error_type="EmbeddedErrorException",
+                    error_message=error_message,
+                    status_code=200,
+                    latency_ms=elapsed_ms,
+                    concurrent_requests=captured_key_concurrent,
+                )
+                return "continue" if has_retry_left else "break"
 
         if isinstance(cause, httpx.HTTPStatusError):
             status_code = cause.response.status_code

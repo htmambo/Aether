@@ -61,9 +61,11 @@
                 />
                 <!-- 模型信息 -->
                 <div class="text-left flex-1 min-w-0">
-                  <span class="font-semibold text-sm">
-                    {{ model.global_model_display_name || model.provider_model_name }}
-                  </span>
+                  <div class="flex items-center gap-1.5">
+                    <span class="font-semibold text-sm">
+                      {{ model.global_model_display_name || model.provider_model_name }}
+                    </span>
+                  </div>
                   <div class="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                     <span class="font-mono truncate">{{ model.provider_model_name }}</span>
                     <button

@@ -176,6 +176,13 @@
                     </span>
                   </div>
                   <div
+                    v-if="currentAttempt.extra_data?.first_byte_time_ms != null"
+                    class="info-item"
+                  >
+                    <span class="info-label">首字 (TTFB)</span>
+                    <span class="info-value mono">{{ formatLatency(currentAttempt.extra_data.first_byte_time_ms) }}</span>
+                  </div>
+                  <div
                     v-if="currentAttempt.key_name || currentAttempt.key_id"
                     class="info-item"
                   >
@@ -749,7 +756,7 @@ const getStatusColorClass = (status: string) => {
 .minimal-track {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 64px;
   padding: 2rem;
   overflow-x: auto;

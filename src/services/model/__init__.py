@@ -5,6 +5,7 @@
 """
 
 from src.services.model.cost import ModelCostService
+from src.services.model.fetch_scheduler import ModelFetchScheduler, get_model_fetch_scheduler
 from src.services.model.global_model import GlobalModelService
 from src.services.model.service import ModelService
 
@@ -12,4 +13,6 @@ __all__ = [
     "ModelService",
     "GlobalModelService",
     "ModelCostService",
+    "ModelFetchScheduler",
+    "get_model_fetch_scheduler",
 ]
