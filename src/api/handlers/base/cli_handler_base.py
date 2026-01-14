@@ -1438,6 +1438,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     if ctx.status_code and ctx.status_code >= 400:
                         # 请求链路追踪使用 upstream_response（原始响应），回退到 error_message（友好消息）
                         trace_error_message = ctx.upstream_response or ctx.error_message or f"HTTP {ctx.status_code}"
+                        extra_data = {
+                            "stream_completed": False,
+                            "chunk_count": ctx.chunk_count,
+                            "data_count": ctx.data_count,
+                        }
+                        if ctx.first_byte_time_ms is not None:
+                            extra_data["first_byte_time_ms"] = ctx.first_byte_time_ms
                         RequestCandidateService.mark_candidate_failed(
                             db=bg_db,
                             candidate_id=ctx.attempt_id,
@@ -1447,23 +1454,22 @@ class CliMessageHandlerBase(BaseMessageHandler):
                             error_message=trace_error_message,
                             status_code=ctx.status_code,
                             latency_ms=response_time_ms,
-                            extra_data={
-                                "stream_completed": False,
-                                "chunk_count": ctx.chunk_count,
-                                "data_count": ctx.data_count,
-                            },
+                            extra_data=extra_data,
                         )
                     else:
+                        extra_data = {
+                            "stream_completed": True,
+                            "chunk_count": ctx.chunk_count,
+                            "data_count": ctx.data_count,
+                        }
+                        if ctx.first_byte_time_ms is not None:
+                            extra_data["first_byte_time_ms"] = ctx.first_byte_time_ms
                         RequestCandidateService.mark_candidate_success(
                             db=bg_db,
                             candidate_id=ctx.attempt_id,
                             status_code=ctx.status_code,
                             latency_ms=response_time_ms,
-                            extra_data={
-                                "stream_completed": True,
-                                "chunk_count": ctx.chunk_count,
-                                "data_count": ctx.data_count,
-                            },
+                            extra_data=extra_data,
                         )
 
             finally:

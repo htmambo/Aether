@@ -176,6 +176,13 @@
                     </span>
                   </div>
                   <div
+                    v-if="currentAttempt.extra_data?.first_byte_time_ms != null"
+                    class="info-item"
+                  >
+                    <span class="info-label">首字 (TTFB)</span>
+                    <span class="info-value mono">{{ formatLatency(currentAttempt.extra_data.first_byte_time_ms) }}</span>
+                  </div>
+                  <div
                     v-if="currentAttempt.key_name || currentAttempt.key_id"
                     class="info-item"
                   >

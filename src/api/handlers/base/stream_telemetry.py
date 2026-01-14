@@ -241,16 +241,20 @@ class StreamTelemetryRecorder:
 
         from src.services.request.candidate import RequestCandidateService
 
+        extra_data: Dict[str, Any] = {
+            "stream_completed": ctx.is_success(),
+            "data_count": ctx.data_count,
+        }
+        if ctx.first_byte_time_ms is not None:
+            extra_data["first_byte_time_ms"] = ctx.first_byte_time_ms
+
         if ctx.is_success():
             RequestCandidateService.mark_candidate_success(
                 db=db,
                 candidate_id=ctx.attempt_id,
                 status_code=ctx.status_code,
                 latency_ms=response_time_ms,
-                extra_data={
-                    "stream_completed": True,
-                    "data_count": ctx.data_count,
-                },
+                extra_data=extra_data,
             )
         else:
             error_type = "client_disconnected" if ctx.status_code == 499 else "stream_error"
@@ -263,10 +267,7 @@ class StreamTelemetryRecorder:
                 error_message=trace_error_message,
                 status_code=ctx.status_code,
                 latency_ms=response_time_ms,
-                extra_data={
-                    "stream_completed": False,
-                    "data_count": ctx.data_count,
-                },
+                extra_data=extra_data,
             )
 
     async def _update_usage_status_on_error(
