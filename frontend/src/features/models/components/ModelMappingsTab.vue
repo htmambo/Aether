@@ -108,7 +108,7 @@
           </div>
         </div>
 
-        <!-- 展开内容：匹配的 Key 列表 -->
+        <!-- 展开内容：匹配的 Key 列表（按提供商分组） -->
         <div
           v-if="expandedIndex === index"
           class="border-t bg-muted/10 px-4 py-3"
@@ -117,34 +117,65 @@
             <RefreshCw class="w-4 h-4 animate-spin text-muted-foreground" />
           </div>
 
-          <div v-else-if="getMatchedKeysForMapping(mapping).length === 0" class="text-center py-4">
+          <div v-else-if="getMatchedKeysGroupedByProvider(mapping).length === 0" class="text-center py-4">
             <p class="text-sm text-muted-foreground">
               {{ mapping.trim() ? '此规则暂无匹配的 Key 白名单' : '请输入映射规则' }}
             </p>
           </div>
 
-          <div v-else class="space-y-2">
+          <div v-else class="space-y-3">
+            <!-- 按提供商分组 -->
             <div
-              v-for="item in getMatchedKeysForMapping(mapping)"
-              :key="item.keyId"
-              class="bg-background rounded-md border p-3"
+              v-for="group in getMatchedKeysGroupedByProvider(mapping)"
+              :key="group.providerId"
+              class="bg-background rounded-md border overflow-hidden"
             >
-              <div class="flex items-center gap-1.5 text-sm mb-2">
-                <span class="text-muted-foreground">{{ item.providerName }}</span>
-                <span class="text-muted-foreground">/</span>
-                <span class="font-medium">{{ item.keyName }}</span>
-                <span class="text-muted-foreground">·</span>
-                <code class="text-xs text-muted-foreground/70">{{ item.maskedKey }}</code>
-              </div>
-              <div class="flex flex-wrap gap-1">
+              <!-- 提供商标题 -->
+              <div class="px-3 py-2 bg-muted/30 border-b flex items-center justify-between">
+                <div>
+                  <span class="text-sm font-medium">{{ group.providerName }}</span>
+                  <span class="text-xs text-muted-foreground ml-2">({{ group.keys.length }} Key)</span>
+                </div>
                 <Badge
-                  v-for="model in item.matchedModels"
-                  :key="model"
+                  v-if="group.isLinked"
                   variant="secondary"
-                  class="text-xs font-mono"
+                  class="text-xs"
                 >
-                  {{ model }}
+                  已关联
                 </Badge>
+                <Button
+                  v-else
+                  variant="ghost"
+                  size="icon"
+                  class="h-7 w-7"
+                  title="关联到当前模型"
+                  @click="$emit('linkProvider', group.providerId)"
+                >
+                  <Link class="w-3.5 h-3.5" />
+                </Button>
+              </div>
+              <!-- Key 列表 -->
+              <div class="divide-y divide-border/50">
+                <div
+                  v-for="keyItem in group.keys"
+                  :key="keyItem.keyId"
+                  class="px-3 py-2"
+                >
+                  <div class="flex items-center gap-1.5 text-sm mb-1.5">
+                    <span class="font-medium">{{ keyItem.keyName }}</span>
+                    <code class="text-xs text-muted-foreground/70">{{ keyItem.maskedKey }}</code>
+                  </div>
+                  <div class="flex flex-wrap gap-1">
+                    <Badge
+                      v-for="model in keyItem.matchedModels"
+                      :key="model"
+                      variant="secondary"
+                      class="text-xs font-mono"
+                    >
+                      {{ model }}
+                    </Badge>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -168,7 +199,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { Card, Button, Input, Badge } from '@/components/ui'
-import { Plus, Trash2, GitMerge, RefreshCw, ChevronRight, Save, AlertCircle } from 'lucide-vue-next'
+import { Plus, Trash2, GitMerge, RefreshCw, ChevronRight, Save, AlertCircle, Link } from 'lucide-vue-next'
 import { updateGlobalModel, getGlobalModel, getGlobalModelRoutingPreview } from '@/api/global-models'
 import type { ModelRoutingPreviewResponse } from '@/api/endpoints/types'
 import { log } from '@/utils/logger'
@@ -183,6 +214,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   update: [mappings: string[]]
   refresh: []
+  linkProvider: [providerId: string]
+  linkProviders: [providerIds: string[]]  // 批量关联
 }>()
 // 安全限制常量（与后端保持一致）
 const MAX_MAPPINGS_PER_MODEL = 50
@@ -279,7 +312,15 @@ interface MatchedKeyForMapping {
   keyName: string
   maskedKey: string
   providerName: string
+  providerId: string
   matchedModels: string[]
+}
+
+interface ProviderGroup {
+  providerId: string
+  providerName: string
+  keys: MatchedKeyForMapping[]
+  isLinked: boolean  // 是否已关联到当前模型
 }
 
 interface ValidationResult {
@@ -410,6 +451,7 @@ function getMatchedKeysForMapping(mapping: string): MatchedKeyForMapping[] {
           keyName: keyItem.key_name,
           maskedKey: keyItem.masked_key,
           providerName: keyItem.provider_name,
+          providerId: keyItem.provider_id,
           matchedModels,
         })
       }
@@ -417,6 +459,33 @@ function getMatchedKeysForMapping(mapping: string): MatchedKeyForMapping[] {
   }
 
   return Array.from(keyMap.values())
+}
+
+// 按提供商分组匹配的 Key
+function getMatchedKeysGroupedByProvider(mapping: string): ProviderGroup[] {
+  const keys = getMatchedKeysForMapping(mapping)
+  const providerMap = new Map<string, ProviderGroup>()
+
+  // 获取已关联的提供商 ID 集合
+  const linkedProviderIds = new Set(
+    (routingData.value?.providers || []).map(p => p.id)
+  )
+
+  for (const key of keys) {
+    const existing = providerMap.get(key.providerId)
+    if (existing) {
+      existing.keys.push(key)
+    } else {
+      providerMap.set(key.providerId, {
+        providerId: key.providerId,
+        providerName: key.providerName,
+        keys: [key],
+        isLinked: linkedProviderIds.has(key.providerId),
+      })
+    }
+  }
+
+  return Array.from(providerMap.values())
 }
 
 // 获取指定映射的匹配数量
@@ -492,8 +561,26 @@ async function saveMappings() {
     originalMappings.value = [...cleanedMappings]  // 更新原始值
     isDirty.value = false
 
-    toastSuccess('映射规则已保存')
-    emit('update', cleanedMappings)
+    // 收集所有未关联的提供商 ID
+    const unlinkedProviderIds: string[] = []
+    for (const mapping of cleanedMappings) {
+      const groups = getMatchedKeysGroupedByProvider(mapping)
+      for (const group of groups) {
+        if (!group.isLinked && !unlinkedProviderIds.includes(group.providerId)) {
+          unlinkedProviderIds.push(group.providerId)
+        }
+      }
+    }
+
+    // 自动关联未关联的提供商
+    if (unlinkedProviderIds.length > 0) {
+      toastSuccess(`映射规则已保存，正在关联 ${unlinkedProviderIds.length} 个提供商...`)
+      // linkProviders 处理完成后会由父组件统一刷新数据，无需再 emit update
+      emit('linkProviders', unlinkedProviderIds)
+    } else {
+      toastSuccess('映射规则已保存')
+      emit('update', cleanedMappings)
+    }
   } catch (err) {
     log.error('保存映射规则失败:', err)
     toastError('保存失败，请重试')
@@ -525,5 +612,10 @@ onMounted(() => {
 // 组件卸载时清理缓存，防止内存泄漏
 onUnmounted(() => {
   regexCache.clear()
+})
+
+// 暴露刷新方法给父组件
+defineExpose({
+  refresh: loadMatchPreview
 })
 </script>
