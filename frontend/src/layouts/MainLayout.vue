@@ -91,7 +91,7 @@
 
     <template #header>
       <!-- Mobile Header (matches Home page style) -->
-      <header class="lg:hidden fixed top-0 left-0 right-0 z-50 border-b border-[#cc785c]/10 dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/90 dark:bg-[#191714]/95 backdrop-blur-xl transition-all">
+      <header class="lg:hidden fixed top-0 left-0 right-0 z-50 border-b border-[var(--shell-border)] bg-[var(--shell-glass)] backdrop-blur-xl transition-all">
         <div class="mx-auto max-w-7xl px-6 py-4">
           <div class="flex items-center justify-between">
             <!-- Logo & Brand -->
@@ -171,7 +171,7 @@
         >
           <div
             v-if="mobileMenuOpen"
-            class="border-t border-[#cc785c]/10 dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/95 dark:bg-[#191714]/98 backdrop-blur-xl"
+            class="border-t border-[var(--shell-border)] bg-[var(--shell-glass)] backdrop-blur-xl"
           >
             <div class="mx-auto max-w-7xl px-6 py-4">
               <!-- Navigation Groups -->
