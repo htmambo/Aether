@@ -310,19 +310,12 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
                                         next_probe_at = fmt_next_probe
 
                     # 解析 allowed_models
-                    # 语义说明：
-                    # - None: 不限制（允许所有模型）
-                    # - {}: 空字典 = 不限制（normalize_allowed_models 返回 None）
-                    # - []: 空列表 = 拒绝所有模型
-                    # - {"CLAUDE": []}: 指定格式空列表 = 该格式拒绝所有
                     raw_allowed_models = key.allowed_models
-                    if raw_allowed_models is None:
-                        allowed_models_list = None
-                    elif isinstance(raw_allowed_models, dict) and not raw_allowed_models:
-                        # 空 dict {} 在语义上等价于不限制
-                        allowed_models_list = None
-                    else:
-                        allowed_models_list = parse_allowed_models_to_list(raw_allowed_models)
+                    allowed_models_list = (
+                        parse_allowed_models_to_list(raw_allowed_models)
+                        if raw_allowed_models
+                        else None
+                    )
 
                     key_infos.append(
                         RoutingKeyInfo(

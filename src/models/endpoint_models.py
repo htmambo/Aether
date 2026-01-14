@@ -4,7 +4,7 @@ ProviderEndpoint 相关的 API 模型定义
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -145,9 +145,9 @@ class EndpointAPIKeyCreate(BaseModel):
     rpm_limit: Optional[int] = Field(
         default=None, ge=1, le=10000, description="RPM 限制（NULL=自适应模式）"
     )
-    allowed_models: Optional[Union[List[str], Dict[str, List[str]]]] = Field(
+    allowed_models: Optional[List[str]] = Field(
         default=None,
-        description="允许使用的模型列表（null=不限制，列表=简单白名单，字典=按API格式区分）",
+        description="允许使用的模型列表（null=不限制）",
     )
 
     # 能力标签
@@ -200,67 +200,27 @@ class EndpointAPIKeyCreate(BaseModel):
 
     @field_validator("allowed_models")
     @classmethod
-    def validate_allowed_models(
-        cls, v: Optional[Union[List[str], Dict[str, List[str]]]]
-    ) -> Optional[Union[List[str], Dict[str, List[str]]]]:
+    def validate_allowed_models(cls, v: Optional[List[str]]) -> Optional[List[str]]:
         """
-        规范化 allowed_models：
-        - 列表模式：去空、去重、保留顺序
-        - 字典模式：key 统一大写（支持 "*"），value 去空、去重、保留顺序
+        规范化 allowed_models：去空、去重、保留顺序
         """
         if v is None:
             return v
 
-        if isinstance(v, list):
-            cleaned: List[str] = []
-            seen: set[str] = set()
-            for item in v:
-                if not isinstance(item, str):
-                    raise ValueError("allowed_models 列表必须为字符串数组")
-                name = item.strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                cleaned.append(name)
-            return cleaned
+        if not isinstance(v, list):
+            raise ValueError("allowed_models 必须是列表")
 
-        if isinstance(v, dict):
-            from src.core.enums import APIFormat
-
-            allowed_formats = {fmt.value for fmt in APIFormat}
-            normalized: Dict[str, List[str]] = {}
-            for raw_key, models in v.items():
-                if not isinstance(raw_key, str):
-                    raise ValueError("allowed_models 字典的 key 必须为字符串")
-
-                key = raw_key.upper()
-                if key != "*" and key not in allowed_formats:
-                    raise ValueError(
-                        f"allowed_models 字典的 key 必须是 {sorted(allowed_formats)} 或 '*'，当前值: {raw_key}"
-                    )
-
-                if models is None:
-                    # null 表示该格式不限制，跳过（不加入字典）
-                    continue
-                if not isinstance(models, list):
-                    raise ValueError("allowed_models 字典的 value 必须为字符串数组")
-
-                cleaned: List[str] = []
-                seen: set[str] = set()
-                for item in models:
-                    if not isinstance(item, str):
-                        raise ValueError("allowed_models 字典的 value 必须为字符串数组")
-                    name = item.strip()
-                    if not name or name in seen:
-                        continue
-                    seen.add(name)
-                    cleaned.append(name)
-
-                normalized[key] = cleaned
-
-            return normalized
-
-        raise ValueError("allowed_models 必须是列表或字典")
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for item in v:
+            if not isinstance(item, str):
+                raise ValueError("allowed_models 列表元素必须为字符串")
+            name = item.strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cleaned.append(name)
+        return cleaned
 
     @field_validator("api_key")
     @classmethod
@@ -330,9 +290,9 @@ class EndpointAPIKeyUpdate(BaseModel):
     rpm_limit: Optional[int] = Field(
         default=None, ge=1, le=10000, description="RPM 限制（null=自适应模式）"
     )
-    allowed_models: Optional[Union[List[str], Dict[str, List[str]]]] = Field(
+    allowed_models: Optional[List[str]] = Field(
         default=None,
-        description="允许使用的模型列表（null=不限制，列表=简单白名单，字典=按API格式区分）",
+        description="允许使用的模型列表（null=不限制）",
     )
     capabilities: Optional[Dict[str, bool]] = Field(
         default=None, description="Key 能力标签，如 {'cache_1h': true, 'context_1m': true}"
@@ -376,9 +336,7 @@ class EndpointAPIKeyUpdate(BaseModel):
 
     @field_validator("allowed_models")
     @classmethod
-    def validate_allowed_models(
-        cls, v: Optional[Union[List[str], Dict[str, List[str]]]]
-    ) -> Optional[Union[List[str], Dict[str, List[str]]]]:
+    def validate_allowed_models(cls, v: Optional[List[str]]) -> Optional[List[str]]:
         # 与 EndpointAPIKeyCreate 保持一致
         return EndpointAPIKeyCreate.validate_allowed_models(v)
 
@@ -450,7 +408,7 @@ class EndpointAPIKeyResponse(BaseModel):
     internal_priority: int = Field(default=50, description="Endpoint 内部优先级")
     global_priority: Optional[int] = Field(default=None, description="全局 Key 优先级")
     rpm_limit: Optional[int] = None
-    allowed_models: Optional[Union[List[str], Dict[str, List[str]]]] = None
+    allowed_models: Optional[List[str]] = None
     capabilities: Optional[Dict[str, bool]] = Field(default=None, description="Key 能力标签")
 
     # 缓存与熔断配置

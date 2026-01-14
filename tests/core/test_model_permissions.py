@@ -6,7 +6,6 @@ class TestCheckModelAllowedWithAliases:
         is_allowed, matched = check_model_allowed_with_aliases(
             model_name="gpt-4o",
             allowed_models=["gpt-4o"],
-            api_format="OPENAI",
             resolved_model_name="gpt-4o",
             model_aliases=[r"gpt-4o-.*"],
         )
@@ -17,7 +16,6 @@ class TestCheckModelAllowedWithAliases:
         is_allowed, matched = check_model_allowed_with_aliases(
             model_name="target",
             allowed_models=["b", "a"],
-            api_format="OPENAI",
             resolved_model_name="target",
             model_aliases=[r".*"],
         )
@@ -28,7 +26,6 @@ class TestCheckModelAllowedWithAliases:
         is_allowed, matched = check_model_allowed_with_aliases(
             model_name="target",
             allowed_models=["other-1", "allowed-1"],
-            api_format="OPENAI",
             resolved_model_name="target",
             model_aliases=[r".*-1"],
             candidate_models={"allowed-1"},
@@ -40,11 +37,9 @@ class TestCheckModelAllowedWithAliases:
         is_allowed, matched = check_model_allowed_with_aliases(
             model_name="target",
             allowed_models=["allowed-1"],
-            api_format="OPENAI",
             resolved_model_name="target",
             model_aliases=[r".*-1"],
             candidate_models={"not-present"},
         )
         assert is_allowed is False
         assert matched is None
-

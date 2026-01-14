@@ -524,8 +524,7 @@ class CacheAwareScheduler:
             user_api_key.allowed_providers, user.allowed_providers if user else None
         )
 
-        # 合并 allowed_models
-        # allowed_models 支持 list/dict 两种结构，不能转成 set 否则会导致权限校验失效
+        # 合并 allowed_models（取交集）
         from src.core.model_permissions import merge_allowed_models
 
         result["allowed_models"] = merge_allowed_models(
@@ -612,13 +611,12 @@ class CacheAwareScheduler:
                 )
                 return [], global_model_id
 
-        # 0.2 检查模型是否被允许（支持简单列表和按格式字典两种模式）
+        # 0.2 检查模型是否被允许
         from src.core.model_permissions import check_model_allowed, get_allowed_models_preview
 
         if not check_model_allowed(
             model_name=requested_model_name,
             allowed_models=allowed_models,
-            api_format=target_format.value,
             resolved_model_name=resolved_model_name,
         ):
             resolved_note = (
@@ -915,7 +913,7 @@ class CacheAwareScheduler:
         if not is_available:
             return False, circuit_reason or "熔断器已打开", None
 
-        # 模型权限检查：使用 allowed_models 白名单（支持简单列表和按格式字典两种模式）
+        # 模型权限检查：使用 allowed_models 白名单
         # None = 允许所有模型，[] = 拒绝所有模型，["a","b"] = 只允许指定模型
         # 支持通配符别名匹配（通过 model_aliases）
         from src.core.model_permissions import (
@@ -927,7 +925,6 @@ class CacheAwareScheduler:
             is_allowed, alias_matched_model = check_model_allowed_with_aliases(
                 model_name=model_name,
                 allowed_models=key.allowed_models,
-                api_format=api_format,
                 resolved_model_name=resolved_model_name,
                 model_aliases=model_aliases,
                 candidate_models=candidate_models,

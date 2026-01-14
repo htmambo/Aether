@@ -223,12 +223,10 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
                 update_data["learned_rpm_limit"] = None
                 logger.info("Key %s 切换为自适应 RPM 模式", self.key_id)
 
-        # 统一处理 allowed_models：空列表/空字典 -> None（表示不限制）
+        # 统一处理 allowed_models：空列表 -> None（表示不限制）
         if "allowed_models" in update_data:
             am = update_data["allowed_models"]
-            if am is not None and (
-                (isinstance(am, list) and len(am) == 0) or (isinstance(am, dict) and len(am) == 0)
-            ):
+            if isinstance(am, list) and len(am) == 0:
                 update_data["allowed_models"] = None
 
         # 统一处理 locked_models：空列表 -> None

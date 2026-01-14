@@ -82,29 +82,17 @@ export interface ProviderEndpoint {
 }
 
 /**
- * 模型权限配置类型（支持简单列表和按格式字典两种模式）
+ * 模型权限配置类型
  *
  * 使用示例：
  * 1. 不限制（允许所有模型）: null
- * 2. 简单列表模式（所有 API 格式共享同一个白名单）: ["gpt-4", "claude-3-opus"]
- * 3. 按格式字典模式（不同 API 格式使用不同的白名单）:
- *    { "OPENAI": ["gpt-4"], "CLAUDE": ["claude-3-opus"] }
+ * 2. 白名单模式: ["gpt-4", "claude-3-opus"]
  */
-export type AllowedModels = string[] | Record<string, string[]> | null
+export type AllowedModels = string[] | null
 
 // AllowedModels 类型守卫函数
 export function isAllowedModelsList(value: AllowedModels): value is string[] {
   return Array.isArray(value)
-}
-
-export function isAllowedModelsDict(value: AllowedModels): value is Record<string, string[]> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return false
-  }
-  // 验证所有值都是字符串数组
-  return Object.values(value).every(
-    (v) => Array.isArray(v) && v.every((item) => typeof item === 'string')
-  )
 }
 
 export interface EndpointAPIKey {
@@ -119,7 +107,7 @@ export interface EndpointAPIKey {
   internal_priority: number  // Key 内部优先级
   global_priority?: number | null  // 全局 Key 优先级
   rpm_limit?: number | null  // RPM 速率限制 (1-10000)，null 表示自适应模式
-  allowed_models?: AllowedModels  // 允许使用的模型列表（null=不限制，列表=简单白名单，字典=按格式区分）
+  allowed_models?: AllowedModels  // 允许使用的模型列表（null=不限制）
   capabilities?: Record<string, boolean> | null  // 能力标签配置（如 cache_1h, context_1m）
   // 缓存与熔断配置
   cache_ttl_minutes: number  // 缓存 TTL（分钟），0=禁用

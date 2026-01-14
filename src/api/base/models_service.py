@@ -352,7 +352,7 @@ def _get_available_model_ids_for_format(db: Session, api_formats: list[str]) -> 
         if model_provider_id not in provider_ids_with_format:
             continue
 
-        # 检查该 provider 下是否有 Key 允许这个模型（支持 list/dict 两种 allowed_models）
+        # 检查该 provider 下是否有 Key 允许这个模型
         from src.core.model_permissions import check_model_allowed
 
         rules = provider_key_rules.get(model_provider_id, [])
@@ -362,19 +362,14 @@ def _get_available_model_ids_for_format(db: Session, api_formats: list[str]) -> 
                 available_model_ids.add(model_id)
                 break
 
-            # 对于支持多个格式的 Key：任意一个可用格式允许即可
-            for fmt in usable_formats:
-                if check_model_allowed(
-                    model_name=model_id,
-                    allowed_models=allowed_models,  # type: ignore[arg-type]
-                    api_format=fmt,
-                    resolved_model_name=(model.provider_model_name if global_model else None),
-                ):
-                    available_model_ids.add(model_id)
-                    break
-            else:
-                continue
-            break
+            # 检查是否允许该模型
+            if check_model_allowed(
+                model_name=model_id,
+                allowed_models=allowed_models,  # type: ignore[arg-type]
+                resolved_model_name=(model.provider_model_name if global_model else None),
+            ):
+                available_model_ids.add(model_id)
+                break
 
     return available_model_ids
 

@@ -9,17 +9,6 @@
   >
     <template #default>
       <div class="space-y-4">
-        <!-- 字典模式警告 -->
-        <div
-          v-if="isDictMode"
-          class="rounded-lg border border-amber-500/50 bg-amber-50 dark:bg-amber-950/30 p-3"
-        >
-          <p class="text-sm text-amber-700 dark:text-amber-400">
-            <strong>注意：</strong>此密钥使用按 API 格式区分的模型权限配置。
-            编辑后将转换为统一列表模式，原有的格式区分信息将丢失。
-          </p>
-        </div>
-
         <!-- 常驻选择面板 -->
         <div class="border rounded-lg overflow-hidden">
           <!-- 搜索 + 操作栏 -->
@@ -374,9 +363,6 @@ const initialLockedModels = ref<string[]>([])
 // 所有添加过的自定义模型（包括已取消勾选的，保存前不消失）
 const allCustomModels = ref<string[]>([])
 
-// 是否为字典模式（按 API 格式区分）
-const isDictMode = ref(false)
-
 // 是否为自动获取模式
 const isAutoFetchMode = computed(() => props.apiKey?.auto_fetch_models ?? false)
 
@@ -646,20 +632,9 @@ async function fetchUpstreamModels() {
 // 解析 allowed_models
 function parseAllowedModels(allowed: AllowedModels): string[] {
   if (allowed === null || allowed === undefined) {
-    isDictMode.value = false
     return []
   }
-  if (Array.isArray(allowed)) {
-    isDictMode.value = false
-    return [...allowed]
-  }
-  // 字典模式：合并所有格式的模型，并设置警告标志
-  isDictMode.value = true
-  const all = new Set<string>()
-  for (const models of Object.values(allowed)) {
-    models.forEach(m => all.add(m))
-  }
-  return Array.from(all)
+  return [...allowed]
 }
 
 // 监听对话框打开
