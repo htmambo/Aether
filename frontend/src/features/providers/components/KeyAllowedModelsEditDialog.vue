@@ -373,16 +373,6 @@ const showEmptyState = computed(() => {
          customModels.value.length === 0
 })
 
-// 是否为自动获取模式
-const isAutoFetchMode = computed(() => props.apiKey?.auto_fetch_models ?? false)
-
-// 空状态判断
-const showEmptyState = computed(() => {
-  return filteredGlobalModels.value.length === 0 &&
-         filteredUpstreamModels.value.length === 0 &&
-         customModels.value.length === 0
-})
-
 // 折叠状态
 const collapsedGroups = ref<Set<string>>(new Set())
 
