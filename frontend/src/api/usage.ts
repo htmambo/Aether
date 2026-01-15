@@ -192,7 +192,11 @@ export const usageApi = {
       status: 'pending' | 'streaming' | 'completed' | 'failed'
       input_tokens: number
       output_tokens: number
+      cache_creation_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
       cost: number
+      actual_cost?: number | null
+      rate_multiplier?: number | null
       response_time_ms: number | null
       first_byte_time_ms: number | null
       provider?: string | null

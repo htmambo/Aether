@@ -248,7 +248,7 @@ const hasActiveRequests = computed(() => activeRequestIds.value.length > 0)
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 let globalAutoRefreshTimer: ReturnType<typeof setInterval> | null = null
 const AUTO_REFRESH_INTERVAL = 1000 // 1秒刷新一次（用于活跃请求）
-const GLOBAL_AUTO_REFRESH_INTERVAL = 10000 // 10秒刷新一次（全局自动刷新）
+const GLOBAL_AUTO_REFRESH_INTERVAL = 5000 // 5秒刷新一次（全局自动刷新）
 const globalAutoRefresh = ref(false) // 全局自动刷新开关
 
 // 轮询活跃请求状态（轻量级，只更新状态变化的记录）
@@ -283,7 +283,11 @@ async function pollActiveRequests() {
       // 进行中状态也需要持续更新（provider/key/TTFB 可能在 streaming 后才落库）
       record.input_tokens = update.input_tokens
       record.output_tokens = update.output_tokens
+      record.cache_creation_input_tokens = update.cache_creation_input_tokens ?? undefined
+      record.cache_read_input_tokens = update.cache_read_input_tokens ?? undefined
       record.cost = update.cost
+      record.actual_cost = update.actual_cost ?? undefined
+      record.rate_multiplier = update.rate_multiplier ?? undefined
       record.response_time_ms = update.response_time_ms ?? undefined
       record.first_byte_time_ms = update.first_byte_time_ms ?? undefined
       // 管理员接口返回额外字段
@@ -318,6 +322,7 @@ function stopAutoRefresh() {
 }
 
 // 监听活跃请求状态，自动启动/停止刷新
+// 1秒轮询始终用于活跃请求的实时更新，不受全局刷新影响
 watch(hasActiveRequests, (hasActive) => {
   if (hasActive) {
     startAutoRefresh()
