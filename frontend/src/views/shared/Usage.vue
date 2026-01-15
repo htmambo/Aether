@@ -322,9 +322,9 @@ function stopAutoRefresh() {
 }
 
 // 监听活跃请求状态，自动启动/停止刷新
-// 注意：全局刷新开启时不需要1秒轮询（全局刷新已经包含完整数据刷新）
+// 1秒轮询始终用于活跃请求的实时更新，不受全局刷新影响
 watch(hasActiveRequests, (hasActive) => {
-  if (hasActive && !globalAutoRefresh.value) {
+  if (hasActive) {
     startAutoRefresh()
   } else {
     stopAutoRefresh()
@@ -349,16 +349,10 @@ function stopGlobalAutoRefresh() {
 function handleAutoRefreshChange(value: boolean) {
   globalAutoRefresh.value = value
   if (value) {
-    // 开启全局刷新时，停止1秒轮询（避免重复请求）
-    stopAutoRefresh()
     refreshData() // 立即刷新一次
     startGlobalAutoRefresh()
   } else {
     stopGlobalAutoRefresh()
-    // 关闭全局刷新后，如果有活跃请求，恢复1秒轮询
-    if (hasActiveRequests.value) {
-      startAutoRefresh()
-    }
   }
 }
 
