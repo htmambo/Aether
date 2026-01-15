@@ -14,9 +14,9 @@
         />
 
         <!-- 抽屉内容 -->
-        <Card class="relative h-full w-[800px] max-w-[90vw] rounded-none shadow-2xl flex flex-col">
+        <Card class="relative h-full w-full sm:w-[800px] sm:max-w-[90vw] rounded-none shadow-2xl flex flex-col">
           <!-- 固定头部 - 整合基本信息 -->
-          <div class="sticky top-0 z-10 bg-background border-b px-6 py-4 flex-shrink-0">
+          <div class="sticky top-0 z-10 bg-background border-b px-3 sm:px-6 py-3 sm:py-4 flex-shrink-0">
             <!-- 第一行：标题、模型、状态、操作按钮 -->
             <div class="flex items-center justify-between gap-4 mb-3">
               <div class="flex items-center gap-3 flex-wrap">
@@ -107,7 +107,7 @@
           </div>
 
           <!-- 可滚动内容区域 -->
-          <div class="flex-1 min-h-0 overflow-y-auto px-6 py-4 scrollbar-stable">
+          <div class="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 scrollbar-stable">
             <!-- Loading State -->
             <div
               v-if="loading"
@@ -137,7 +137,7 @@
             >
               <!-- 费用与性能概览 -->
               <Card>
-                <div class="p-4">
+                <div class="p-3 sm:p-4">
                   <!-- 总费用和响应时间（独立显示） -->
                   <div class="flex items-center mb-4">
                     <div class="flex items-center">
@@ -187,7 +187,7 @@
                         : 'bg-muted/20 border border-border/50 opacity-60'"
                     >
                       <!-- 阶梯标题行 -->
-                      <div class="flex items-center justify-between text-xs">
+                      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2 text-xs">
                         <div class="flex items-center gap-2">
                           <span
                             class="font-medium"
@@ -207,7 +207,7 @@
                           </Badge>
                         </div>
                         <!-- 单价信息 -->
-                        <div class="text-muted-foreground flex items-center gap-2">
+                        <div class="text-muted-foreground flex items-center gap-2 flex-wrap">
                           <span>输入 ${{ formatPrice(tier.input_price_per_1m) }}/M</span>
                           <span>输出 ${{ formatPrice(tier.output_price_per_1m) }}/M</span>
                           <span v-if="tier.cache_creation_price_per_1m">
@@ -308,19 +308,19 @@
 
               <!-- Tabs 区域 -->
               <Card>
-                <div class="p-4">
+                <div class="p-3 sm:p-4">
                   <Tabs
                     v-model="activeTab"
                     :default-value="activeTab"
                   >
                     <!-- Tab + 图标工具栏同行 -->
-                    <div class="flex items-center justify-between border-b pb-2 mb-3">
+                    <div class="flex items-center justify-between border-b pb-2 mb-3 gap-2">
                       <!-- 左侧 Tab -->
-                      <div class="flex items-center">
+                      <div class="flex items-center min-w-0">
                         <button
                           v-for="tab in visibleTabs"
                           :key="tab.name"
-                          class="px-3 py-1.5 text-sm transition-colors border-b-2 -mb-[9px]"
+                          class="px-2 sm:px-3 py-1.5 text-sm transition-colors border-b-2 -mb-[9px] whitespace-nowrap"
                           :class="activeTab === tab.name
                             ? 'border-primary text-foreground font-medium'
                             : 'border-transparent text-muted-foreground hover:text-foreground'"
@@ -330,7 +330,7 @@
                         </button>
                       </div>
                       <!-- 右侧图标工具栏 -->
-                      <div class="flex items-center gap-0.5">
+                      <div class="flex items-center gap-0.5 shrink-0">
                         <!-- 请求头专用：对比/客户端/提供商 切换组 -->
                         <template v-if="activeTab === 'request-headers' && hasProviderHeaders">
                           <button
