@@ -278,7 +278,7 @@ function extractClaudeStreamResponse(chunks: any[]): ExtractedConversation {
   }
 
   // 转换为消息
-  for (const [index, block] of Array.from(blocks.entries()).sort((a, b) => a[0] - b[0])) {
+  for (const [, block] of Array.from(blocks.entries()).sort((a, b) => a[0] - b[0])) {
     result.messages.push({
       role: 'assistant',
       content: block.parts.join(''),

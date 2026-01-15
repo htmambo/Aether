@@ -393,10 +393,10 @@
                         <button
                           :title="currentExpandDepth === 0 ? '展开全部' : '收缩全部'"
                           class="p-1.5 rounded transition-colors"
-                          :class="viewMode === 'compare' || contentViewMode === 'conversation'
+                          :class="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')
                             ? 'text-muted-foreground/40 cursor-not-allowed'
                             : 'text-muted-foreground hover:bg-muted'"
-                          :disabled="viewMode === 'compare' || contentViewMode === 'conversation'"
+                          :disabled="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')"
                           @click="currentExpandDepth === 0 ? expandAll() : collapseAll()"
                         >
                           <Maximize2
@@ -878,42 +878,6 @@ function getTierRangeText(tier: { up_to?: number | null }, index: number, tiers:
   }
   // 无上限的情况
   return `> ${formatNumber(start)} tokens`
-}
-
-function copyJsonToClipboard(tabName: string) {
-  if (!detail.value) return
-  // 对比模式下不允许复制
-  if (viewMode.value === 'compare') return
-
-  let data: any = null
-  switch (tabName) {
-    case 'request-headers':
-      // 根据当前数据源选择要复制的数据
-      data = dataSource.value === 'provider'
-        ? detail.value.provider_request_headers
-        : detail.value.request_headers
-      break
-    case 'request-body':
-      data = detail.value.request_body
-      break
-    case 'response-headers':
-      data = actualResponseHeaders.value
-      break
-    case 'response-body':
-      data = detail.value.response_body
-      break
-    case 'metadata':
-      data = detail.value.metadata
-      break
-  }
-
-  if (data) {
-    copyToClipboard(JSON.stringify(data, null, 2), false)
-    copiedStates.value[tabName] = true
-    setTimeout(() => {
-      copiedStates.value[tabName] = false
-    }, 2000)
-  }
 }
 
 // 复制内容（支持 JSON 和对话两种模式）
