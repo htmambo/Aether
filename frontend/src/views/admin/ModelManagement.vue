@@ -431,6 +431,8 @@
       @delete-provider="confirmDeleteProviderImplementation"
       @toggle-provider-status="toggleProviderStatus"
       @refresh-model="refreshSelectedModel"
+      @link-provider="linkProviderToModel"
+      @link-providers="linkProvidersToModel"
     />
 
     <!-- 批量添加关联提供商对话框 -->
@@ -953,11 +955,23 @@ function handleRowClick(event: MouseEvent, model: GlobalModelResponse) {
 }
 
 async function selectModel(model: GlobalModelResponse) {
+  // 先显示缓存数据，提升响应速度
   selectedModel.value = model
   detailTab.value = 'basic'
 
-  // 加载该模型的关联提供商
-  await loadModelProviders(model.id)
+  // 并行加载最新模型数据和关联提供商
+  const [latestModel] = await Promise.all([
+    getGlobalModel(model.id).catch(err => {
+      log.error('获取最新模型数据失败:', err)
+      return null
+    }),
+    loadModelProviders(model.id)
+  ])
+
+  // 更新为最新数据（如果获取成功）
+  if (latestModel) {
+    selectedModel.value = latestModel
+  }
 }
 
 // 刷新当前选中的模型数据
@@ -1034,6 +1048,37 @@ function openAddProviderDialog() {
     // 同步选择状态
     syncBatchProviderSelection()
   })
+}
+
+// 关联指定提供商到当前模型
+async function linkProviderToModel(providerId: string) {
+  await linkProvidersToModel([providerId])
+}
+
+// 批量关联提供商到当前模型
+async function linkProvidersToModel(providerIds: string[]) {
+  if (!selectedModel.value || providerIds.length === 0) return
+
+  try {
+    const result = await batchAssignToProviders(selectedModel.value.id, {
+      provider_ids: providerIds,
+      create_models: true
+    })
+
+    // 显示关联结果
+    if (result.errors.length > 0) {
+      showError(`${result.errors.length} 个提供商关联失败`, '部分失败')
+    } else {
+      success(`${providerIds.length} 个提供商已关联`)
+    }
+
+    // 刷新数据
+    await loadModelProviders(selectedModel.value.id)
+    await loadGlobalModels()
+    modelDetailDrawerRef.value?.refreshRoutingData?.()
+  } catch (err: any) {
+    showError(parseApiError(err, '关联失败'), '错误')
+  }
 }
 
 // 处理批量添加 Provider 对话框关闭事件

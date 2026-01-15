@@ -437,10 +437,13 @@
             <div v-show="detailTab === 'mappings'">
               <ModelMappingsTab
                 v-if="model"
+                ref="modelMappingsTabRef"
                 :global-model-id="model.id"
                 :model-name="model.name"
                 :mappings="model.config?.model_mappings || []"
                 @update="handleMappingsUpdate"
+                @link-provider="(providerId) => $emit('linkProvider', providerId)"
+                @link-providers="(providerIds) => $emit('linkProviders', providerIds)"
               />
             </div>
           </div>
@@ -500,6 +503,8 @@ const emit = defineEmits<{
   'deleteProvider': [provider: any]
   'toggleProviderStatus': [provider: any]
   'refreshModel': []
+  'linkProvider': [providerId: string]
+  'linkProviders': [providerIds: string[]]
 }>()
 const { success: showSuccess, error: showError } = useToast()
 const { copyToClipboard } = useClipboard()
@@ -513,6 +518,8 @@ interface Props {
 
 // RoutingTab 引用
 const routingTabRef = ref<InstanceType<typeof RoutingTab> | null>(null)
+// ModelMappingsTab 引用
+const modelMappingsTabRef = ref<InstanceType<typeof ModelMappingsTab> | null>(null)
 
 // 将 RoutingProviderInfo 转换为父组件期望的格式
 function convertRoutingProviderToLegacyFormat(provider: RoutingProviderInfo) {
@@ -542,6 +549,7 @@ function handleDeleteProviderFromRouting(provider: RoutingProviderInfo) {
 // 刷新路由数据
 function refreshRoutingData() {
   routingTabRef.value?.loadRoutingData?.()
+  modelMappingsTabRef.value?.refresh?.()
 }
 
 // 处理模型映射更新

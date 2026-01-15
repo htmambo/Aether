@@ -174,11 +174,24 @@
                               >
                                 {{ keyEntry.key.name }}
                               </div>
-                              <!-- 第二行：提供商名 · sk -->
+                              <!-- 第二行：提供商名 · sk · 模型映射 -->
                               <div class="flex items-center gap-1 text-[10px] text-muted-foreground">
                                 <span>{{ keyEntry.provider.name }}</span>
                                 <span>·</span>
                                 <code class="text-muted-foreground/60">{{ keyEntry.key.masked_key }}</code>
+                                <!-- Key 白名单映射显示 -->
+                                <template v-if="getKeyMatchedModels(keyEntry.key).length > 0">
+                                  <span>·</span>
+                                  <span
+                                    class="text-primary/70"
+                                    :title="getKeyMatchedModels(keyEntry.key).join(', ')"
+                                  >{{ formatMatchedModels(getKeyMatchedModels(keyEntry.key)) }}</span>
+                                </template>
+                                <!-- Provider 模型映射显示 -->
+                                <template v-else-if="hasModelMapping(keyEntry.provider)">
+                                  <span>·</span>
+                                  <span class="text-primary/70">{{ keyEntry.provider.provider_model_name }}</span>
+                                </template>
                               </div>
                             </div>
 
@@ -374,6 +387,14 @@
                               v-if="isProviderInFormatExpanded(formatGroup.api_format, providerEntry.provider.id, providerEntry.endpoint?.id)"
                               class="border-t border-border/30 p-2.5"
                             >
+                              <!-- 模型映射显示 -->
+                              <div
+                                v-if="hasModelMapping(providerEntry.provider)"
+                                class="flex items-center gap-1.5 text-[10px] text-muted-foreground mb-2 px-1"
+                              >
+                                <span class="text-muted-foreground/60">映射:</span>
+                                <span class="text-primary/70 font-medium">{{ providerEntry.provider.provider_model_name }}</span>
+                              </div>
                               <!-- Keys 列表 -->
                               <div
                                 v-if="providerEntry.keys.length > 0"
@@ -430,7 +451,7 @@
                                         ]"
                                         :title="getKeyTooltip(key)"
                                       >
-                                        <!-- 名称 + sk（垂直堆叠） -->
+                                        <!-- 名称 + sk + 映射（垂直堆叠） -->
                                         <div class="min-w-0 flex flex-col">
                                           <span
                                             class="font-medium truncate"
@@ -438,9 +459,18 @@
                                           >
                                             {{ key.name }}
                                           </span>
-                                          <code class="font-mono text-[10px] text-muted-foreground/60">
-                                            {{ key.masked_key }}
-                                          </code>
+                                          <div class="flex items-center gap-1">
+                                            <code class="font-mono text-[10px] text-muted-foreground/60">
+                                              {{ key.masked_key }}
+                                            </code>
+                                            <template v-if="getKeyMatchedModels(key).length > 0">
+                                              <span class="text-[10px] text-muted-foreground/40">·</span>
+                                              <span
+                                                class="text-[10px] text-primary/70"
+                                                :title="getKeyMatchedModels(key).join(', ')"
+                                              >{{ formatMatchedModels(getKeyMatchedModels(key)) }}</span>
+                                            </template>
+                                          </div>
                                         </div>
                                         <span class="flex-1" />
                                         <!-- 熔断徽章（带倒计时）- 靠右 -->
@@ -476,12 +506,6 @@
                                         >
                                           <RefreshCw class="w-3 h-3" />
                                         </button>
-                                        <span
-                                          v-if="key.effective_rpm"
-                                          class="text-[10px] text-muted-foreground/60 shrink-0"
-                                        >
-                                          {{ key.is_adaptive ? '~' : '' }}{{ key.effective_rpm }}
-                                        </span>
                                       </div>
                                     </div>
                                   </div>
@@ -714,7 +738,7 @@ const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
       }))
 
     const activeProviders = sortedProviders.filter(
-      e => e.provider.is_active && e.provider.model_is_active && e.endpoint?.is_active
+      e => e.provider.is_active && e.provider.model_is_active && e.endpoint?.is_active && e.active_keys > 0
     ).length
     const totalKeys = sortedProviders.reduce((sum, e) => sum + e.keys.length, 0)
     const activeKeys = sortedProviders.reduce((sum, e) => sum + e.active_keys, 0)
@@ -814,6 +838,47 @@ function getPriorityModeLabel(mode: string): string {
 // 判断是否存在模型映射转换
 function hasModelMapping(provider: RoutingProviderInfo): boolean {
   return provider.provider_model_name !== routingData.value?.global_model_name
+}
+
+// 获取 Key 的 allowed_models 中匹配当前 GlobalModel 的所有模型名
+// 逻辑：用 GlobalModel 的 model_mappings（正则模式）去匹配 Key 的 allowed_models 中的值
+function getKeyMatchedModels(key: RoutingKeyInfo): string[] {
+  if (!key.allowed_models || key.allowed_models.length === 0) {
+    return []
+  }
+  const globalModelName = routingData.value?.global_model_name
+  const globalModelMappings = routingData.value?.global_model_mappings || []
+  if (!globalModelName) {
+    return []
+  }
+
+  const matched: string[] = []
+  // 遍历 Key 的白名单
+  for (const allowedModel of key.allowed_models) {
+    // 如果完全匹配 GlobalModel 名称，跳过（不需要显示）
+    if (allowedModel === globalModelName) {
+      continue
+    }
+    // 用 GlobalModel 的映射模式匹配白名单中的模型名
+    for (const pattern of globalModelMappings) {
+      try {
+        if (new RegExp(`^${pattern}$`, 'i').test(allowedModel)) {
+          matched.push(allowedModel)
+          break // 该 allowedModel 已匹配，不需要继续检查其他 pattern
+        }
+      } catch {
+        // 正则无效，跳过
+      }
+    }
+  }
+  return matched
+}
+
+// 格式化匹配的模型显示文本
+function formatMatchedModels(models: string[]): string {
+  if (models.length === 0) return ''
+  if (models.length === 1) return models[0]
+  return `${models[0]} +${models.length - 1}`
 }
 
 // 按优先级分组 Keys（提供商优先模式下使用）
@@ -957,9 +1022,6 @@ function getKeyTooltip(key: RoutingKeyInfo): string {
   const parts: string[] = []
   parts.push(`名称: ${key.name}`)
   parts.push(`健康度: ${((key.health_score || 0) * 100).toFixed(0)}%`)
-  if (key.effective_rpm) {
-    parts.push(`RPM: ${key.is_adaptive ? '~' : ''}${key.effective_rpm}`)
-  }
   if (!key.is_active) {
     parts.push('状态: 已禁用')
   } else if (key.circuit_breaker_open) {

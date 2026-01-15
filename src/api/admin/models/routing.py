@@ -17,11 +17,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
+from src.core.crypto import CryptoService
 from src.core.model_permissions import parse_allowed_models_to_list
 from src.database import get_db
 from src.models.database import (
     GlobalModel,
     Model,
+    Provider,
     ProviderAPIKey,
     ProviderEndpoint,
 )
@@ -54,7 +56,9 @@ class RoutingKeyInfo(BaseModel):
     allowed_models: Optional[List[str]] = Field(None, description="允许的模型列表，null 表示不限制")
     # 熔断状态
     circuit_breaker_open: bool = Field(False, description="熔断器是否打开")
-    circuit_breaker_formats: List[str] = Field(default_factory=list, description="熔断的 API 格式列表")
+    circuit_breaker_formats: List[str] = Field(
+        default_factory=list, description="熔断的 API 格式列表"
+    )
     next_probe_at: Optional[str] = Field(None, description="下次探测时间（ISO格式）")
 
     model_config = ConfigDict(from_attributes=True)
@@ -108,6 +112,19 @@ class RoutingProviderInfo(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class GlobalKeyWhitelistItem(BaseModel):
+    """全局 Key 白名单项（用于前端实时匹配）"""
+
+    key_id: str = Field(..., description="Key ID")
+    key_name: str = Field(..., description="Key 名称")
+    masked_key: str = Field(..., description="脱敏的 API Key")
+    provider_id: str = Field(..., description="Provider ID")
+    provider_name: str = Field(..., description="Provider 名称")
+    allowed_models: List[str] = Field(default_factory=list, description="Key 白名单模型列表")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ModelRoutingPreviewResponse(BaseModel):
     """模型请求链路预览响应"""
 
@@ -115,6 +132,10 @@ class ModelRoutingPreviewResponse(BaseModel):
     global_model_name: str
     display_name: str
     is_active: bool
+    # GlobalModel 的模型映射（用于前端匹配 Key 白名单）
+    global_model_mappings: List[str] = Field(
+        default_factory=list, description="GlobalModel 的模型映射规则（正则模式）"
+    )
     # 链路信息
     providers: List[RoutingProviderInfo] = Field(
         default_factory=list, description="按优先级排序的提供商列表"
@@ -124,6 +145,10 @@ class ModelRoutingPreviewResponse(BaseModel):
     # 调度配置
     scheduling_mode: str = Field("cache_affinity", description="调度模式")
     priority_mode: str = Field("provider", description="优先级模式")
+    # 全局 Key 白名单数据（供前端实时匹配，包含所有 Provider 的 Key）
+    all_keys_whitelist: List[GlobalKeyWhitelistItem] = Field(
+        default_factory=list, description="所有 Provider 的 Key 白名单数据"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -181,9 +206,7 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
         db = context.db
 
         # 获取 GlobalModel
-        global_model = (
-            db.query(GlobalModel).filter(GlobalModel.id == self.global_model_id).first()
-        )
+        global_model = db.query(GlobalModel).filter(GlobalModel.id == self.global_model_id).first()
         if not global_model:
             from fastapi import HTTPException
 
@@ -217,9 +240,7 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
         keys_by_provider: Dict[str, List[ProviderAPIKey]] = {}
         if provider_ids:
             keys = (
-                db.query(ProviderAPIKey)
-                .filter(ProviderAPIKey.provider_id.in_(provider_ids))
-                .all()
+                db.query(ProviderAPIKey).filter(ProviderAPIKey.provider_id.in_(provider_ids)).all()
             )
             for key in keys:
                 if key.provider_id not in keys_by_provider:
@@ -282,7 +303,6 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
                     # 生成脱敏 SK（先解密再脱敏）
                     masked_key = ""
                     if key.api_key:
-                        from src.core.crypto import CryptoService
                         crypto = CryptoService()
                         try:
                             decrypted_key = crypto.decrypt(key.api_key, silent=True)
@@ -384,25 +404,88 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
         active_providers = sum(1 for p in provider_infos if p.is_active and p.model_is_active)
 
         # 从数据库获取当前调度配置
-        scheduling_mode = SystemConfigService.get_config(
-            db,
-            "scheduling_mode",
-            CacheAwareScheduler.SCHEDULING_MODE_CACHE_AFFINITY,
-        ) or CacheAwareScheduler.SCHEDULING_MODE_CACHE_AFFINITY
-        priority_mode = SystemConfigService.get_config(
-            db,
-            "provider_priority_mode",
-            CacheAwareScheduler.PRIORITY_MODE_PROVIDER,
-        ) or CacheAwareScheduler.PRIORITY_MODE_PROVIDER
+        scheduling_mode = (
+            SystemConfigService.get_config(
+                db,
+                "scheduling_mode",
+                CacheAwareScheduler.SCHEDULING_MODE_CACHE_AFFINITY,
+            )
+            or CacheAwareScheduler.SCHEDULING_MODE_CACHE_AFFINITY
+        )
+        priority_mode = (
+            SystemConfigService.get_config(
+                db,
+                "provider_priority_mode",
+                CacheAwareScheduler.PRIORITY_MODE_PROVIDER,
+            )
+            or CacheAwareScheduler.PRIORITY_MODE_PROVIDER
+        )
+
+        # 获取所有活跃 Provider 的 Key 白名单数据（供前端实时匹配）
+        all_keys_whitelist: List[GlobalKeyWhitelistItem] = []
+        crypto = CryptoService()
+
+        # 获取所有活跃的 Key（带白名单），使用 selectinload 避免 N+1 查询
+        all_keys = (
+            db.query(ProviderAPIKey)
+            .join(Provider, ProviderAPIKey.provider_id == Provider.id)
+            .options(selectinload(ProviderAPIKey.provider))
+            .filter(ProviderAPIKey.is_active == True)
+            .filter(Provider.is_active == True)
+            .filter(ProviderAPIKey.allowed_models.isnot(None))  # 只获取有白名单的 Key
+            .all()
+        )
+
+        # 转换为白名单数据
+        for key in all_keys:
+            if not key.allowed_models:
+                continue
+
+            # 解析白名单
+            allowed_models_list = parse_allowed_models_to_list(key.allowed_models)
+            if not allowed_models_list:
+                continue
+
+            # 生成脱敏 Key
+            masked = ""
+            if key.api_key:
+                try:
+                    decrypted = crypto.decrypt(key.api_key, silent=True)
+                except Exception:
+                    decrypted = key.api_key
+                if len(decrypted) > 8:
+                    masked = f"{decrypted[:4]}***{decrypted[-4:]}"
+                else:
+                    masked = f"{decrypted[:2]}***"
+
+            all_keys_whitelist.append(
+                GlobalKeyWhitelistItem(
+                    key_id=key.id or "",
+                    key_name=key.name or "",
+                    masked_key=masked,
+                    provider_id=key.provider_id or "",
+                    provider_name=key.provider.name if key.provider else "",
+                    allowed_models=allowed_models_list,
+                )
+            )
+
+        # 从 GlobalModel.config 中提取 model_mappings
+        global_model_mappings: List[str] = []
+        if global_model.config and isinstance(global_model.config, dict):
+            mappings = global_model.config.get("model_mappings")
+            if isinstance(mappings, list):
+                global_model_mappings = [m for m in mappings if isinstance(m, str)]
 
         return ModelRoutingPreviewResponse(
             global_model_id=global_model.id,
             global_model_name=global_model.name,
             display_name=global_model.display_name,
             is_active=bool(global_model.is_active),
+            global_model_mappings=global_model_mappings,
             providers=provider_infos,
             total_providers=len(provider_infos),
             active_providers=active_providers,
             scheduling_mode=scheduling_mode,
             priority_mode=priority_mode,
+            all_keys_whitelist=all_keys_whitelist,
         )

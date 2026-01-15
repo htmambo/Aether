@@ -710,6 +710,18 @@ export interface RoutingProviderInfo {
 }
 
 /**
+ * 全局 Key 白名单项（用于前端实时匹配）
+ */
+export interface GlobalKeyWhitelistItem {
+  key_id: string
+  key_name: string
+  masked_key: string
+  provider_id: string
+  provider_name: string
+  allowed_models: string[]
+}
+
+/**
  * 模型请求链路预览响应
  */
 export interface ModelRoutingPreviewResponse {
@@ -717,9 +729,11 @@ export interface ModelRoutingPreviewResponse {
   global_model_name: string
   display_name: string
   is_active: boolean
+  global_model_mappings: string[]  // GlobalModel 的模型映射规则（正则模式）
   providers: RoutingProviderInfo[]
   total_providers: number
   active_providers: number
   scheduling_mode: string
   priority_mode: string
+  all_keys_whitelist: GlobalKeyWhitelistItem[]
 }

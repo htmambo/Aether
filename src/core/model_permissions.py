@@ -390,6 +390,7 @@ def check_model_allowed_with_mappings(
 
     # 获取 allowed_models 的集合
     allowed_set = normalize_allowed_models(allowed_models)
+
     if allowed_set is None:
         # 不限制，已在 check_model_allowed 中返回 True
         return True, None
