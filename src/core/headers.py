@@ -213,7 +213,7 @@ class HeaderBuilder:
         """
         添加头部但保护指定的 key 不被覆盖
 
-        用于 endpoint.headers 不能覆盖认证头的场景。
+        用于 endpoint 额外请求头不能覆盖认证头的场景。
         """
         protected_lower = {k.lower() for k in protected_keys}
         for k, v in headers.items():
@@ -225,6 +225,61 @@ class HeaderBuilder:
         """移除指定的头部"""
         for k in keys:
             self._headers.pop(k.lower(), None)
+        return self
+
+    def rename(self, from_key: str, to_key: str) -> "HeaderBuilder":
+        """
+        重命名头部（保留原值）
+
+        如果 from_key 不存在，则不做任何操作。
+        """
+        from_lower = from_key.lower()
+        if from_lower in self._headers:
+            _, value = self._headers.pop(from_lower)
+            self._headers[to_key.lower()] = (to_key, value)
+        return self
+
+    def apply_rules(
+        self,
+        rules: list[Dict[str, Any]],
+        protected_keys: Optional[AbstractSet[str]] = None,
+    ) -> "HeaderBuilder":
+        """
+        应用请求头规则
+
+        支持的规则类型：
+        - set: 设置/覆盖头部 {"action": "set", "key": "X-Custom", "value": "fixed"}
+        - drop: 删除头部 {"action": "drop", "key": "X-Unwanted"}
+        - rename: 重命名头部 {"action": "rename", "from": "X-Old", "to": "X-New"}
+
+        Args:
+            rules: 规则列表
+            protected_keys: 受保护的 key（不能被 set/drop/rename 修改）
+        """
+        protected_lower = {k.lower() for k in protected_keys} if protected_keys else set()
+
+        for rule in rules:
+            action = rule.get("action")
+
+            if action == "set":
+                key = rule.get("key", "")
+                value = rule.get("value", "")
+                if key and key.lower() not in protected_lower:
+                    self.add(key, value)
+
+            elif action == "drop":
+                key = rule.get("key", "")
+                if key and key.lower() not in protected_lower:
+                    self._headers.pop(key.lower(), None)
+
+            elif action == "rename":
+                from_key = rule.get("from", "")
+                to_key = rule.get("to", "")
+                if from_key and to_key:
+                    # 两个 key 都不能是受保护的
+                    if from_key.lower() not in protected_lower and to_key.lower() not in protected_lower:
+                        self.rename(from_key, to_key)
+
         return self
 
     def build(self) -> Dict[str, str]:
@@ -470,4 +525,54 @@ def get_adapter_protected_keys(api_format: APIFormat) -> tuple[str, ...]:
         受保护的头部 key 元组
     """
     return tuple(get_protected_keys(api_format))
+
+
+# =============================================================================
+# Header Rules 工具函数
+# =============================================================================
+
+
+def extract_set_headers_from_rules(
+    header_rules: Optional[list[Dict[str, Any]]],
+) -> Optional[Dict[str, str]]:
+    """
+    从 header_rules 中提取 set 操作生成的头部字典
+
+    用于需要构造额外请求头的场景（如模型列表查询、模型测试等）。
+    注意：drop 和 rename 操作在这里不适用，因为它们用于修改已存在的头部。
+
+    Args:
+        header_rules: 请求头规则列表 [{"action": "set", "key": "X-Custom", "value": "val"}, ...]
+
+    Returns:
+        set 操作生成的头部字典，如果没有则返回 None
+    """
+    if not header_rules:
+        return None
+
+    headers: Dict[str, str] = {}
+    for rule in header_rules:
+        if rule.get("action") == "set":
+            key = rule.get("key", "")
+            value = rule.get("value", "")
+            if key:
+                headers[key] = value
+
+    return headers if headers else None
+
+
+def get_extra_headers_from_endpoint(endpoint: Any) -> Optional[Dict[str, str]]:
+    """
+    从 endpoint 提取额外请求头
+
+    用于需要构造额外请求头的场景（如模型列表查询、模型测试等）。
+
+    Args:
+        endpoint: ProviderEndpoint 对象
+
+    Returns:
+        额外请求头字典，如果没有则返回 None
+    """
+    header_rules = getattr(endpoint, "header_rules", None)
+    return extract_set_headers_from_rules(header_rules)
 

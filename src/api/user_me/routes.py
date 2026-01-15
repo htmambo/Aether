@@ -514,6 +514,7 @@ class ListMyApiKeysAdapter(AuthenticatedApiAdapter):
                     "name": key.name,
                     "key_display": key.get_display_key(),
                     "is_active": key.is_active,
+                    "is_locked": key.is_locked,
                     "last_used_at": (
                         real_stats["last_used_at"].isoformat()
                         if real_stats["last_used_at"]
@@ -614,6 +615,7 @@ class GetMyApiKeyDetailAdapter(AuthenticatedApiAdapter):
             "name": api_key.name,
             "key_display": api_key.get_display_key(),
             "is_active": api_key.is_active,
+            "is_locked": api_key.is_locked,
             "allowed_providers": api_key.allowed_providers,
             "force_capabilities": api_key.force_capabilities,
             "rate_limit": api_key.rate_limit,
@@ -637,6 +639,8 @@ class DeleteMyApiKeyAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法删除")
         context.db.delete(api_key)
         context.db.commit()
         return {"message": "API密钥已删除"}
@@ -656,6 +660,8 @@ class ToggleMyApiKeyAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法修改状态")
         api_key.is_active = not api_key.is_active
         context.db.commit()
         context.db.refresh(api_key)
@@ -1055,6 +1061,8 @@ class UpdateApiKeyProvidersAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法修改")
 
         if request.allowed_providers is not None and len(request.allowed_providers) > 0:
             provider_ids = [cfg.provider_id for cfg in request.allowed_providers]
@@ -1101,6 +1109,8 @@ class UpdateApiKeyCapabilitiesAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法修改")
 
         # 保存旧值用于审计
         old_capabilities = api_key.force_capabilities

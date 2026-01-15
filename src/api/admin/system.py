@@ -773,7 +773,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     {
                         "api_format": ep.api_format,
                         "base_url": ep.base_url,
-                        "headers": ep.headers,
+                        "header_rules": ep.header_rules,
                         "timeout": ep.timeout,
                         "max_retries": ep.max_retries,
                         "is_active": ep.is_active,
@@ -1063,7 +1063,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             existing_ep.base_url = ep_data.get(
                                 "base_url", existing_ep.base_url
                             )
-                            existing_ep.headers = ep_data.get("headers")
+                            existing_ep.header_rules = ep_data.get("header_rules")
                             existing_ep.timeout = ep_data.get("timeout", 300)
                             existing_ep.max_retries = ep_data.get("max_retries", 2)
                             existing_ep.is_active = ep_data.get("is_active", True)
@@ -1078,7 +1078,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             provider_id=provider_id,
                             api_format=ep_data["api_format"],
                             base_url=ep_data["base_url"],
-                            headers=ep_data.get("headers"),
+                            header_rules=ep_data.get("header_rules"),
                             timeout=ep_data.get("timeout", 300),
                             max_retries=ep_data.get("max_retries", 2),
                             is_active=ep_data.get("is_active", True),

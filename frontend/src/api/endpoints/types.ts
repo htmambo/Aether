@@ -62,6 +62,31 @@ export interface ProxyConfig {
   enabled?: boolean  // 是否启用代理（false 时保留配置但不使用）
 }
 
+/**
+ * 请求头规则类型
+ * - set: 设置/覆盖请求头
+ * - drop: 删除请求头
+ * - rename: 重命名请求头（保留原值）
+ */
+export interface HeaderRuleSet {
+  action: 'set'
+  key: string
+  value: string
+}
+
+export interface HeaderRuleDrop {
+  action: 'drop'
+  key: string
+}
+
+export interface HeaderRuleRename {
+  action: 'rename'
+  from: string
+  to: string
+}
+
+export type HeaderRule = HeaderRuleSet | HeaderRuleDrop | HeaderRuleRename
+
 export interface ProviderEndpoint {
   id: string
   provider_id: string
@@ -69,7 +94,8 @@ export interface ProviderEndpoint {
   api_format: string
   base_url: string
   custom_path?: string  // 自定义请求路径（可选，为空则使用 API 格式默认路径）
-  headers?: Record<string, string>
+  // 请求头配置
+  header_rules?: HeaderRule[]  // 请求头规则列表，支持 set/drop/rename 操作
   timeout: number
   max_retries: number
   is_active: boolean

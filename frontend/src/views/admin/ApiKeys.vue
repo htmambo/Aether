@@ -252,12 +252,21 @@
                   </div>
                 </TableCell>
                 <TableCell class="py-4 text-center">
-                  <Badge
-                    :variant="apiKey.is_active ? 'success' : 'destructive'"
-                    class="font-medium"
-                  >
-                    {{ apiKey.is_active ? '活跃' : '禁用' }}
-                  </Badge>
+                  <div class="flex flex-col items-center gap-1">
+                    <Badge
+                      :variant="apiKey.is_active ? 'success' : 'destructive'"
+                      class="font-medium"
+                    >
+                      {{ apiKey.is_active ? '活跃' : '禁用' }}
+                    </Badge>
+                    <Badge
+                      v-if="apiKey.is_locked"
+                      variant="secondary"
+                      class="text-xs"
+                    >
+                      已锁定
+                    </Badge>
+                  </div>
                 </TableCell>
                 <TableCell class="py-4">
                   <div class="flex justify-center gap-1">
@@ -278,6 +287,22 @@
                       @click="openAddBalanceDialog(apiKey)"
                     >
                       <DollarSign class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      :title="apiKey.is_locked ? '解锁' : '锁定'"
+                      @click="toggleLockApiKey(apiKey)"
+                    >
+                      <Lock
+                        v-if="apiKey.is_locked"
+                        class="h-4 w-4"
+                      />
+                      <LockOpen
+                        v-else
+                        class="h-4 w-4"
+                      />
                     </Button>
                     <Button
                       variant="ghost"
@@ -343,12 +368,21 @@
                     {{ apiKey.name || '未命名 Key' }}
                   </div>
                 </div>
-                <Badge
-                  :variant="apiKey.is_active ? 'success' : 'destructive'"
-                  class="text-xs flex-shrink-0"
-                >
-                  {{ apiKey.is_active ? '活跃' : '禁用' }}
-                </Badge>
+                <div class="flex flex-col items-end gap-1">
+                  <Badge
+                    :variant="apiKey.is_active ? 'success' : 'destructive'"
+                    class="text-xs flex-shrink-0"
+                  >
+                    {{ apiKey.is_active ? '活跃' : '禁用' }}
+                  </Badge>
+                  <Badge
+                    v-if="apiKey.is_locked"
+                    variant="secondary"
+                    class="text-xs"
+                  >
+                    已锁定
+                  </Badge>
+                </div>
               </div>
 
               <div class="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
@@ -458,6 +492,21 @@
                 <Button
                   variant="outline"
                   size="sm"
+                  @click="toggleLockApiKey(apiKey)"
+                >
+                  <Lock
+                    v-if="apiKey.is_locked"
+                    class="h-3.5 w-3.5 mr-1.5"
+                  />
+                  <LockOpen
+                    v-else
+                    class="h-3.5 w-3.5 mr-1.5"
+                  />
+                  {{ apiKey.is_locked ? '解锁' : '锁定' }}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   @click="toggleApiKey(apiKey)"
                 >
                   <Power class="h-3.5 w-3.5 mr-1.5" />
@@ -466,7 +515,7 @@
                 <Button
                   variant="outline"
                   size="sm"
-                  class="text-rose-600"
+                  class="text-rose-600 col-span-2"
                   @click="deleteApiKey(apiKey)"
                 >
                   <Trash2 class="h-3.5 w-3.5 mr-1.5" />
@@ -685,7 +734,9 @@ import {
   Copy,
   CheckCircle,
   SquarePen,
-  Search
+  Search,
+  Lock,
+  LockOpen
 } from 'lucide-vue-next'
 
 import { StandaloneKeyFormDialog, type StandaloneKeyFormData } from '@/features/api-keys'
@@ -826,6 +877,20 @@ async function toggleApiKey(apiKey: AdminApiKey) {
     success(response.message)
   } catch (err: any) {
     log.error('切换密钥状态失败:', err)
+    error(err.response?.data?.detail || '操作失败')
+  }
+}
+
+async function toggleLockApiKey(apiKey: AdminApiKey) {
+  try {
+    const response = await adminApi.toggleLockApiKey(apiKey.id)
+    const index = apiKeys.value.findIndex(k => k.id === apiKey.id)
+    if (index !== -1) {
+      apiKeys.value[index].is_locked = response.is_locked
+    }
+    success(response.message)
+  } catch (err: any) {
+    log.error('切换密钥锁定状态失败:', err)
     error(err.response?.data?.detail || '操作失败')
   }
 }

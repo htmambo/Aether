@@ -557,6 +557,13 @@
                       {{ apiKey.is_active ? '活跃' : '已禁用' }}
                     </Badge>
                     <Badge
+                      v-if="apiKey.is_locked"
+                      variant="secondary"
+                      class="text-xs"
+                    >
+                      已锁定
+                    </Badge>
+                    <Badge
                       v-if="apiKey.is_standalone"
                       variant="default"
                       class="text-xs bg-purple-500"
@@ -588,6 +595,22 @@
                     ${{ (apiKey.total_cost_usd || 0).toFixed(4) }}
                   </div>
                 </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-8 w-8"
+                  :title="apiKey.is_locked ? '解锁' : '锁定'"
+                  @click="toggleLockApiKey(apiKey)"
+                >
+                  <Lock
+                    v-if="apiKey.is_locked"
+                    class="h-4 w-4"
+                  />
+                  <LockOpen
+                    v-else
+                    class="h-4 w-4"
+                  />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -740,7 +763,9 @@ import {
   Trash2,
   Copy,
   Search,
-  CheckCircle
+  CheckCircle,
+  Lock,
+  LockOpen
 } from 'lucide-vue-next'
 
 // 功能组件
@@ -1021,6 +1046,21 @@ async function deleteApiKey(apiKey: any) {
     success('API Key已删除')
   } catch (err: any) {
     error(err.response?.data?.error?.message || err.response?.data?.detail || '未知错误', '删除 API Key 失败')
+  }
+}
+
+async function toggleLockApiKey(apiKey: any) {
+  try {
+    const response = await adminApi.toggleLockApiKey(apiKey.id)
+    // 更新本地状态
+    const index = userApiKeys.value.findIndex(k => k.id === apiKey.id)
+    if (index !== -1) {
+      userApiKeys.value[index].is_locked = response.is_locked
+    }
+    success(response.message)
+  } catch (err: any) {
+    log.error('切换密钥锁定状态失败:', err)
+    error(err.response?.data?.error?.message || err.response?.data?.detail || '操作失败', '锁定/解锁失败')
   }
 }
 

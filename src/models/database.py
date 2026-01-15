@@ -176,6 +176,7 @@ class ApiKey(Base):
 
     # 状态
     is_active = Column(Boolean, default=True, nullable=False)
+    is_locked = Column(Boolean, default=False, nullable=False)  # 管理员锁定，用户无法使用/操作
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)  # 过期时间
     auto_delete_on_expiry = Column(Boolean, default=False, nullable=False)  # 过期后是否自动删除
@@ -602,7 +603,7 @@ class ProviderEndpoint(Base):
     base_url = Column(String(500), nullable=False)
 
     # 请求配置
-    headers = Column(JSON, nullable=True)  # 额外请求头
+    header_rules = Column(JSON, nullable=True)  # 请求头规则 [{action, key, value, from, to}]
     timeout = Column(Integer, default=300)  # 超时（秒）
     max_retries = Column(Integer, default=2)  # 最大重试次数
 

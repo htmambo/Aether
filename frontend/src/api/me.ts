@@ -120,6 +120,7 @@ export interface ApiKey {
   key?: string
   key_display: string
   is_active: boolean
+  is_locked: boolean  // 管理员锁定标志
   last_used_at?: string
   created_at: string
   total_requests?: number

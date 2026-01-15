@@ -489,6 +489,7 @@ class AdminGetUserKeysAdapter(AdminApiAdapter):
                     "name": key.name,
                     "key_display": key.get_display_key(),
                     "is_active": key.is_active,
+                    "is_locked": key.is_locked,
                     "total_requests": key.total_requests,
                     "total_cost_usd": float(key.total_cost_usd or 0),
                     "rate_limit": key.rate_limit,

@@ -269,6 +269,7 @@ export interface AdminApiKey {
   name?: string
   key_display?: string  // 脱敏后的密钥显示
   is_active: boolean
+  is_locked: boolean  // 管理员锁定标志
   is_standalone: boolean  // 是否为独立余额Key
   balance_used_usd?: number  // 已使用余额（仅独立Key）
   current_balance_usd?: number | null  // 当前余额（独立Key预付费模式，null表示无限制）
@@ -307,6 +308,12 @@ export interface AdminApiKeysResponse {
 export interface ApiKeyToggleResponse {
   id: string // UUID
   is_active: boolean
+  message: string
+}
+
+export interface ApiKeyLockResponse {
+  id: string // UUID
+  is_locked: boolean
   message: string
 }
 
@@ -354,6 +361,14 @@ export const adminApi = {
   async deleteApiKey(keyId: string): Promise<{ message: string }> {
     const response = await apiClient.delete<{ message: string}>(
       `/api/admin/api-keys/${keyId}`
+    )
+    return response.data
+  },
+
+  // 切换API密钥锁定状态（锁定/解锁）
+  async toggleLockApiKey(keyId: string): Promise<ApiKeyLockResponse> {
+    const response = await apiClient.patch<ApiKeyLockResponse>(
+      `/api/admin/api-keys/${keyId}/lock`
     )
     return response.data
   },

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 from src.config import config
 from src.core.logger import logger
 from src.core.enums import AuthSource
+from src.core.exceptions import ForbiddenException
 from src.services.system.config import SystemConfigService
 
 if TYPE_CHECKING:
@@ -384,6 +385,10 @@ class AuthService:
         if not key_record.is_active:
             logger.warning("API认证失败 - 密钥已禁用")
             return None
+
+        if key_record.is_locked:
+            logger.warning("API认证失败 - 密钥已被管理员锁定")
+            raise ForbiddenException("该API密钥已被管理员锁定，请联系管理员")
 
         # 检查过期时间
         if key_record.expires_at:

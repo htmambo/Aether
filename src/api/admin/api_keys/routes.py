@@ -210,6 +210,25 @@ async def delete_api_key(key_id: str, request: Request, db: Session = Depends(ge
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.patch("/{key_id}/lock")
+async def toggle_lock_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    切换 API Key 锁定状态
+
+    锁定/解锁指定的 API Key。锁定后用户无法使用和操作此密钥。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **返回字段**:
+    - `id`: API Key ID
+    - `is_locked`: 新的锁定状态
+    - `message`: 提示信息
+    """
+    adapter = AdminToggleLockApiKeyAdapter(key_id=key_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 @router.patch("/{key_id}/balance")
 async def add_balance_to_key(
     key_id: str,
@@ -346,6 +365,7 @@ class AdminListStandaloneKeysAdapter(AdminApiAdapter):
                     "name": api_key.name,
                     "key_display": api_key.get_display_key(),
                     "is_active": api_key.is_active,
+                    "is_locked": api_key.is_locked,
                     "is_standalone": api_key.is_standalone,
                     "current_balance_usd": api_key.current_balance_usd,
                     "balance_used_usd": float(api_key.balance_used_usd or 0),
@@ -541,6 +561,39 @@ class AdminToggleApiKeyAdapter(AdminApiAdapter):
         }
 
 
+class AdminToggleLockApiKeyAdapter(AdminApiAdapter):
+    """切换API密钥锁定状态"""
+
+    def __init__(self, key_id: str):
+        self.key_id = key_id
+
+    async def handle(self, context):  # type: ignore[override]
+        db = context.db
+        api_key = db.query(ApiKey).filter(ApiKey.id == self.key_id).first()
+        if not api_key:
+            raise NotFoundException("API密钥不存在", "api_key")
+
+        api_key.is_locked = not api_key.is_locked
+        api_key.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(api_key)
+
+        logger.info(f"管理员切换API密钥锁定状态: Key ID {self.key_id}, 新状态 {'锁定' if api_key.is_locked else '解锁'}")
+
+        context.add_audit_metadata(
+            action="toggle_lock_api_key",
+            target_key_id=api_key.id,
+            user_id=api_key.user_id,
+            new_lock_status="locked" if api_key.is_locked else "unlocked",
+        )
+
+        return {
+            "id": api_key.id,
+            "is_locked": api_key.is_locked,
+            "message": f"API密钥已{'锁定' if api_key.is_locked else '解锁'}",
+        }
+
+
 class AdminDeleteApiKeyAdapter(AdminApiAdapter):
     def __init__(self, key_id: str):
         self.key_id = key_id
@@ -663,6 +716,7 @@ class AdminGetKeyDetailAdapter(AdminApiAdapter):
             "name": api_key.name,
             "key_display": api_key.get_display_key(),
             "is_active": api_key.is_active,
+            "is_locked": api_key.is_locked,
             "is_standalone": api_key.is_standalone,
             "current_balance_usd": api_key.current_balance_usd,
             "balance_used_usd": float(api_key.balance_used_usd or 0),

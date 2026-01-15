@@ -19,6 +19,7 @@ import httpx
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.crypto import crypto_service
+from src.core.headers import get_extra_headers_from_endpoint
 from src.core.logger import logger
 from src.database import create_session
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
@@ -268,7 +269,7 @@ class ModelFetchScheduler:
                         "api_key": api_key_value,
                         "base_url": endpoint.base_url,
                         "api_format": fmt,
-                        "extra_headers": endpoint.headers,
+                        "extra_headers": get_extra_headers_from_endpoint(endpoint),
                     }
                 )
 

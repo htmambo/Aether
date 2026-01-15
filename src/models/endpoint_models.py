@@ -10,6 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.models.admin_requests import ProxyConfig
 
+
+# ========== Header Rule 类型定义 ==========
+# 请求头规则支持三种操作：
+# - set: 设置/覆盖请求头 {"action": "set", "key": "X-Custom", "value": "val"}
+# - drop: 删除请求头 {"action": "drop", "key": "X-Unwanted"}
+# - rename: 重命名请求头 {"action": "rename", "from": "X-Old", "to": "X-New"}
+# 实际验证在 headers.py 的 apply_rules 中处理
+HeaderRule = Dict[str, Any]
+
+
 # ========== ProviderEndpoint CRUD ==========
 
 
@@ -21,8 +31,12 @@ class ProviderEndpointCreate(BaseModel):
     base_url: str = Field(..., min_length=1, max_length=500, description="API 基础 URL")
     custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
 
-    # 请求配置
-    headers: Optional[Dict[str, str]] = Field(default=None, description="自定义请求头")
+    # 请求头配置
+    header_rules: Optional[List[HeaderRule]] = Field(
+        default=None,
+        description="请求头规则列表，支持 set/drop/rename 操作",
+    )
+
     timeout: int = Field(default=300, ge=10, le=600, description="超时时间（秒）")
     max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
 
@@ -60,7 +74,13 @@ class ProviderEndpointUpdate(BaseModel):
         default=None, min_length=1, max_length=500, description="API 基础 URL"
     )
     custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
-    headers: Optional[Dict[str, str]] = Field(default=None, description="自定义请求头")
+
+    # 请求头配置
+    header_rules: Optional[List[HeaderRule]] = Field(
+        default=None,
+        description="请求头规则列表，支持 set/drop/rename 操作",
+    )
+
     timeout: Optional[int] = Field(default=None, ge=10, le=600, description="超时时间（秒）")
     max_retries: Optional[int] = Field(default=None, ge=0, le=10, description="最大重试次数")
     is_active: Optional[bool] = Field(default=None, description="是否启用")
@@ -92,8 +112,11 @@ class ProviderEndpointResponse(BaseModel):
     base_url: str
     custom_path: Optional[str] = None
 
-    # 请求配置
-    headers: Optional[Dict[str, str]] = None
+    # 请求头配置
+    header_rules: Optional[List[HeaderRule]] = Field(
+        default=None, description="请求头规则列表"
+    )
+
     timeout: int
     max_retries: int
 

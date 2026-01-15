@@ -48,6 +48,7 @@ export interface ApiKey {
   last_used_at?: string
   expires_at?: string  // 过期时间
   is_active: boolean
+  is_locked: boolean  // 管理员锁定标志
   is_standalone: boolean  // 是否为独立余额Key
   balance_used_usd?: number  // 已使用余额（仅独立Key）
   current_balance_usd?: number | null  // 当前余额（独立Key预付费模式，null表示无限制）

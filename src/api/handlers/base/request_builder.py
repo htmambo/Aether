@@ -140,16 +140,17 @@ class PassthroughRequestBuilder(RequestBuilder):
 
         builder = HeaderBuilder()
 
-        # 2. 透传原始头部（排除敏感头部 - 黑名单模式）
+        # 2. 透传原始头部（排除默认敏感头部）
         if original_headers:
             for name, value in original_headers.items():
                 if name.lower() in SENSITIVE_HEADERS:
                     continue
                 builder.add(name, value)
 
-        # 3. 添加 endpoint 配置的额外头部（不能覆盖认证头/Content-Type）
-        if endpoint.headers:
-            builder.add_protected(endpoint.headers, protected_keys)
+        # 3. 应用 endpoint 的请求头规则
+        header_rules = getattr(endpoint, "header_rules", None)
+        if header_rules:
+            builder.apply_rules(header_rules, protected_keys)
 
         # 4. 添加额外头部
         if extra_headers:

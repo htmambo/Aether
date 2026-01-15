@@ -15,10 +15,12 @@ from src.api.handlers.base.chat_adapter_base import get_adapter_class
 from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
 from src.config.constants import TimeoutDefaults
 from src.core.crypto import crypto_service
+from src.core.headers import get_extra_headers_from_endpoint
 from src.core.logger import logger
 from src.database.database import get_db
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, User
 from src.utils.auth_utils import get_current_user
+
 
 router = APIRouter(prefix="/api/admin/provider-query", tags=["Provider Query"])
 
@@ -130,7 +132,7 @@ async def query_available_models(
                     "api_key": api_key_value,
                     "base_url": endpoint.base_url,
                     "api_format": fmt,
-                    "extra_headers": endpoint.headers,
+                    "extra_headers": get_extra_headers_from_endpoint(endpoint),
                 })
 
         if not endpoint_configs:
@@ -160,7 +162,7 @@ async def query_available_models(
                     "api_key": api_key_value,
                     "base_url": endpoint.base_url,
                     "api_format": endpoint.api_format,
-                    "extra_headers": endpoint.headers,
+                    "extra_headers": get_extra_headers_from_endpoint(endpoint),
                 })
                 break  # 只取第一个可用的 Key
 
@@ -321,7 +323,7 @@ async def test_model(
         "api_key_id": api_key.id,  # 添加API Key ID用于用量记录
         "base_url": endpoint.base_url,
         "api_format": endpoint.api_format,
-        "extra_headers": endpoint.headers,
+        "extra_headers": get_extra_headers_from_endpoint(endpoint),
         "timeout": provider.timeout or TimeoutDefaults.HTTP_REQUEST,
     }
 

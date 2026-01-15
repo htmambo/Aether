@@ -102,7 +102,7 @@ async def create_provider_endpoint(
     - `api_format`: API 格式（如 claude、openai、gemini 等）
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径（可选）
-    - `headers`: 自定义请求头（可选）
+    - `header_rules`: 请求头规则列表（可选，支持 set/drop/rename 操作）
     - `timeout`: 超时时间（秒，默认 300）
     - `max_retries`: 最大重试次数（默认 2）
     - `config`: 额外配置（可选）
@@ -169,7 +169,7 @@ async def update_endpoint(
     **请求体字段**（均为可选）:
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
-    - `headers`: 自定义请求头
+    - `header_rules`: 请求头规则列表
     - `timeout`: 超时时间（秒）
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
@@ -298,13 +298,14 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             )
 
         now = datetime.now(timezone.utc)
+
         new_endpoint = ProviderEndpoint(
             id=str(uuid.uuid4()),
             provider_id=self.provider_id,
             api_format=self.endpoint_data.api_format,
             base_url=self.endpoint_data.base_url,
             custom_path=self.endpoint_data.custom_path,
-            headers=self.endpoint_data.headers,
+            header_rules=self.endpoint_data.header_rules,
             timeout=self.endpoint_data.timeout,
             max_retries=self.endpoint_data.max_retries,
             is_active=True,
@@ -398,6 +399,7 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
 
         update_data = self.endpoint_data.model_dump(exclude_unset=True)
+
         # 把 proxy 转换为 dict 存储，支持显式设置为 None 清除代理
         if "proxy" in update_data:
             if update_data["proxy"] is not None:

@@ -68,9 +68,139 @@
                     />
                   </div>
                 </div>
+                <!-- 请求头规则配置 -->
+                <Collapsible v-model:open="rulesExpanded" class="mt-2">
+                  <CollapsibleTrigger as-child>
+                    <button
+                      type="button"
+                      class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRight
+                        class="w-3 h-3 transition-transform"
+                        :class="{ 'rotate-90': rulesExpanded }"
+                      />
+                      <span>请求头规则</span>
+                      <span v-if="editingRules.length > 0" class="text-primary">
+                        ({{ editingRules.length }})
+                      </span>
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent class="pt-2">
+                    <div class="space-y-2">
+                      <div
+                        v-for="(rule, index) in editingRules"
+                        :key="index"
+                        class="flex items-start gap-2 p-2 rounded bg-muted/50"
+                      >
+                        <!-- 操作类型选择 -->
+                        <Select
+                          :model-value="rule.action"
+                          v-model:open="ruleSelectOpen[index]"
+                          @update:model-value="(v) => updateRuleAction(index, v as 'set' | 'drop' | 'rename')"
+                        >
+                          <SelectTrigger class="w-24 h-7 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent :side-offset="4">
+                            <SelectItem value="set">设置</SelectItem>
+                            <SelectItem value="drop">删除</SelectItem>
+                            <SelectItem value="rename">重命名</SelectItem>
+                          </SelectContent>
+                        </Select>
+
+                        <!-- set: key + value -->
+                        <template v-if="rule.action === 'set'">
+                          <div class="flex-1 space-y-1">
+                            <Input
+                              v-model="rule.key"
+                              placeholder="Header 名称"
+                              class="h-7 text-xs"
+                            />
+                            <p
+                              v-if="validateRuleKey(rule.key, index)"
+                              class="text-xs text-destructive"
+                            >
+                              {{ validateRuleKey(rule.key, index) }}
+                            </p>
+                          </div>
+                          <Input
+                            v-model="rule.value"
+                            placeholder="Header 值"
+                            class="flex-1 h-7 text-xs"
+                          />
+                        </template>
+
+                        <!-- drop: key only -->
+                        <template v-else-if="rule.action === 'drop'">
+                          <div class="flex-1 space-y-1">
+                            <Input
+                              v-model="rule.key"
+                              placeholder="要删除的 Header 名称"
+                              class="h-7 text-xs"
+                            />
+                            <p
+                              v-if="validateRuleKey(rule.key, index)"
+                              class="text-xs text-destructive"
+                            >
+                              {{ validateRuleKey(rule.key, index) }}
+                            </p>
+                          </div>
+                        </template>
+
+                        <!-- rename: from + to -->
+                        <template v-else-if="rule.action === 'rename'">
+                          <div class="flex-1 space-y-1">
+                            <Input
+                              v-model="rule.from"
+                              placeholder="原 Header 名称"
+                              class="h-7 text-xs"
+                            />
+                            <p
+                              v-if="validateRenameFrom(rule.from, index)"
+                              class="text-xs text-destructive"
+                            >
+                              {{ validateRenameFrom(rule.from, index) }}
+                            </p>
+                          </div>
+                          <ArrowRight class="w-4 h-4 shrink-0 text-muted-foreground mt-1.5" />
+                          <div class="flex-1 space-y-1">
+                            <Input
+                              v-model="rule.to"
+                              placeholder="新 Header 名称"
+                              class="h-7 text-xs"
+                            />
+                            <p
+                              v-if="validateRenameTo(rule.to, index)"
+                              class="text-xs text-destructive"
+                            >
+                              {{ validateRenameTo(rule.to, index) }}
+                            </p>
+                          </div>
+                        </template>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="h-7 w-7 shrink-0"
+                          @click="removeRule(index)"
+                        >
+                          <X class="w-3 h-3" />
+                        </Button>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        class="w-full h-7 text-xs"
+                        @click="addRule"
+                      >
+                        <Plus class="w-3 h-3 mr-1" />
+                        添加规则
+                      </Button>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
               </div>
             </template>
-            <!-- 查看模式 -->
             <template v-else>
               <div class="flex items-center gap-3">
                 <div class="w-24 shrink-0">
@@ -79,6 +209,12 @@
                 <div class="flex-1 min-w-0">
                   <span class="text-sm text-muted-foreground truncate block">
                     {{ endpoint.base_url }}{{ endpoint.custom_path ? endpoint.custom_path : '' }}
+                  </span>
+                  <span
+                    v-if="getEndpointRulesCount(endpoint) > 0"
+                    class="text-xs text-muted-foreground/70"
+                  >
+                    {{ getEndpointRulesCount(endpoint) }} 条请求头规则
                   </span>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
@@ -205,8 +341,11 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
 } from '@/components/ui'
-import { Settings, Edit, Trash2, Check, X, Power } from 'lucide-vue-next'
+import { Settings, Edit, Trash2, Check, X, Power, ChevronRight, Plus, ArrowRight } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
 import {
@@ -215,9 +354,19 @@ import {
   deleteEndpoint,
   API_FORMAT_LABELS,
   type ProviderEndpoint,
-  type ProviderWithEndpointsSummary
+  type ProviderWithEndpointsSummary,
+  type HeaderRule,
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
+
+// 编辑用的规则类型（统一的可编辑结构）
+interface EditableRule {
+  action: 'set' | 'drop' | 'rename'
+  key: string      // set/drop 用
+  value: string    // set 用
+  from: string     // rename 用
+  to: string       // rename 用
+}
 
 const props = defineProps<{
   modelValue: boolean
@@ -242,6 +391,21 @@ const savingEndpointId = ref<string | null>(null)
 const deletingEndpointId = ref<string | null>(null)
 const togglingEndpointId = ref<string | null>(null)
 const formatSelectOpen = ref(false)
+
+// 请求头规则编辑状态
+const editingRules = ref<EditableRule[]>([])
+const rulesExpanded = ref(false)
+const ruleSelectOpen = ref<Record<number, boolean>>({})  // 每个规则 Select 的打开状态
+
+// 系统保留的 header 名称（不允许用户设置）
+const RESERVED_HEADERS = new Set([
+  'authorization',
+  'x-api-key',
+  'x-goog-api-key',
+  'content-type',
+  'content-length',
+  'host',
+])
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
@@ -269,6 +433,147 @@ const availableFormats = computed(() => {
 function getDefaultPath(apiFormat: string): string {
   const format = apiFormats.value.find(f => f.value === apiFormat)
   return format?.default_path || ''
+}
+
+// 将 API 返回的 header_rules 转换为可编辑的规则数组
+function loadRulesFromEndpoint(endpoint: ProviderEndpoint): EditableRule[] {
+  const rules: EditableRule[] = []
+
+  if (endpoint.header_rules && endpoint.header_rules.length > 0) {
+    for (const rule of endpoint.header_rules) {
+      if (rule.action === 'set') {
+        rules.push({ action: 'set', key: rule.key, value: rule.value || '', from: '', to: '' })
+      } else if (rule.action === 'drop') {
+        rules.push({ action: 'drop', key: rule.key, value: '', from: '', to: '' })
+      } else if (rule.action === 'rename') {
+        rules.push({ action: 'rename', key: '', value: '', from: rule.from, to: rule.to })
+      }
+    }
+  }
+
+  return rules
+}
+
+// 将可编辑规则数组转换为 API 需要的 HeaderRule[]
+function rulesToHeaderRules(rules: EditableRule[]): HeaderRule[] | undefined {
+  const result: HeaderRule[] = []
+
+  for (const rule of rules) {
+    if (rule.action === 'set' && rule.key.trim()) {
+      result.push({ action: 'set', key: rule.key.trim(), value: rule.value })
+    } else if (rule.action === 'drop' && rule.key.trim()) {
+      result.push({ action: 'drop', key: rule.key.trim() })
+    } else if (rule.action === 'rename' && rule.from.trim() && rule.to.trim()) {
+      result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim() })
+    }
+  }
+
+  return result.length > 0 ? result : undefined
+}
+
+// 添加新规则
+function addRule() {
+  editingRules.value.push({ action: 'set', key: '', value: '', from: '', to: '' })
+}
+
+// 删除规则
+function removeRule(index: number) {
+  editingRules.value.splice(index, 1)
+}
+
+// 更新规则类型时重置字段
+function updateRuleAction(index: number, action: 'set' | 'drop' | 'rename') {
+  const rule = editingRules.value[index]
+  rule.action = action
+  // 重置字段
+  rule.key = ''
+  rule.value = ''
+  rule.from = ''
+  rule.to = ''
+}
+
+// 验证 set/drop 的 key
+function validateRuleKey(key: string, index: number): string | null {
+  const trimmedKey = key.trim().toLowerCase()
+  if (!trimmedKey) return null
+
+  // set/drop 操作都不允许操作保留头
+  if (RESERVED_HEADERS.has(trimmedKey)) {
+    return `"${key}" 是系统保留的请求头`
+  }
+
+  // 检查重复（在所有规则中检查同类型的 key）
+  const duplicate = editingRules.value.findIndex(
+    (r, i) => i !== index && (
+      ((r.action === 'set' || r.action === 'drop') && r.key.trim().toLowerCase() === trimmedKey) ||
+      (r.action === 'rename' && r.to.trim().toLowerCase() === trimmedKey)
+    )
+  )
+  if (duplicate >= 0) {
+    return '请求头名称重复'
+  }
+
+  return null
+}
+
+// 验证 rename 的 from
+function validateRenameFrom(from: string, index: number): string | null {
+  const trimmedFrom = from.trim().toLowerCase()
+  if (!trimmedFrom) return null
+
+  // 检查是否有其他规则已经修改了这个头
+  const duplicate = editingRules.value.findIndex(
+    (r, i) => i !== index &&
+      ((r.action === 'set' && r.key.trim().toLowerCase() === trimmedFrom) ||
+       (r.action === 'drop' && r.key.trim().toLowerCase() === trimmedFrom) ||
+       (r.action === 'rename' && r.from.trim().toLowerCase() === trimmedFrom))
+  )
+  if (duplicate >= 0) {
+    return '该请求头已被其他规则处理'
+  }
+
+  return null
+}
+
+// 验证 rename 的 to
+function validateRenameTo(to: string, index: number): string | null {
+  const trimmedTo = to.trim().toLowerCase()
+  if (!trimmedTo) return null
+
+  if (RESERVED_HEADERS.has(trimmedTo)) {
+    return `"${to}" 是系统保留的请求头`
+  }
+
+  // 检查重复
+  const duplicate = editingRules.value.findIndex(
+    (r, i) => i !== index &&
+      ((r.action === 'set' && r.key.trim().toLowerCase() === trimmedTo) ||
+       (r.action === 'rename' && r.to.trim().toLowerCase() === trimmedTo))
+  )
+  if (duplicate >= 0) {
+    return '请求头名称重复'
+  }
+
+  return null
+}
+
+// 检查所有规则是否有效（用于保存前验证）
+function hasValidationErrors(): boolean {
+  for (let i = 0; i < editingRules.value.length; i++) {
+    const rule = editingRules.value[i]
+    if (rule.action === 'set' || rule.action === 'drop') {
+      if (validateRuleKey(rule.key, i)) return true
+    } else if (rule.action === 'rename') {
+      if (validateRenameFrom(rule.from, i)) return true
+      if (validateRenameTo(rule.to, i)) return true
+    }
+  }
+  return false
+}
+
+// 获取端点的请求头规则数量（用于查看模式显示）
+function getEndpointRulesCount(endpoint: ProviderEndpoint): number {
+  return endpoint.header_rules?.length || 0
 }
 
 // 当前编辑端点的默认路径
@@ -304,6 +609,8 @@ watch(() => props.modelValue, (open) => {
     editingEndpointId.value = null
     editingUrl.value = ''
     editingPath.value = ''
+    editingRules.value = []
+    rulesExpanded.value = false
   } else {
     // 关闭对话框时完全清空新端点表单
     newEndpoint.value = { api_format: '', base_url: '', custom_path: '' }
@@ -321,6 +628,9 @@ function startEdit(endpoint: ProviderEndpoint) {
   editingEndpointId.value = endpoint.id
   editingUrl.value = endpoint.base_url
   editingPath.value = endpoint.custom_path || ''
+  // 加载规则数据
+  editingRules.value = loadRulesFromEndpoint(endpoint)
+  rulesExpanded.value = editingRules.value.length > 0
 }
 
 // 取消编辑
@@ -328,17 +638,26 @@ function cancelEdit() {
   editingEndpointId.value = null
   editingUrl.value = ''
   editingPath.value = ''
+  editingRules.value = []
+  rulesExpanded.value = false
 }
 
 // 保存端点
 async function saveEndpointUrl(endpoint: ProviderEndpoint) {
   if (!editingUrl.value) return
 
+  // 检查规则是否有验证错误
+  if (hasValidationErrors()) {
+    showError('请修正请求头规则中的错误')
+    return
+  }
+
   savingEndpointId.value = endpoint.id
   try {
     await updateEndpoint(endpoint.id, {
       base_url: editingUrl.value,
-      custom_path: editingPath.value || null,  // 空字符串时传 null 清空
+      custom_path: editingPath.value || null,
+      header_rules: rulesToHeaderRules(editingRules.value),
     })
     success('端点已更新')
     emit('endpointUpdated')
