@@ -33,6 +33,7 @@ class ModelsQueryRequest(BaseModel):
 
     provider_id: str
     api_key_id: Optional[str] = None
+    force_refresh: bool = False  # 强制刷新，跳过缓存
 
 
 class TestModelRequest(BaseModel):
@@ -73,6 +74,8 @@ async def query_available_models(
     """
     查询提供商可用模型
 
+    优先从缓存获取（缓存由定时任务刷新），缓存未命中时实时调用上游 API。
+
     遍历所有活跃端点，根据端点的 API 格式选择正确的 Adapter 进行请求：
     - OPENAI/OPENAI_CLI: 使用 OpenAIChatAdapter.fetch_models
     - CLAUDE/CLAUDE_CLI: 使用 ClaudeChatAdapter.fetch_models
@@ -84,7 +87,12 @@ async def query_available_models(
     Returns:
         所有端点的模型列表（合并）
     """
-    # 获取提供商及其端点和 API Keys
+    from src.services.model.fetch_scheduler import (
+        get_upstream_models_from_cache,
+        set_upstream_models_to_cache,
+    )
+
+    # 获取提供商基本信息
     provider = (
         db.query(Provider)
         .options(
@@ -97,6 +105,26 @@ async def query_available_models(
 
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
+
+    # 如果指定了 api_key_id 且不是强制刷新，优先从缓存获取
+    # 注：不指定 api_key_id 时（Provider 级别查询）不使用缓存，因为：
+    # 1. Provider 级别查询会遍历多个 Key，结果不稳定
+    # 2. 缓存按 Key 粒度存储，与定时任务的刷新逻辑一致
+    if request.api_key_id and not request.force_refresh:
+        cached_models = await get_upstream_models_from_cache(
+            request.provider_id, request.api_key_id
+        )
+        if cached_models is not None:
+            return {
+                "success": True,
+                "data": {"models": cached_models, "error": None, "from_cache": True},
+                "provider": {
+                    "id": provider.id,
+                    "name": provider.name,
+                },
+            }
+
+    # 缓存未命中或强制刷新，实时获取
 
     # 收集所有活跃端点的配置
     endpoint_configs: list[dict] = []
@@ -235,9 +263,15 @@ async def query_available_models(
     if not unique_models and not error:
         error = "No models returned from any endpoint"
 
+    # 如果指定了 api_key_id 且获取成功，写入缓存
+    if request.api_key_id and unique_models:
+        await set_upstream_models_to_cache(
+            request.provider_id, request.api_key_id, unique_models
+        )
+
     return {
         "success": len(unique_models) > 0,
-        "data": {"models": unique_models, "error": error},
+        "data": {"models": unique_models, "error": error, "from_cache": False},
         "provider": {
             "id": provider.id,
             "name": provider.name,

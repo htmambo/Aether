@@ -40,10 +40,23 @@
             >
               已选 {{ selectedModels.length }} 个
             </span>
-            <Loader2
-              v-if="fetchingUpstreamModels"
-              class="w-4 h-4 animate-spin text-muted-foreground shrink-0"
-            />
+            <!-- 刷新上游模型按钮 -->
+            <button
+              type="button"
+              class="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              :disabled="fetchingUpstreamModels"
+              title="刷新上游模型"
+              @click="refreshUpstreamModels"
+            >
+              <RefreshCw
+                v-if="!fetchingUpstreamModels"
+                class="w-3.5 h-3.5"
+              />
+              <Loader2
+                v-else
+                class="w-3.5 h-3.5 animate-spin"
+              />
+            </button>
           </div>
 
           <!-- 分组列表 -->
@@ -318,7 +331,8 @@ import {
   Check,
   ChevronDown,
   Lock,
-  LockOpen
+  LockOpen,
+  RefreshCw
 } from 'lucide-vue-next'
 import { Dialog, Button, Input } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
@@ -627,11 +641,11 @@ async function loadGlobalModels() {
 }
 
 // 从提供商获取模型（使用缓存）
-async function fetchUpstreamModels() {
+async function fetchUpstreamModels(forceRefresh = false) {
   if (!props.providerId || !props.apiKey) return
   try {
     fetchingUpstreamModels.value = true
-    const result = await fetchCachedModels(props.providerId, props.apiKey.id)
+    const result = await fetchCachedModels(props.providerId, props.apiKey.id, forceRefresh)
     if (loadingCancelled) return
     if (result.models.length > 0) {
       upstreamModels.value = result.models
@@ -644,6 +658,14 @@ async function fetchUpstreamModels() {
     }
   } finally {
     fetchingUpstreamModels.value = false
+  }
+}
+
+// 手动刷新上游模型（强制跳过缓存）
+async function refreshUpstreamModels() {
+  await fetchUpstreamModels(true)
+  if (upstreamModels.value.length > 0) {
+    success('上游模型已刷新')
   }
 }
 

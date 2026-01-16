@@ -18,6 +18,7 @@ from typing import Optional
 import httpx
 from sqlalchemy.orm import Session, joinedload
 
+from src.core.cache_service import CacheService
 from src.core.crypto import crypto_service
 from src.core.headers import get_extra_headers_from_endpoint
 from src.core.logger import logger
@@ -34,6 +35,35 @@ MAX_CONCURRENT_REQUESTS = 5
 
 # 单个 Key 处理的超时时间（秒）
 KEY_FETCH_TIMEOUT_SECONDS = 120
+
+# 上游模型缓存 TTL（与定时任务间隔保持一致）
+UPSTREAM_MODELS_CACHE_TTL_SECONDS = MODEL_FETCH_INTERVAL_MINUTES * 60
+
+
+def _get_upstream_models_cache_key(provider_id: str, api_key_id: str) -> str:
+    """生成上游模型缓存的 key"""
+    return f"upstream_models:{provider_id}:{api_key_id}"
+
+
+async def get_upstream_models_from_cache(
+    provider_id: str, api_key_id: str
+) -> Optional[list[dict]]:
+    """从缓存获取上游模型列表"""
+    cache_key = _get_upstream_models_cache_key(provider_id, api_key_id)
+    cached = await CacheService.get(cache_key)
+    if cached is not None:
+        logger.debug(f"上游模型缓存命中: {cache_key}")
+        return cached  # type: ignore[no-any-return]
+    return None
+
+
+async def set_upstream_models_to_cache(
+    provider_id: str, api_key_id: str, models: list[dict]
+) -> None:
+    """将上游模型列表写入缓存"""
+    cache_key = _get_upstream_models_cache_key(provider_id, api_key_id)
+    await CacheService.set(cache_key, models, UPSTREAM_MODELS_CACHE_TTL_SECONDS)
+    logger.debug(f"上游模型已缓存: {cache_key}, 数量={len(models)}")
 
 
 def _get_adapter_for_format(api_format: str) -> Optional[type]:
@@ -305,6 +335,22 @@ class ModelFetchScheduler:
 
         logger.info(
             f"Provider {provider.name} Key {key.id} 获取到 {len(fetched_model_ids)} 个唯一模型"
+        )
+
+        # 写入上游模型缓存（按 model id + api_format 去重后的完整模型信息）
+        seen_keys: set[str] = set()
+        unique_models: list[dict] = []
+        for model in all_models:
+            model_id = model.get("id")
+            api_format = model.get("api_format", "")
+            unique_key = f"{model_id}:{api_format}"
+            if model_id and unique_key not in seen_keys:
+                seen_keys.add(unique_key)
+                unique_models.append(model)
+        await set_upstream_models_to_cache(
+            provider_id,  # type: ignore[arg-type]
+            key.id,  # type: ignore[arg-type]
+            unique_models,
         )
 
         # 更新 allowed_models（保留 locked_models）

@@ -219,6 +219,7 @@ export interface ProviderModelsQueryResponse {
       api_format?: string
     }>
     error?: string
+    from_cache?: boolean
   }
   provider: {
     id: string
@@ -478,10 +479,10 @@ export const adminApi = {
   },
 
   // 查询 Provider 可用模型（从上游 API 获取）
-  async queryProviderModels(providerId: string, apiKeyId?: string): Promise<ProviderModelsQueryResponse> {
+  async queryProviderModels(providerId: string, apiKeyId?: string, forceRefresh = false): Promise<ProviderModelsQueryResponse> {
     const response = await apiClient.post<ProviderModelsQueryResponse>(
       '/api/admin/provider-query/models',
-      { provider_id: providerId, api_key_id: apiKeyId }
+      { provider_id: providerId, api_key_id: apiKeyId, force_refresh: forceRefresh }
     )
     return response.data
   },

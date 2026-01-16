@@ -256,16 +256,14 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
 
         # 处理 auto_fetch_models 的开启和关闭
         if not auto_fetch_enabled_before and auto_fetch_enabled_after:
-            # 刚刚开启了 auto_fetch_models，立即触发一次模型获取
-            logger.info("[AUTO_FETCH] Key %s 开启自动获取模型，立即触发模型获取", self.key_id)
+            # 刚刚开启了 auto_fetch_models，同步执行模型获取
+            logger.info("[AUTO_FETCH] Key %s 开启自动获取模型，同步执行模型获取", self.key_id)
             try:
                 from src.services.model.fetch_scheduler import get_model_fetch_scheduler
 
                 scheduler = get_model_fetch_scheduler()
-                # 在后台异步执行，不阻塞当前请求
-                import asyncio
-
-                asyncio.create_task(scheduler._fetch_models_for_key_by_id(self.key_id))
+                # 同步等待模型获取完成，确保前端刷新时能看到最新数据
+                await scheduler._fetch_models_for_key_by_id(self.key_id)
             except Exception as e:
                 logger.error(f"触发模型获取失败: {e}")
                 # 不抛出异常，避免影响 Key 更新操作
@@ -630,17 +628,15 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             f"Formats={self.key_data.api_formats}, Key=***{self.key_data.api_key[-4:]}, ID={new_key.id}"
         )
 
-        # 如果开启了 auto_fetch_models，立即触发一次模型获取
+        # 如果开启了 auto_fetch_models，同步执行模型获取
         if self.key_data.auto_fetch_models:
-            logger.info("[AUTO_FETCH] 新 Key %s 开启自动获取模型，立即触发模型获取", new_key.id)
+            logger.info("[AUTO_FETCH] 新 Key %s 开启自动获取模型，同步执行模型获取", new_key.id)
             try:
                 from src.services.model.fetch_scheduler import get_model_fetch_scheduler
 
                 scheduler = get_model_fetch_scheduler()
-                # 在后台异步执行，不阻塞当前请求
-                import asyncio
-
-                asyncio.create_task(scheduler._fetch_models_for_key_by_id(new_key.id))
+                # 同步等待模型获取完成，确保前端刷新时能看到最新数据
+                await scheduler._fetch_models_for_key_by_id(new_key.id)
             except Exception as e:
                 logger.error(f"触发模型获取失败: {e}")
                 # 不抛出异常，避免影响 Key 创建操作
