@@ -353,9 +353,12 @@ class ProviderOpsService:
             provider_id, ProviderActionType.QUERY_BALANCE, config
         )
 
-        # 成功时更新缓存
-        if result.status == ActionStatus.SUCCESS and result.data:
+        # 成功或 auth_expired 时缓存（auth_expired 带有 cookie_expired 信息供前端显示警告）
+        if result.status in (ActionStatus.SUCCESS, ActionStatus.AUTH_EXPIRED) and result.data:
             await self._cache_balance(provider_id, result)
+        # auth_failed 时清除缓存（配置错误，用户修正后应立即重试）
+        elif result.status == ActionStatus.AUTH_FAILED:
+            await self._clear_balance_cache(provider_id)
 
         return result
 
@@ -397,6 +400,12 @@ class ProviderOpsService:
                 await service.query_balance(provider_id)
         except Exception as e:
             logger.warning(f"异步刷新余额失败: provider_id={provider_id}, error={e}")
+
+    async def _clear_balance_cache(self, provider_id: str) -> None:
+        """清除余额缓存（认证失败时调用）"""
+        cache_key = f"provider_ops:balance:{provider_id}"
+        await CacheService.delete(cache_key)
+        logger.info(f"余额缓存已清除: provider_id={provider_id}")
 
     async def _cache_balance(self, provider_id: str, result: ActionResult) -> None:
         """缓存余额结果"""

@@ -152,9 +152,9 @@
                   <span class="font-semibold text-foreground/90 min-w-[4.5rem] tabular-nums">
                     {{ formatBalanceDisplay(getProviderBalance(provider.id)) }}
                   </span>
-                  <!-- 窗口限额 + 签到状态 -->
+                  <!-- 窗口限额 + 签到状态 + Cookie 失效警告 -->
                   <div
-                    v-if="getProviderBalanceExtra(provider.id, provider.ops_architecture_id).length > 0 || getProviderCheckin(provider.id)"
+                    v-if="getProviderBalanceExtra(provider.id, provider.ops_architecture_id).length > 0 || getProviderCheckin(provider.id) || getProviderCookieExpired(provider.id)"
                     class="text-muted-foreground/70 space-y-0.5"
                   >
                     <!-- 限额（进度条 + 倒计时，每行一个） -->
@@ -184,9 +184,19 @@
                         >{{ formatResetCountdown(item.resetsAt) }}</span>
                       </div>
                     </template>
+                    <!-- Cookie 失效警告 -->
+                    <div
+                      v-if="getProviderCookieExpired(provider.id)"
+                      class="flex items-center gap-1"
+                    >
+                      <span
+                        class="text-[10px] text-amber-600 dark:text-amber-500"
+                        :title="getProviderCookieExpired(provider.id)?.message"
+                      >签到 Cookie 已失效</span>
+                    </div>
                     <!-- 签到状态 -->
                     <div
-                      v-if="getProviderCheckin(provider.id)"
+                      v-else-if="getProviderCheckin(provider.id)"
                       class="flex items-center gap-1.5"
                     >
                       <span
@@ -429,9 +439,15 @@
               class="text-muted-foreground"
             >
               余额 <span class="font-semibold text-foreground/90">{{ formatBalanceDisplay(getProviderBalance(provider.id)) }}</span>
+              <!-- Cookie 失效警告 -->
+              <span
+                v-if="getProviderCookieExpired(provider.id)"
+                class="ml-1 text-amber-600 dark:text-amber-500"
+                :title="getProviderCookieExpired(provider.id)?.message"
+              >签到 Cookie 已失效</span>
               <!-- 签到状态显示 -->
               <span
-                v-if="getProviderCheckin(provider.id) && getProviderCheckin(provider.id)?.success !== false"
+                v-else-if="getProviderCheckin(provider.id) && getProviderCheckin(provider.id)?.success !== false"
                 class="ml-1 text-muted-foreground"
                 :title="getProviderCheckin(provider.id)?.message"
               >已签到</span>
@@ -724,7 +740,8 @@ function isBalanceInfo(data: unknown): data is { total_available: number | null;
 // 获取 provider 的余额显示
 function getProviderBalance(providerId: string): { available: number | null; currency: string } | null {
   const result = balanceCache.value[providerId]
-  if (!result || result.status !== 'success' || !result.data) {
+  // auth_expired 时余额数据仍有效（只是签到 Cookie 失效）
+  if (!result || (result.status !== 'success' && result.status !== 'auth_expired') || !result.data) {
     return null
   }
   if (!isBalanceInfo(result.data)) {
@@ -776,6 +793,27 @@ function getProviderCheckin(providerId: string): { success: boolean | null; mess
   }
 }
 
+// 获取 provider 的 Cookie 失效状态（从 extra 字段）
+function getProviderCookieExpired(providerId: string): { expired: boolean; message: string } | null {
+  const result = balanceCache.value[providerId]
+  if (!result || !result.data) {
+    return null
+  }
+  // 支持 status 为 'success' 或 'auth_expired'（Cookie 失效时状态会变为 auth_expired）
+  if (result.status !== 'success' && result.status !== 'auth_expired') {
+    return null
+  }
+  const data = result.data as Record<string, any>
+  const extra = data.extra
+  if (!extra || !extra.cookie_expired) {
+    return null
+  }
+  return {
+    expired: true,
+    message: extra.cookie_expired_message || 'Cookie 已失效'
+  }
+}
+
 // 格式化余额显示
 function formatBalanceDisplay(balance: { available: number | null; currency: string } | null): string {
   if (!balance || balance.available == null) {
@@ -812,7 +850,8 @@ function getProviderBalanceExtra(providerId: string, architectureId?: string): B
   if (!architectureId) return []
 
   const result = balanceCache.value[providerId]
-  if (!result || result.status !== 'success' || !result.data) {
+  // auth_expired 时余额数据仍有效（只是签到 Cookie 失效）
+  if (!result || (result.status !== 'success' && result.status !== 'auth_expired') || !result.data) {
     return []
   }
 

@@ -120,7 +120,8 @@ class NewApiBalanceAction(BalanceAction):
 
         Returns:
             签到结果字典，包含 success 和 message 字段；
-            如果功能未开放或认证失败，返回 None
+            如果功能未开放返回 None；
+            如果 Cookie 失效返回 {"cookie_expired": True}
         """
         site = client.base_url.host or str(client.base_url)
         checkin_endpoint = self.config.get("checkin_endpoint", "/api/user/checkin")
@@ -139,10 +140,10 @@ class NewApiBalanceAction(BalanceAction):
                 logger.debug(f"[{site}] 签到功能未开放")
                 return None
 
-            # 401/403 表示签到需要额外认证（如 Cookie），当前配置不支持
+            # 401/403 表示 Cookie 已失效
             if response.status_code in (401, 403):
-                logger.debug(f"[{site}] 签到需要额外认证")
-                return None
+                logger.warning(f"[{site}] Cookie 已失效（签到返回 {response.status_code}）")
+                return {"cookie_expired": True, "message": "Cookie 已失效"}
 
             try:
                 data = response.json()
@@ -160,15 +161,15 @@ class NewApiBalanceAction(BalanceAction):
                         logger.debug(f"[{site}] 今日已签到: {message}")
                         return {"success": None, "message": message or "今日已签到"}
 
-                    # 检查是否是认证失败（未登录、无权限等）- 静默跳过
+                    # 检查是否是认证失败（未登录、无权限等）- Cookie 已失效
                     auth_fail_indicators = [
                         "未登录", "请登录", "login", "unauthorized", "无权限", "权限不足",
                         "turnstile", "captcha", "验证码",  # 需要人机验证
                     ]
                     is_auth_fail = any(ind in message.lower() for ind in auth_fail_indicators)
                     if is_auth_fail:
-                        logger.debug(f"[{site}] 签到需要额外认证，跳过")
-                        return None
+                        logger.warning(f"[{site}] Cookie 已失效（签到认证失败）: {message}")
+                        return {"cookie_expired": True, "message": message or "Cookie 已失效"}
 
                     # 其他失败情况
                     logger.debug(f"[{site}] 签到失败: {message}")

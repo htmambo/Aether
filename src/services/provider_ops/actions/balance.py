@@ -10,6 +10,7 @@ import httpx
 from src.services.provider_ops.actions.base import ProviderAction
 from src.services.provider_ops.types import (
     ActionResult,
+    ActionStatus,
     BalanceInfo,
     ProviderActionType,
 )
@@ -53,9 +54,16 @@ class BalanceAction(ProviderAction):
         if checkin_result and result.data and hasattr(result.data, "extra"):
             if result.data.extra is None:
                 result.data.extra = {}
-            result.data.extra["checkin_success"] = checkin_result.get("success")
-            result.data.extra["checkin_message"] = checkin_result.get("message", "")
-            logger.debug(f"签到结果已附加到 extra: {checkin_result}")
+            # 处理 cookie_expired 标记
+            if checkin_result.get("cookie_expired"):
+                result.data.extra["cookie_expired"] = True
+                result.data.extra["cookie_expired_message"] = checkin_result.get("message", "")
+                result.status = ActionStatus.AUTH_EXPIRED
+                logger.warning(f"Cookie 已失效: {checkin_result}")
+            else:
+                result.data.extra["checkin_success"] = checkin_result.get("success")
+                result.data.extra["checkin_message"] = checkin_result.get("message", "")
+                logger.debug(f"签到结果已附加到 extra: {checkin_result}")
 
         return result
 
