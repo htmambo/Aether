@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     nodejs \
     npm \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依赖

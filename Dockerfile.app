@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     libpq5 \
     curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # 从 base 镜像复制 Python 包
