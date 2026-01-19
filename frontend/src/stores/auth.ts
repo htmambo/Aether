@@ -50,6 +50,9 @@ export const useAuthStore = defineStore('auth', () => {
         error.value = '邮箱或密码错误'
       } else if (err.response?.status === 422) {
         error.value = '请输入有效的邮箱地址'
+      } else if (err.response?.status === 429) {
+        // 限流错误，显示后端返回的具体信息
+        error.value = err.response?.data?.detail || '请求过于频繁,请稍后重试'
       } else if (err.response?.status === 500) {
         error.value = '服务器错误,请稍后重试'
       } else {

@@ -173,12 +173,18 @@
                 :key="link.provider_type"
                 class="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-4"
               >
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm font-medium truncate">
-                    {{ link.display_name }}
-                  </div>
-                  <div class="text-xs text-muted-foreground truncate">
-                    {{ link.provider_username || link.provider_email || '已绑定' }}
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                  <div
+                    class="oauth-icon shrink-0"
+                    v-html="getOAuthIcon(link.provider_type)"
+                  />
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium truncate">
+                      {{ link.display_name }}
+                    </div>
+                    <div class="text-xs text-muted-foreground truncate">
+                      {{ link.provider_username || link.provider_email || '已绑定' }}
+                    </div>
                   </div>
                 </div>
                 <Button
@@ -197,12 +203,18 @@
                 :key="p.provider_type"
                 class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border p-4 hover:border-primary/50 transition-colors"
               >
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm font-medium truncate">
-                    {{ p.display_name }}
-                  </div>
-                  <div class="text-xs text-muted-foreground">
-                    未绑定
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                  <div
+                    class="oauth-icon shrink-0"
+                    v-html="getOAuthIcon(p.provider_type)"
+                  />
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium truncate">
+                      {{ p.display_name }}
+                    </div>
+                    <div class="text-xs text-muted-foreground">
+                      未绑定
+                    </div>
                   </div>
                 </div>
                 <Button
@@ -432,6 +444,7 @@ import { useAuthStore } from '@/stores/auth'
 import { meApi, type Profile } from '@/api/me'
 import { authApi } from '@/api/auth'
 import { oauthApi, type OAuthLinkInfo, type OAuthProviderInfo } from '@/api/oauth'
+import { getOAuthIcon } from '@/utils/oauth-icons'
 import { useDarkMode, type ThemeMode } from '@/composables/useDarkMode'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
@@ -601,7 +614,42 @@ async function loadOAuthBindings() {
 function handleBind(providerType: string) {
   // 保存返回路径（OAuth callback 会读取）
   sessionStorage.setItem('redirectPath', route.fullPath)
-  window.location.href = getApiUrl(`/api/user/oauth/${providerType}/bind`)
+
+  // 先获取一次性绑定令牌，再在新标签页打开（避免在 URL 中暴露 access_token）
+  oauthActionLoading.value = true
+  oauthApi.createBindToken(providerType)
+    .then((bindToken) => {
+      // getApiUrl 可能返回相对路径，需要拼接完整 URL
+      const basePath = getApiUrl(`/api/user/oauth/${providerType}/bind`)
+      const bindUrl = basePath.startsWith('http')
+        ? new URL(basePath)
+        : new URL(basePath, window.location.origin)
+      bindUrl.searchParams.set('bind_token', bindToken)
+
+      // 新标签页打开 OAuth 流程
+      const newTab = window.open(bindUrl.toString(), '_blank')
+
+      // 监听标签页关闭，刷新绑定状态
+      if (newTab) {
+        const MAX_WAIT_MS = 10 * 60 * 1000 // 10 分钟超时
+        const startTime = Date.now()
+        const checkClosed = setInterval(() => {
+          if (newTab.closed || Date.now() - startTime > MAX_WAIT_MS) {
+            clearInterval(checkClosed)
+            oauthActionLoading.value = false
+            loadOAuthBindings()
+          }
+        }, 500)
+      } else {
+        // 被浏览器阻止，回退到当前页面跳转
+        oauthActionLoading.value = false
+        window.location.href = bindUrl.toString()
+      }
+    })
+    .catch((err) => {
+      oauthActionLoading.value = false
+      showError(getErrorMessage(err, '获取绑定令牌失败'))
+    })
 }
 
 async function handleUnbind(providerType: string) {
@@ -776,3 +824,15 @@ function formatDate(dateString?: string): string {
   })
 }
 </script>
+
+<style scoped>
+.oauth-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.oauth-icon :deep(svg) {
+  width: 100%;
+  height: 100%;
+}
+</style>

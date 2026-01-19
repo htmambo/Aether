@@ -127,7 +127,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
     - **access_token**: 用于后续 API 调用，有效期 24 小时
     - **refresh_token**: 用于刷新 access_token
 
-    速率限制: 5次/分钟/IP
+    速率限制: 20次/分钟/IP
     """
     adapter = AuthLoginAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -153,7 +153,7 @@ async def register(request: Request, db: Session = Depends(get_db)):
     创建新用户账号。需要系统开放注册功能。
     如果系统开启了邮箱验证，需先通过 /send-verification-code 和 /verify-email 完成邮箱验证。
 
-    速率限制: 3次/分钟/IP
+    速率限制: 10次/分钟/IP
     """
     adapter = AuthRegisterAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -202,7 +202,7 @@ async def send_verification_code(request: Request, db: Session = Depends(get_db)
     向指定邮箱发送验证码，用于注册前的邮箱验证。
     验证码有效期 5 分钟，同一邮箱 60 秒内只能发送一次。
 
-    速率限制: 3次/分钟/IP
+    速率限制: 5次/分钟/IP
     """
     adapter = AuthSendVerificationCodeAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -216,7 +216,7 @@ async def verify_email(request: Request, db: Session = Depends(get_db)):
     验证邮箱收到的验证码是否正确。
     验证成功后，邮箱会被标记为已验证状态，可用于注册。
 
-    速率限制: 10次/分钟/IP
+    速率限制: 20次/分钟/IP
     """
     adapter = AuthVerifyEmailAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)

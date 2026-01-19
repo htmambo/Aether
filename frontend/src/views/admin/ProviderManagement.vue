@@ -164,7 +164,7 @@
                     >
                       <div
                         :title="item.tooltip"
-                        :class="['flex items-center gap-1', item.tooltip ? 'cursor-help' : '']"
+                        class="flex items-center gap-1"
                       >
                         <span class="text-[10px] text-muted-foreground/60 w-4">{{ item.label }}</span>
                         <div class="w-12 h-1.5 bg-border rounded-full overflow-hidden">

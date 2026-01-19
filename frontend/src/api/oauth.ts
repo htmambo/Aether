@@ -96,6 +96,11 @@ export const oauthApi = {
     return response.data.links || []
   },
 
+  async createBindToken(providerType: string): Promise<string> {
+    const response = await apiClient.post<{ bind_token: string }>(`/api/user/oauth/${providerType}/bind-token`)
+    return response.data.bind_token
+  },
+
   async unbind(providerType: string): Promise<{ message: string }> {
     const response = await apiClient.delete<{ message: string }>(`/api/user/oauth/${providerType}`)
     return response.data

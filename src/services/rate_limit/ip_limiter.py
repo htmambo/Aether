@@ -24,12 +24,12 @@ class IPRateLimiter:
     # 默认限制配置（每分钟）
     DEFAULT_LIMITS = {
         "default": 100,  # 默认限制
-        "login": 5,  # 登录接口
-        "register": 3,  # 注册接口
+        "login": 20,  # 登录接口
+        "register": 10,  # 注册接口
         "api": 60,  # API 接口
         "public": 60,  # 公共接口
-        "verification_send": 3,  # 发送验证码接口
-        "verification_verify": 10,  # 验证验证码接口
+        "verification_send": 5,  # 发送验证码接口
+        "verification_verify": 20,  # 验证验证码接口
     }
 
     @staticmethod
