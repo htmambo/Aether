@@ -281,19 +281,21 @@ class ModelFetchScheduler:
         # 并发获取模型
         all_models, errors, has_success = await fetch_models_from_endpoints(endpoint_configs)
 
-        # 记录获取结果
-        error_msg = "; ".join(errors) if errors else None
+        # 记录获取时间
         key.last_models_fetch_at = now
-        key.last_models_fetch_error = error_msg
 
         # 如果没有任何成功的响应，不更新 allowed_models（保留旧数据）
         if not has_success:
+            # 所有端点都失败时，记录错误
+            error_msg = "; ".join(errors) if errors else "All endpoints failed"
+            key.last_models_fetch_error = error_msg
             logger.warning(
                 f"Provider {provider.name} Key {key.id} 所有端点获取失败，保留现有模型列表"
             )
-            if not error_msg:
-                key.last_models_fetch_error = "All endpoints failed"
             return "error"
+
+        # 有成功的响应，清除错误状态（部分失败不算失败）
+        key.last_models_fetch_error = None
 
         # 去重获取模型 ID 列表
         fetched_model_ids: set[str] = set()
