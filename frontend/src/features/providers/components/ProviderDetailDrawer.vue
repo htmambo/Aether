@@ -1118,27 +1118,46 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
   handleKeyDragEnd()
 
   try {
-    // 收集所有唯一的优先级并排序
-    const uniquePriorities = [...new Set(keys.map(k => k.internal_priority ?? 0))].sort((a, b) => a - b)
-
-    // 找到被拖动组和目标组的索引
-    const draggedGroupIndex = uniquePriorities.indexOf(draggedPriority)
-    const targetGroupIndex = uniquePriorities.indexOf(targetPriority)
-
-    // 移动优先级组
-    uniquePriorities.splice(draggedGroupIndex, 1)
-    uniquePriorities.splice(targetGroupIndex, 0, draggedPriority)
-
-    // 创建旧优先级到新优先级的映射（按顺序重新分配 1, 2, 3...）
-    const priorityMap = new Map<number, number>()
-    uniquePriorities.forEach((oldPriority, index) => {
-      priorityMap.set(oldPriority, index + 1)
+    // 记录每个 key 的原始优先级
+    const originalPriorityMap = new Map<string, number>()
+    keys.forEach(k => {
+      originalPriorityMap.set(k.id, k.internal_priority ?? 0)
     })
 
-    // 更新所有 key 的优先级
+    // 重排数组：将被拖动项移到目标位置
+    const items = [...keys]
+    items.splice(draggedIndex, 1)
+    items.splice(targetIndex, 0, draggedKey)
+
+    // 按新顺序分配优先级：被拖动项单独成组，其他同组项保持在一起
+    const groupNewPriority = new Map<number, number>()
+    let currentPriority = 1
+    const newPriorityMap = new Map<string, number>()
+
+    items.forEach(key => {
+      const originalPriority = originalPriorityMap.get(key.id)!
+
+      if (key === draggedKey) {
+        // 被拖动的项单独成组
+        newPriorityMap.set(key.id, currentPriority)
+        currentPriority++
+      } else {
+        if (groupNewPriority.has(originalPriority)) {
+          // 同组的其他项使用相同的新优先级
+          newPriorityMap.set(key.id, groupNewPriority.get(originalPriority)!)
+        } else {
+          // 新组，分配新优先级
+          groupNewPriority.set(originalPriority, currentPriority)
+          newPriorityMap.set(key.id, currentPriority)
+          currentPriority++
+        }
+      }
+    })
+
+    // 更新所有优先级发生变化的 key
     const updatePromises = keys.map(key => {
       const oldPriority = key.internal_priority ?? 0
-      const newPriority = priorityMap.get(oldPriority)
+      const newPriority = newPriorityMap.get(key.id)
       if (newPriority !== undefined && oldPriority !== newPriority) {
         return updateProviderKey(key.id, { internal_priority: newPriority })
       }

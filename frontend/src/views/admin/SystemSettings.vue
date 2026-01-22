@@ -187,6 +187,26 @@
               </div>
             </div>
           </div>
+
+          <div class="flex items-center h-full">
+            <div class="flex items-center space-x-2">
+              <Checkbox
+                id="format-conversion-enabled"
+                v-model:checked="systemConfig.format_conversion_enabled"
+              />
+              <div>
+                <Label
+                  for="format-conversion-enabled"
+                  class="cursor-pointer"
+                >
+                  启用格式自动转换
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  允许网关在 OpenAI/Claude/Gemini 格式间自动转换
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </CardSection>
 
@@ -834,6 +854,8 @@ interface SystemConfig {
   enable_registration: boolean
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: boolean
+  // 格式转换
+  format_conversion_enabled: boolean
   // 日志记录
   request_log_level: string
   max_request_body_size: number
@@ -886,6 +908,8 @@ const systemConfig = ref<SystemConfig>({
   enable_registration: false,
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: false,
+  // 格式转换
+  format_conversion_enabled: false,
   // 日志记录
   request_log_level: 'basic',
   max_request_body_size: 1048576,
@@ -911,7 +935,8 @@ const hasBasicConfigChanges = computed(() => {
     systemConfig.value.default_user_quota_usd !== originalConfig.value.default_user_quota_usd ||
     systemConfig.value.rate_limit_per_minute !== originalConfig.value.rate_limit_per_minute ||
     systemConfig.value.enable_registration !== originalConfig.value.enable_registration ||
-    systemConfig.value.auto_delete_expired_keys !== originalConfig.value.auto_delete_expired_keys
+    systemConfig.value.auto_delete_expired_keys !== originalConfig.value.auto_delete_expired_keys ||
+    systemConfig.value.format_conversion_enabled !== originalConfig.value.format_conversion_enabled
   )
 })
 
@@ -988,6 +1013,8 @@ async function loadSystemConfig() {
       'enable_registration',
       // 独立余额 Key 过期管理
       'auto_delete_expired_keys',
+      // 格式转换
+      'format_conversion_enabled',
       // 日志记录
       'request_log_level',
       'max_request_body_size',
@@ -1045,6 +1072,11 @@ async function saveBasicConfig() {
         value: systemConfig.value.auto_delete_expired_keys,
         description: '是否自动删除过期的API Key'
       },
+      {
+        key: 'format_conversion_enabled',
+        value: systemConfig.value.format_conversion_enabled,
+        description: '是否启用全局格式自动转换'
+      },
     ]
 
     await Promise.all(
@@ -1058,6 +1090,7 @@ async function saveBasicConfig() {
       originalConfig.value.rate_limit_per_minute = systemConfig.value.rate_limit_per_minute
       originalConfig.value.enable_registration = systemConfig.value.enable_registration
       originalConfig.value.auto_delete_expired_keys = systemConfig.value.auto_delete_expired_keys
+      originalConfig.value.format_conversion_enabled = systemConfig.value.format_conversion_enabled
     }
     success('基础配置已保存')
   } catch (err) {

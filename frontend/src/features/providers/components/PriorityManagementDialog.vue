@@ -728,7 +728,8 @@ function handleProviderDrop(dropIndex: number) {
   }
 
   const providers = sortedProviders.value
-  const draggedItem = providers[draggedProvider.value]
+  const dragIndex = draggedProvider.value
+  const draggedItem = providers[dragIndex]
   const targetItem = providers[dropIndex]
   const draggedPriority = draggedItem.provider_priority
   const targetPriority = targetItem.provider_priority
@@ -740,33 +741,43 @@ function handleProviderDrop(dropIndex: number) {
     return
   }
 
-  // 收集所有唯一的优先级并排序
-  const uniquePriorities = [...new Set(providers.map(p => p.provider_priority))].sort((a, b) => a - b)
-
-  // 找到被拖动组和目标组的索引
-  const draggedGroupIndex = uniquePriorities.indexOf(draggedPriority)
-  const targetGroupIndex = uniquePriorities.indexOf(targetPriority)
-
-  // 移动优先级组
-  uniquePriorities.splice(draggedGroupIndex, 1)
-  uniquePriorities.splice(targetGroupIndex, 0, draggedPriority)
-
-  // 创建旧优先级到新优先级的映射（按顺序重新分配 1, 2, 3...）
-  const priorityMap = new Map<number, number>()
-  uniquePriorities.forEach((oldPriority, index) => {
-    priorityMap.set(oldPriority, index + 1)
+  // 记录每个 provider 的原始优先级
+  const originalPriorityMap = new Map<string, number>()
+  providers.forEach(p => {
+    originalPriorityMap.set(p.id, p.provider_priority)
   })
 
-  // 更新所有 provider 的优先级
-  providers.forEach(provider => {
-    const newPriority = priorityMap.get(provider.provider_priority)
-    if (newPriority !== undefined) {
-      provider.provider_priority = newPriority
+  // 重排数组：将被拖动项移到目标位置
+  const items = [...providers]
+  items.splice(dragIndex, 1)
+  items.splice(dropIndex, 0, draggedItem)
+
+  // 按新顺序分配优先级：被拖动项单独成组，其他同组项保持在一起
+  const groupNewPriority = new Map<number, number>()
+  let currentPriority = 1
+
+  items.forEach(provider => {
+    const originalPriority = originalPriorityMap.get(provider.id)!
+
+    if (provider === draggedItem) {
+      // 被拖动的项单独成组
+      provider.provider_priority = currentPriority
+      currentPriority++
+    } else {
+      if (groupNewPriority.has(originalPriority)) {
+        // 同组的其他项使用相同的新优先级
+        provider.provider_priority = groupNewPriority.get(originalPriority)!
+      } else {
+        // 新组，分配新优先级
+        groupNewPriority.set(originalPriority, currentPriority)
+        provider.provider_priority = currentPriority
+        currentPriority++
+      }
     }
   })
 
   // 重新排序
-  sortedProviders.value = [...providers].sort((a, b) => a.provider_priority - b.provider_priority)
+  sortedProviders.value = [...items].sort((a, b) => a.provider_priority - b.provider_priority)
   draggedProvider.value = null
   dragOverProvider.value = null
 }
@@ -814,33 +825,43 @@ function handleKeyDrop(format: string, dropIndex: number) {
     return
   }
 
-  // 收集所有唯一的优先级并排序
-  const uniquePriorities = [...new Set(keys.map(k => k.priority))].sort((a, b) => a - b)
-
-  // 找到被拖动组和目标组的索引
-  const draggedGroupIndex = uniquePriorities.indexOf(draggedPriority)
-  const targetGroupIndex = uniquePriorities.indexOf(targetPriority)
-
-  // 移动优先级组
-  uniquePriorities.splice(draggedGroupIndex, 1)
-  uniquePriorities.splice(targetGroupIndex, 0, draggedPriority)
-
-  // 创建旧优先级到新优先级的映射（按顺序重新分配 1, 2, 3...）
-  const priorityMap = new Map<number, number>()
-  uniquePriorities.forEach((oldPriority, index) => {
-    priorityMap.set(oldPriority, index + 1)
+  // 记录每个 key 的原始优先级
+  const originalPriorityMap = new Map<string, number>()
+  keys.forEach(k => {
+    originalPriorityMap.set(k.id, k.priority)
   })
 
-  // 更新所有 key 的优先级
-  keys.forEach(key => {
-    const newPriority = priorityMap.get(key.priority)
-    if (newPriority !== undefined) {
-      key.priority = newPriority
+  // 重排数组：将被拖动项移到目标位置
+  const items = [...keys]
+  items.splice(dragIndex, 1)
+  items.splice(dropIndex, 0, draggedItem)
+
+  // 按新顺序分配优先级：被拖动项单独成组，其他同组项保持在一起
+  const groupNewPriority = new Map<number, number>()
+  let currentPriority = 1
+
+  items.forEach(key => {
+    const originalPriority = originalPriorityMap.get(key.id)!
+
+    if (key === draggedItem) {
+      // 被拖动的项单独成组
+      key.priority = currentPriority
+      currentPriority++
+    } else {
+      if (groupNewPriority.has(originalPriority)) {
+        // 同组的其他项使用相同的新优先级
+        key.priority = groupNewPriority.get(originalPriority)!
+      } else {
+        // 新组，分配新优先级
+        groupNewPriority.set(originalPriority, currentPriority)
+        key.priority = currentPriority
+        currentPriority++
+      }
     }
   })
 
   // 按优先级重新排序
-  keysByFormat.value[format] = [...keys].sort((a, b) => a.priority - b.priority)
+  keysByFormat.value[format] = [...items].sort((a, b) => a.priority - b.priority)
   draggedKey.value[format] = null
   dragOverKey.value[format] = null
 }
