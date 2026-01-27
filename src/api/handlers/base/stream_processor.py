@@ -28,10 +28,11 @@ from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.utils import (
     check_html_response,
     check_prefetched_response_error,
+    get_format_converter_registry,
 )
 from src.config.constants import StreamDefaults
 from src.config.settings import config
-from src.core.api_format import FormatConversionError, converter_registry
+from src.core.api_format.conversion.exceptions import FormatConversionError
 from src.core.exceptions import (
     EmbeddedErrorException,
     ProviderNotAvailableException,
@@ -306,7 +307,8 @@ class StreamProcessor:
                             try:
                                 # 试转换：传 state=None，不保留状态
                                 # 如果失败触发 failover，下一个候选会使用干净的 state
-                                converter_registry.convert_stream_chunk_strict(
+                                registry = get_format_converter_registry()
+                                registry.convert_stream_chunk(
                                     data,
                                     provider_format,
                                     client_format,
@@ -451,104 +453,114 @@ class StreamProcessor:
 
             # 处理预读数据
             if needs_conversion:
-                # 延迟导入：仅在需要转换时加载转换器模块
-                from src.core.api_format import (
-                    GeminiStreamConversionState,
-                    StreamConversionState,
-                    converter_registry,
-                )
+                registry = get_format_converter_registry()
 
-                # 初始化流式转换状态（首次使用时，根据 Provider 格式选择状态类）
+                # 初始化流式转换状态（Canonical）
                 if ctx.stream_conversion_state is None:
-                    if provider_format == "GEMINI":
-                        ctx.stream_conversion_state = GeminiStreamConversionState(
-                            model=ctx.mapped_model or ctx.model or "",
-                            message_id=ctx.response_id or ctx.request_id or "",
-                        )
-                    else:
-                        ctx.stream_conversion_state = StreamConversionState(
-                            model=ctx.mapped_model or ctx.model or "",
-                            message_id=ctx.response_id or ctx.request_id or "",
-                        )
+                    from src.core.api_format.conversion.stream_state import StreamState
 
-                skip_next_blank_line = False
-                empty_yield_count = 0  # 空转计数（防护异常情况）
+                    # 使用客户端请求的模型（ctx.model），而非映射后的上游模型（ctx.mapped_model）
+                    ctx.stream_conversion_state = StreamState(
+                        model=ctx.model or "",
+                        message_id=ctx.response_id or ctx.request_id or "",
+                    )
 
-                def _emit_converted_line(normalized_line: str) -> list[bytes]:
-                    nonlocal skip_next_blank_line
+                    skip_next_blank_line = False
+                    empty_yield_count = 0  # 空转计数（防护异常情况）
+                    openai_done_sent = (
+                        False  # 统一为 OpenAI 客户端补齐 [DONE]（避免不同 Provider 行为差异）
+                    )
 
-                    # 空行：事件分隔符（避免重复输出）
-                    if normalized_line == "":
-                        if skip_next_blank_line:
-                            skip_next_blank_line = False
+                    def _emit_converted_line(normalized_line: str) -> list[bytes]:
+                        nonlocal skip_next_blank_line, openai_done_sent
+
+                        # 空行：事件分隔符（避免重复输出）
+                        if normalized_line == "":
+                            if skip_next_blank_line:
+                                skip_next_blank_line = False
+                                return []
+                            return [b"\n"]
+
+                        # 丢弃 Provider 的 event 行，避免泄漏/污染目标格式
+                        if normalized_line.startswith("event:"):
                             return []
-                        return [b"\n"]
 
-                    # 丢弃 Provider 的 event 行，避免泄漏/污染目标格式
-                    if normalized_line.startswith("event:"):
-                        return []
+                        # OpenAI done 信号（仅用于 OpenAI 客户端）
+                        if (
+                            normalized_line.startswith("data:")
+                            and normalized_line[5:].strip() == "[DONE]"
+                        ):
+                            skip_next_blank_line = True
+                            if client_format.startswith("OPENAI"):
+                                openai_done_sent = True
+                                return [b"data: [DONE]\n\n"]
+                            return []
 
-                    # OpenAI done 信号
-                    if (
-                        normalized_line.startswith("data:")
-                        and normalized_line[5:].strip() == "[DONE]"
-                    ):
+                        # 默认只处理 SSE 的 data 行；但 Gemini 上游可能返回 JSON-array/chunks（无 data 前缀）
+                        is_data_line = normalized_line.startswith("data:")
+                        if not is_data_line:
+                            if provider_format != "GEMINI":
+                                return []
+                            data_content = normalized_line.strip()
+                        else:
+                            data_content = normalized_line[5:].strip()
+
+                        # Gemini 可能包含 JSON 数组包装符，直接忽略
+                        if data_content in ("", "[", "]", ","):
+                            return []
+                        # JSON-array/chunks 可能带前后逗号（对象分隔符），做一次保守清理
+                        data_content = data_content.lstrip(",").rstrip(",").strip()
+                        if data_content in ("", "[", "]", ","):
+                            return []
+
+                        try:
+                            data_obj = json.loads(data_content)
+                        except json.JSONDecodeError:
+                            # 跨格式转换时，JSON 解析失败应跳过而不是透传（避免泄漏 Provider 格式）
+                            logger.warning(
+                                f"[{self.request_id}] JSON 解析失败，跳过该行: {data_content[:100]}"
+                            )
+                            return []
+
+                        if not isinstance(data_obj, dict):
+                            return []
+
+                        try:
+                            converted_events = registry.convert_stream_chunk(
+                                data_obj,
+                                provider_format,
+                                client_format,
+                                state=ctx.stream_conversion_state,
+                            )
+                        except Exception as conv_err:
+                            # 首字节后无法 failover：输出目标格式错误事件并终止流
+                            # 使用 502 表示上游返回了非预期格式（Bad Gateway）
+                            ctx.status_code = 502
+                            ctx.error_message = "format_conversion_failed"
+                            # 日志记录完整错误（内部排查），客户端只返回脱敏消息
+                            logger.warning(f"[{self.request_id}] 流式格式转换失败: {conv_err}")
+                            payload = _build_stream_error_payload("响应格式转换失败，请稍后重试")
+                            error_bytes = (
+                                f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode(
+                                    "utf-8"
+                                )
+                            )
+                            done_bytes = (
+                                b"data: [DONE]\n\n" if client_format.startswith("OPENAI") else b""
+                            )
+                            if done_bytes:
+                                openai_done_sent = True
+                            return [error_bytes, done_bytes]
+
                         skip_next_blank_line = True
-                        if client_format.startswith("OPENAI"):
-                            return [b"data: [DONE]\n\n"]
-                        return []
-
-                    # 非 data 行：在跨格式场景下统一丢弃（避免泄露 Provider 格式细节）
-                    if not normalized_line.startswith("data:"):
-                        return []
-
-                    data_content = normalized_line[5:].strip()
-                    # Gemini 可能包含 JSON 数组包装符，直接忽略
-                    if data_content in ("", "[", "]", ","):
-                        return []
-
-                    try:
-                        data_obj = json.loads(data_content)
-                    except json.JSONDecodeError:
-                        # 跨格式转换时，JSON 解析失败应跳过而不是透传（避免泄漏 Provider 格式）
-                        logger.warning(
-                            f"[{self.request_id}] JSON 解析失败，跳过该行: {data_content[:100]}"
-                        )
-                        return []
-
-                    if not isinstance(data_obj, dict):
-                        return []
-
-                    try:
-                        converted_events = converter_registry.convert_stream_chunk_strict(
-                            data_obj,
-                            provider_format,
-                            client_format,
-                            state=ctx.stream_conversion_state,
-                        )
-                    except Exception as conv_err:
-                        # 首字节后无法 failover：输出目标格式错误事件并终止流
-                        # 使用 502 表示上游返回了非预期格式（Bad Gateway）
-                        ctx.status_code = 502
-                        ctx.error_message = "format_conversion_failed"
-                        # 日志记录完整错误（内部排查），客户端只返回脱敏消息
-                        logger.warning(f"[{self.request_id}] 流式格式转换失败: {conv_err}")
-                        payload = _build_stream_error_payload("响应格式转换失败，请稍后重试")
-                        error_bytes = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode(
-                            "utf-8"
-                        )
-                        done_bytes = (
-                            b"data: [DONE]\n\n" if client_format.startswith("OPENAI") else b""
-                        )
-                        return [error_bytes, done_bytes]
-
-                    skip_next_blank_line = True
-                    out: list[bytes] = []
-                    for evt in converted_events:
-                        out.append(
-                            f"data: {json.dumps(evt, ensure_ascii=False)}\n\n".encode("utf-8")
-                        )
-                    return out
+                        out: list[bytes] = []
+                        for evt in converted_events:
+                            # 统一使用 SSE 格式输出（Gemini streamGenerateContent 也使用 SSE）
+                            # 参考: https://ai.google.dev/api/generate-content
+                            out.append(
+                                f"data: {json.dumps(evt, ensure_ascii=False)}\n\n".encode("utf-8")
+                            )
+                        return out
 
                 # 统一处理 prefetched + iterator
                 if prefetched_chunks:
@@ -637,6 +649,11 @@ class StreamProcessor:
                                 # 转换失败：已输出 error，直接终止
                                 if ctx.error_message == "format_conversion_failed":
                                     return
+
+                # Provider 流结束后，为 OpenAI 客户端补齐 [DONE]（许多上游不发送该哨兵）
+                if client_format.startswith("OPENAI") and not openai_done_sent:
+                    _mark_stream_started()
+                    yield b"data: [DONE]\n\n"
 
             else:
                 if prefetched_chunks:

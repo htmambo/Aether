@@ -1,12 +1,17 @@
 """
-Gemini SSE/JSON 流解析器
+Gemini 流解析器（SSE + JSON-array 兼容）
 
-Gemini API 的流式响应格式与 Claude/OpenAI 不同:
-- 使用 JSON 数组格式 (不是 SSE)
-- 每个块是一个完整的 JSON 对象
-- 响应以 [ 开始，以 ] 结束，块之间用 , 分隔
+Gemini streamGenerateContent 常见两种返回（与上游/代理实现有关）：
+1) `?alt=sse`：SSE（`data: {GenerateContentResponse}`）
+2) 默认：JSON-array / JSON-chunks（`[{...},{...},...]`，可能跨 chunk/跨行）
 
-参考: https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent
+本解析器提供：
+- parse_line(): 适用于 SSE data 行或逐行 JSON 对象
+- parse_chunk(): 适用于 JSON-array/chunks（可跨 chunk 拼接）
+
+参考:
+- https://ai.google.dev/gemini-api/docs/text-generation?lang=python#generate-a-text-stream
+- https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta
 """
 
 import json
@@ -20,17 +25,12 @@ class GeminiStreamParser:
     解析 Gemini streamGenerateContent API 的响应流。
 
     Gemini 流式响应特点:
-    - 返回 JSON 数组格式: [{chunk1}, {chunk2}, ...]
-    - 每个 chunk 包含 candidates、usageMetadata 等字段
-    - finish_reason 可能值: STOP, MAX_TOKENS, SAFETY, RECITATION, OTHER
+    - 每个事件块本质上都是一个 GenerateContentResponse JSON 对象（包含 candidates、usageMetadata 等）
+    - 结束判定以 `candidates[].finishReason` 为准（存在且不为 FINISH_REASON_UNSPECIFIED）
     """
 
-    # 停止原因
-    FINISH_REASON_STOP = "STOP"
-    FINISH_REASON_MAX_TOKENS = "MAX_TOKENS"
-    FINISH_REASON_SAFETY = "SAFETY"
-    FINISH_REASON_RECITATION = "RECITATION"
-    FINISH_REASON_OTHER = "OTHER"
+    # finishReason（官方枚举值很多，见 discovery；这里仅保留一个明确的“未结束”哨兵）
+    FINISH_REASON_UNSPECIFIED = "FINISH_REASON_UNSPECIFIED"
 
     def __init__(self) -> None:
         self._buffer = ""
@@ -129,17 +129,18 @@ class GeminiStreamParser:
             True 如果是结束事件
         """
         candidates = event.get("candidates", [])
-        if candidates:
-            for candidate in candidates:
-                finish_reason = candidate.get("finishReason")
-                if finish_reason in (
-                    self.FINISH_REASON_STOP,
-                    self.FINISH_REASON_MAX_TOKENS,
-                    self.FINISH_REASON_SAFETY,
-                    self.FINISH_REASON_RECITATION,
-                    self.FINISH_REASON_OTHER,
-                ):
-                    return True
+        if not candidates:
+            return False
+
+        for candidate in candidates:
+            finish_reason = candidate.get("finishReason")
+            if not finish_reason:
+                continue
+            # 只要出现非 UNSPECIFIED 的 finishReason，通常表示该 candidate 已结束。
+            # 例如：STOP/MAX_TOKENS/SAFETY/RECITATION/MALFORMED_FUNCTION_CALL/...（枚举持续演进）
+            if str(finish_reason) != self.FINISH_REASON_UNSPECIFIED:
+                return True
+
         return False
 
     def is_error_event(self, event: Dict[str, Any]) -> bool:

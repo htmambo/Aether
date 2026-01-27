@@ -7,7 +7,7 @@ import pytest
 from src.api.handlers.base.response_parser import ParsedResponse, ResponseParser, StreamStats
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.stream_processor import StreamProcessor
-from src.core.api_format import register_all_converters
+from src.core.api_format.conversion import register_default_normalizers
 
 
 class DummyParser(ResponseParser):
@@ -31,7 +31,7 @@ async def _empty_async_iter():
 
 @pytest.mark.asyncio
 async def test_create_response_stream_converts_claude_to_openai() -> None:
-    register_all_converters()
+    register_default_normalizers()
 
     ctx = StreamContext(model="test-model", api_format="OPENAI")
     ctx.client_api_format = "OPENAI"
@@ -91,6 +91,8 @@ async def test_create_response_stream_converts_claude_to_openai() -> None:
     events = []
     for line in text.splitlines():
         if line.startswith("data: "):
+            if line == "data: [DONE]":
+                continue
             events.append(json.loads(line[6:]))
 
     assert len(events) >= 2
@@ -100,4 +102,3 @@ async def test_create_response_stream_converts_claude_to_openai() -> None:
         for e in events
         if isinstance(e, dict)
     )
-

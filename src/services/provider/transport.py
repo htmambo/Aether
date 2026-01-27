@@ -128,6 +128,10 @@ def build_provider_url(
     # 上游认证始终使用 header 方式，不使用 URL 参数
     if resolved_format in (APIFormat.GEMINI, APIFormat.GEMINI_CLI):
         effective_query_params.pop("key", None)
+        # Gemini streamGenerateContent 官方支持 `?alt=sse` 返回 SSE（data: {...}）。
+        # 网关侧统一使用 SSE 输出，优先向上游请求 SSE 以减少解析分支；同时保留 JSON-array 兜底解析。
+        if is_stream:
+            effective_query_params.setdefault("alt", "sse")
 
     # 添加查询参数
     if effective_query_params:
