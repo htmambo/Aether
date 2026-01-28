@@ -32,19 +32,11 @@
       class="overflow-hidden"
     >
       <table class="w-full text-sm table-fixed">
-        <thead class="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-          <tr>
-            <th class="text-left px-4 py-3 font-semibold w-[45%]">
-              模型
-            </th>
-            <th class="text-left px-4 py-3 font-semibold w-[30%]">
-              价格 ($/M)
-            </th>
-            <th class="text-center px-4 py-3 font-semibold w-[25%]">
-              操作
-            </th>
-          </tr>
-        </thead>
+        <colgroup>
+          <col class="w-[45%]">
+          <col class="w-[30%]">
+          <col class="w-[25%]">
+        </colgroup>
         <tbody>
           <tr
             v-for="model in sortedModels"
@@ -118,7 +110,7 @@
               </div>
             </td>
             <td class="align-top px-4 py-3">
-              <div class="flex justify-center gap-1">
+              <div class="flex justify-end gap-1">
                 <!-- 测试按钮（支持多格式选择） -->
                 <DropdownMenu
                   v-if="availableApiFormats.length > 1"
@@ -189,15 +181,6 @@
                 >
                   <Power class="w-3.5 h-3.5" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-8 w-8 hover:text-destructive"
-                  title="删除"
-                  @click="deleteModel(model)"
-                >
-                  <Trash2 class="w-3.5 h-3.5" />
-                </Button>
               </div>
             </td>
           </tr>
@@ -223,7 +206,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Box, Edit, Trash2, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
+import { Box, Edit, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
 import {
@@ -258,7 +241,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'editModel': [model: Model]
-  'deleteModel': [model: Model]
   'batchAssign': []
 }>()
 
@@ -391,11 +373,6 @@ function getStatusTitle(model: Model): string {
 // 编辑模型
 function editModel(model: Model) {
   emit('editModel', model)
-}
-
-// 删除模型
-function deleteModel(model: Model) {
-  emit('deleteModel', model)
 }
 
 // 打开批量关联对话框

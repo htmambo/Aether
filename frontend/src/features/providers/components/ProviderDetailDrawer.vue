@@ -403,7 +403,6 @@
                 :provider="provider"
                 :endpoints="endpoints"
                 @edit-model="handleEditModel"
-                @delete-model="handleDeleteModel"
                 @batch-assign="handleBatchAssign"
               />
 
@@ -480,20 +479,6 @@
     @saved="handleModelSaved"
   />
 
-  <!-- 删除模型确认对话框 -->
-  <AlertDialog
-    v-if="open"
-    :model-value="deleteModelConfirmOpen"
-    title="移除模型支持"
-    :description="`确定要移除提供商 ${provider?.name} 对模型 ${modelToDelete?.global_model_display_name || modelToDelete?.provider_model_name} 的支持吗？这不会删除全局模型，只是该提供商将不再支持此模型。`"
-    confirm-text="移除"
-    cancel-text="取消"
-    type="danger"
-    @update:model-value="deleteModelConfirmOpen = $event"
-    @confirm="confirmDeleteModel"
-    @cancel="deleteModelConfirmOpen = false"
-  />
-
   <!-- 批量关联模型对话框 -->
   <BatchAssignModelsDialog
     v-if="open && provider"
@@ -551,7 +536,6 @@ import {
   API_FORMAT_SHORT,
   sortApiFormats,
 } from '@/api/endpoints'
-import { deleteModel as deleteModelAPI } from '@/api/endpoints/models'
 
 // 扩展端点类型,包含密钥列表
 interface ProviderEndpointWithKeys extends ProviderEndpoint {
@@ -599,8 +583,6 @@ const revealedKeys = ref<Map<string, string>>(new Map())
 // 模型相关状态
 const modelFormDialogOpen = ref(false)
 const editingModel = ref<Model | null>(null)
-const deleteModelConfirmOpen = ref(false)
-const modelToDelete = ref<Model | null>(null)
 const batchAssignDialogOpen = ref(false)
 const modelsTabRef = ref<InstanceType<typeof ModelsTab> | null>(null)
 const modelMappingTabRef = ref<InstanceType<typeof ModelMappingTab> | null>(null)
@@ -632,7 +614,6 @@ const hasBlockingDialogOpen = computed(() =>
   keyPermissionsDialogOpen.value ||
   deleteKeyConfirmOpen.value ||
   modelFormDialogOpen.value ||
-  deleteModelConfirmOpen.value ||
   batchAssignDialogOpen.value ||
   modelMappingTabRef.value?.dialogOpen
 )
@@ -874,29 +855,6 @@ async function handleModelSaved() {
   editingModel.value = null
   await loadProvider()
   emit('refresh')
-}
-
-// 处理删除模型 - 打开确认对话框
-function handleDeleteModel(model: Model) {
-  modelToDelete.value = model
-  deleteModelConfirmOpen.value = true
-}
-
-// 确认删除模型
-async function confirmDeleteModel() {
-  if (!provider.value || !modelToDelete.value) return
-
-  try {
-    await deleteModelAPI(provider.value.id, modelToDelete.value.id)
-    showSuccess('已移除该提供商对此模型的支持')
-    deleteModelConfirmOpen.value = false
-    modelToDelete.value = null
-    // 重新加载 Provider 数据以刷新模型列表
-    await loadProvider()
-    emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除失败', '错误')
-  }
 }
 
 // ===== 点击编辑优先级 =====
