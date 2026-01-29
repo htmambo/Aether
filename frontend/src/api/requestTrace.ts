@@ -15,7 +15,7 @@ export interface CandidateRecord {
   key_preview?: string  // 密钥脱敏预览（如 sk-***abc）
   key_capabilities?: Record<string, boolean> | null  // Key 支持的能力
   required_capabilities?: Record<string, boolean> | null  // 请求实际需要的能力标签
-  status: 'pending' | 'streaming' | 'success' | 'failed' | 'skipped'
+  status: 'pending' | 'streaming' | 'success' | 'failed' | 'skipped' | 'cancelled'
   skip_reason?: string
   is_cached: boolean
   // 执行结果字段
@@ -33,7 +33,7 @@ export interface CandidateRecord {
 export interface RequestTrace {
   request_id: string
   total_candidates: number
-  final_status: 'success' | 'failed' | 'streaming' | 'pending'
+  final_status: 'success' | 'failed' | 'streaming' | 'pending' | 'cancelled'
   total_latency_ms: number
   candidates: CandidateRecord[]
 }
@@ -42,6 +42,7 @@ export interface ProviderStats {
   total_attempts: number
   success_count: number
   failed_count: number
+  cancelled_count: number
   skipped_count: number
   pending_count: number
   available_count: number

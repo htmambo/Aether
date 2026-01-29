@@ -63,7 +63,7 @@ export interface ProxyConfig {
 }
 
 /**
- * Headers 规则配置类型
+ * Headers 规则配置类型（旧格式）
  */
 export interface HeaderReplaceValueRule {
   search: string
@@ -84,6 +84,41 @@ export interface HeaderRules {
  */
 export type EndpointHeadersConfig = Record<string, string> | HeaderRules
 
+/**
+ * 请求头规则类型（新格式）
+ * - set: 设置/覆盖请求头
+ * - drop: 删除请求头
+ * - rename: 重命名请求头（保留原值）
+ */
+export interface HeaderRuleSet {
+  action: 'set'
+  key: string
+  value: string
+}
+
+export interface HeaderRuleDrop {
+  action: 'drop'
+  key: string
+}
+
+export interface HeaderRuleRename {
+  action: 'rename'
+  from: string
+  to: string
+}
+
+export type HeaderRule = HeaderRuleSet | HeaderRuleDrop | HeaderRuleRename
+
+/**
+ * 格式接受策略配置
+ * 用于控制端点是否接受来自不同 API 格式的请求，并自动进行格式转换
+ */
+export interface FormatAcceptanceConfig {
+  enabled: boolean                // 是否启用格式转换
+  accept_formats?: string[]       // 白名单：接受哪些格式的请求
+  reject_formats?: string[]       // 黑名单：拒绝哪些格式（优先级高于白名单）
+}
+
 export interface ProviderEndpoint {
   id: string
   provider_id: string
@@ -91,12 +126,17 @@ export interface ProviderEndpoint {
   api_format: string
   base_url: string
   custom_path?: string  // 自定义请求路径（可选，为空则使用 API 格式默认路径）
+  // 旧格式 headers（兼容）
   headers?: EndpointHeadersConfig
-  timeout: number
+  // 请求头配置（新格式）
+  header_rules?: HeaderRule[]  // 请求头规则列表，支持 set/drop/rename 操作
+  timeout?: number
   max_retries: number
   is_active: boolean
   config?: Record<string, any>
   proxy?: ProxyConfig | null
+  // 格式转换配置
+  format_acceptance_config?: FormatAcceptanceConfig | null
   total_keys: number
   active_keys: number
   created_at: string
@@ -124,11 +164,9 @@ export interface EndpointAPIKey {
   api_key_masked: string
   api_key_plain?: string | null
   name: string  // 密钥名称（必填，用于识别）
-  /** @deprecated 已废弃，请使用 rate_multipliers */
-  rate_multiplier: number  // [DEPRECATED] 默认成本倍率，已废弃
   rate_multipliers?: Record<string, number> | null  // 按 API 格式的成本倍率，如 {"CLAUDE_CLI": 1.0, "OPENAI_CLI": 0.8}
   internal_priority: number  // Key 内部优先级
-  global_priority?: number | null  // 全局 Key 优先级
+  global_priority_by_format?: Record<string, number> | null  // 按 API 格式的全局优先级
   rpm_limit?: number | null  // RPM 速率限制 (1-10000)，null 表示自适应模式
   allowed_models?: AllowedModels  // 允许使用的模型列表（null=不限制）
   capabilities?: Record<string, boolean> | null  // 能力标签配置（如 cache_1h, context_1m）
@@ -155,8 +193,8 @@ export interface EndpointAPIKey {
   updated_at: string
   // 自适应 RPM 字段
   is_adaptive?: boolean  // 是否为自适应模式（rpm_limit=NULL）
-  effective_limit?: number  // 当前有效 RPM 限制（自适应使用学习值，固定使用配置值）
-  learned_rpm_limit?: number  // 学习到的 RPM 限制
+  effective_limit?: number | null  // 当前有效 RPM 限制（自适应使用学习值，固定使用配置值，未学习时为 null）
+  learned_rpm_limit?: number | null  // 学习到的 RPM 限制
   // 滑动窗口利用率采样
   utilization_samples?: Array<{ ts: number; util: number }>  // 利用率采样窗口
   last_probe_increase_at?: string  // 上次探测性扩容时间
@@ -176,6 +214,9 @@ export interface EndpointAPIKey {
   last_models_fetch_at?: string  // 最后获取模型时间
   last_models_fetch_error?: string  // 最后获取模型错误信息
   locked_models?: string[]  // 被锁定的模型列表
+  // 模型过滤规则（仅当 auto_fetch_models=true 时生效）
+  model_include_patterns?: string[]  // 模型包含规则（支持 * 和 ? 通配符）
+  model_exclude_patterns?: string[]  // 模型排除规则（支持 * 和 ? 通配符）
 }
 
 // 按格式的健康度数据
@@ -202,11 +243,9 @@ export interface EndpointAPIKeyUpdate {
   api_formats?: string[]  // 支持的 API 格式列表
   name?: string
   api_key?: string  // 仅在需要更新时提供
-  /** @deprecated 已废弃，请使用 rate_multipliers */
-  rate_multiplier?: number  // [DEPRECATED] 默认成本倍率，已废弃
   rate_multipliers?: Record<string, number> | null  // 按 API 格式的成本倍率
   internal_priority?: number
-  global_priority?: number | null
+  global_priority_by_format?: Record<string, number> | null  // 按 API 格式的全局优先级
   rpm_limit?: number | null  // RPM 速率限制 (1-10000)，null 表示切换为自适应模式
   allowed_models?: AllowedModels
   capabilities?: Record<string, boolean> | null
@@ -216,12 +255,16 @@ export interface EndpointAPIKeyUpdate {
   is_active?: boolean
   auto_fetch_models?: boolean  // 是否启用自动获取模型
   locked_models?: string[]  // 被锁定的模型列表
+  // 模型过滤规则（仅当 auto_fetch_models=true 时生效）
+  model_include_patterns?: string[]  // 模型包含规则（支持 * 和 ? 通配符）
+  model_exclude_patterns?: string[]  // 模型排除规则（支持 * 和 ? 通配符）
 }
 
 export interface EndpointHealthDetail {
   api_format: string
   health_score: number
   is_active: boolean
+  total_keys?: number
   active_keys?: number
 }
 
@@ -291,6 +334,7 @@ export interface ProviderWithEndpointsSummary {
   description?: string
   website?: string
   provider_priority: number
+  keep_priority_on_conversion: boolean  // 格式转换时是否保持优先级
   billing_type?: 'monthly_quota' | 'pay_as_you_go' | 'free_tier'
   monthly_quota_usd?: number
   monthly_used_usd?: number
@@ -298,9 +342,11 @@ export interface ProviderWithEndpointsSummary {
   quota_last_reset_at?: string  // 当前周期开始时间
   quota_expires_at?: string
   // 请求配置（从 Endpoint 迁移）
-  timeout?: number  // 请求超时（秒）
   max_retries?: number  // 最大重试次数
   proxy?: ProxyConfig | null  // 代理配置
+  // 超时配置（秒），为空时使用全局配置
+  stream_first_byte_timeout?: number  // 流式请求首字节超时
+  request_timeout?: number  // 非流式请求整体超时
   is_active: boolean
   total_endpoints: number
   active_endpoints: number
@@ -312,6 +358,8 @@ export interface ProviderWithEndpointsSummary {
   unhealthy_endpoints: number
   api_formats: string[]
   endpoint_health_details: EndpointHealthDetail[]
+  ops_configured: boolean  // 是否配置了扩展操作（余额监控等）
+  ops_architecture_id?: string  // 扩展操作使用的架构 ID（如 cubence, anyrouter）
   created_at: string
   updated_at: string
 }

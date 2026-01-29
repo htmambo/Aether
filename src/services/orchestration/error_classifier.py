@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import httpx
 from sqlalchemy.orm import Session
 
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat
 from src.core.exceptions import (
     ConcurrencyLimitError,
     ProviderAuthException,
@@ -19,6 +19,7 @@ from src.core.exceptions import (
     ProviderException,
     ProviderNotAvailableException,
     ProviderRateLimitException,
+    ThinkingSignatureException,
     UpstreamClientException,
 )
 from src.core.logger import logger
@@ -28,7 +29,6 @@ from src.services.health.monitor import health_monitor
 from src.services.provider.format import normalize_api_format
 from src.services.rate_limit.adaptive_rpm import get_adaptive_rpm_manager
 from src.services.rate_limit.detector import RateLimitType, detect_rate_limit_type
-
 
 
 class ErrorAction(Enum):
@@ -150,6 +150,30 @@ class ErrorClassifier:
         "parameter is not supported",  # 参数不支持
         "feature is not supported",  # 功能不支持
         "not available for this model",  # 此模型不可用
+    )
+
+    # Thinking 块相关错误模式 - 这类错误需要清洗 thinking 块或调整请求
+    # 场景：多供应商环境下，Provider A 生成的 thinking 块被发送到 Provider B 时签名验证失败
+    THINKING_ERROR_PATTERNS: Tuple[str, ...] = (
+        # 签名错误：跨 Provider 发送 thinking 块时，签名无法被目标 Provider 验证
+        # 例: "invalid `signature` in `thinking` block: signature is for a different request"
+        "invalid `signature` in `thinking` block",
+        "invalid signature in thinking block",
+        # 签名字段缺失或格式错误
+        # 例: "messages.0.content.0.thinking.signature: field required"
+        "thinking.signature: field required",
+        "thinking.signature:",  # 匹配路径模式 messages.X.content.X.thinking.signature: xxx
+        "signature verification failed",
+        # 结构错误：启用 thinking 时，有 tool_use 的 assistant 消息必须以 thinking 块开头
+        # 例: "when `thinking` is enabled, the first content block ... must start with a `thinking` block"
+        "must start with a thinking block",
+        # 例: "expected thinking or redacted_thinking, found tool_use"
+        "expected thinking or redacted_thinking",
+        "expected `thinking`",
+        "expected thinking, found",  # 统一匹配 "found tool_use/text" 等变体
+        "expected `thinking`, found",  # 带反引号变体
+        "expected redacted_thinking, found",
+        "expected `redacted_thinking`, found",
     )
 
     def _parse_error_response(self, error_text: Optional[str]) -> Dict[str, Any]:
@@ -296,6 +320,25 @@ class ErrorClassifier:
         search_text = error_text.lower()
         return any(pattern.lower() in search_text for pattern in self.COMPATIBILITY_ERROR_PATTERNS)
 
+    def _is_thinking_error(self, error_text: Optional[str]) -> bool:
+        """
+        检测错误响应是否为 Thinking 块相关错误（签名错误或结构错误）
+
+        这类错误通常发生在：
+        1. 多供应商场景下，当一个供应商生成的 thinking 块被发送到另一个供应商时，签名验证会失败
+        2. 请求体中有 tool_use 但没有以 thinking 块开头时，Claude 会报结构错误
+
+        Args:
+            error_text: 错误响应文本
+
+        Returns:
+            是否为 Thinking 相关错误
+        """
+        if not error_text:
+            return False
+        search_text = error_text.lower()
+        return any(p.lower() in search_text for p in self.THINKING_ERROR_PATTERNS)
+
     def _extract_error_message(self, error_text: Optional[str]) -> Optional[str]:
         """
         从错误响应中提取错误消息
@@ -391,10 +434,12 @@ class ErrorClassifier:
                 current_usage=current_rpm,
             )
 
-            logger.info(f"  [{request_id}] 429错误分析: "
+            logger.info(
+                f"  [{request_id}] 429错误分析: "
                 f"类型={rate_limit_info.limit_type}, "
                 f"retry_after={rate_limit_info.retry_after}s, "
-                f"当前RPM={current_rpm}")
+                f"当前RPM={current_rpm}"
+            )
 
             # 调用自适应管理器处理
             new_limit = self.adaptive_manager.handle_429_error(
@@ -408,7 +453,9 @@ class ErrorClassifier:
                 logger.warning(f"  [{request_id}] 并发限制触发（不调整RPM）")
                 return "concurrent"
             elif rate_limit_info.limit_type == RateLimitType.RPM:
-                logger.warning(f"  [{request_id}] 自适应调整: Key {key.id[:8]}... RPM限制 -> {new_limit}")
+                logger.warning(
+                    f"  [{request_id}] 自适应调整: Key {key.id[:8]}... RPM限制 -> {new_limit}"
+                )
                 return "rpm"
             else:
                 return "unknown"
@@ -458,6 +505,15 @@ class ErrorClassifier:
                     if error.response and error.response.headers.get("retry-after")
                     else None
                 ),
+            )
+
+        # 400 错误：检查是否为 Thinking 块签名错误
+        if status == 400 and self._is_thinking_error(error_response_text):
+            logger.info(f"检测到 Thinking 块错误: {extracted_message}")
+            return ThinkingSignatureException(
+                message=extracted_message or "Thinking block signature validation failed",
+                provider_name=provider_name,
+                upstream_error=error_response_text,
             )
 
         # 400 错误：先检查是否为 Provider 兼容性错误（应触发故障转移）
@@ -545,8 +601,10 @@ class ErrorClassifier:
             except Exception:
                 pass
 
-        logger.warning(f"  [{request_id}] HTTP错误 (attempt={attempt}/{max_attempts}): "
-            f"{http_error.response.status_code if http_error.response else 'unknown'}")
+        logger.warning(
+            f"  [{request_id}] HTTP错误 (attempt={attempt}/{max_attempts}): "
+            f"{http_error.response.status_code if http_error.response else 'unknown'}"
+        )
 
         converted_error = self.convert_http_error(http_error, provider_name, error_response_text)
 
@@ -557,16 +615,25 @@ class ErrorClassifier:
         if error_response_text:
             extra_data["error_response"] = error_response_text
 
-        # 转换 api_format 为字符串
-        api_format_str = (
+        # client_format：用于缓存亲和性/缓存失效（用户视角）
+        client_format_str = (
             normalize_api_format(api_format).value
             if isinstance(api_format, (str, APIFormat))
             else str(api_format)
         )
+        # provider_format：用于健康度/熔断 bucket（Provider 真实端点格式）
+        provider_api_format = getattr(endpoint, "api_format", None)
+        provider_format_str = (
+            provider_api_format.value
+            if isinstance(provider_api_format, APIFormat)
+            else str(provider_api_format or client_format_str)
+        ).upper()
 
         # 处理客户端请求错误（不应重试，不失效缓存，不记录健康失败）
         if isinstance(converted_error, UpstreamClientException):
-            logger.warning(f"  [{request_id}] 客户端请求错误，不进行重试: {converted_error.message}")
+            logger.warning(
+                f"  [{request_id}] 客户端请求错误，不进行重试: {converted_error.message}"
+            )
             return extra_data
 
         # 处理认证错误
@@ -574,7 +641,7 @@ class ErrorClassifier:
             if endpoint and key and self.cache_scheduler is not None:
                 await self.cache_scheduler.invalidate_cache(
                     affinity_key=affinity_key,
-                    api_format=api_format_str,
+                    api_format=client_format_str,
                     global_model_id=global_model_id,
                     endpoint_id=str(endpoint.id),
                     key_id=str(key.id),
@@ -583,7 +650,7 @@ class ErrorClassifier:
                 health_monitor.record_failure(
                     db=self.db,
                     key_id=str(key.id),
-                    api_format=api_format_str,
+                    api_format=provider_format_str,
                     error_type="ProviderAuthException",
                 )
             return extra_data
@@ -600,7 +667,7 @@ class ErrorClassifier:
             if endpoint and self.cache_scheduler is not None:
                 await self.cache_scheduler.invalidate_cache(
                     affinity_key=affinity_key,
-                    api_format=api_format_str,
+                    api_format=client_format_str,
                     global_model_id=global_model_id,
                     endpoint_id=str(endpoint.id),
                     key_id=str(key.id),
@@ -610,7 +677,7 @@ class ErrorClassifier:
             if endpoint and key and self.cache_scheduler is not None:
                 await self.cache_scheduler.invalidate_cache(
                     affinity_key=affinity_key,
-                    api_format=api_format_str,
+                    api_format=client_format_str,
                     global_model_id=global_model_id,
                     endpoint_id=str(endpoint.id),
                     key_id=str(key.id),
@@ -621,7 +688,7 @@ class ErrorClassifier:
             health_monitor.record_failure(
                 db=self.db,
                 key_id=str(key.id),
-                api_format=api_format_str,
+                api_format=provider_format_str,
                 error_type=type(converted_error).__name__,
             )
 
@@ -662,15 +729,24 @@ class ErrorClassifier:
         """
         provider_name = str(provider.name)
 
-        logger.warning(f"  [{request_id}] 请求失败 (attempt={attempt}/{max_attempts}): "
-            f"{type(error).__name__}: {str(error)}")
+        logger.warning(
+            f"  [{request_id}] 请求失败 (attempt={attempt}/{max_attempts}): "
+            f"{type(error).__name__}: {str(error)}"
+        )
 
-        # 转换 api_format 为字符串
-        api_format_str = (
+        # client_format：用于缓存亲和性/缓存失效（用户视角）
+        client_format_str = (
             normalize_api_format(api_format).value
             if isinstance(api_format, (str, APIFormat))
             else str(api_format)
         )
+        # provider_format：用于健康度/熔断 bucket（Provider 真实端点格式）
+        provider_api_format = getattr(endpoint, "api_format", None)
+        provider_format_str = (
+            provider_api_format.value
+            if isinstance(provider_api_format, APIFormat)
+            else str(provider_api_format or client_format_str)
+        ).upper()
 
         # 处理限流错误
         if isinstance(error, ProviderRateLimitException) and key:
@@ -684,7 +760,7 @@ class ErrorClassifier:
             if endpoint and self.cache_scheduler is not None:
                 await self.cache_scheduler.invalidate_cache(
                     affinity_key=affinity_key,
-                    api_format=api_format_str,
+                    api_format=client_format_str,
                     global_model_id=global_model_id,
                     endpoint_id=str(endpoint.id),
                     key_id=str(key.id),
@@ -693,7 +769,7 @@ class ErrorClassifier:
             # 其他错误也失效缓存
             await self.cache_scheduler.invalidate_cache(
                 affinity_key=affinity_key,
-                api_format=api_format_str,
+                api_format=client_format_str,
                 global_model_id=global_model_id,
                 endpoint_id=str(endpoint.id),
                 key_id=str(key.id),
@@ -704,6 +780,6 @@ class ErrorClassifier:
             health_monitor.record_failure(
                 db=self.db,
                 key_id=str(key.id),
-                api_format=api_format_str,
+                api_format=provider_format_str,
                 error_type=type(error).__name__,
             )

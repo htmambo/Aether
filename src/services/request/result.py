@@ -24,6 +24,7 @@ class RequestStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"
     PARTIAL = "partial"  # 流式请求部分成功
+    CANCELLED = "cancelled"  # 客户端主动断开连接
 
 
 @dataclass
@@ -178,6 +179,10 @@ class RequestResult:
     def is_failed(self) -> bool:
         return self.status == RequestStatus.FAILED
 
+    @property
+    def is_cancelled(self) -> bool:
+        return self.status == RequestStatus.CANCELLED
+
     @classmethod
     def success(
         cls,
@@ -216,6 +221,26 @@ class RequestResult:
             error_message=error_message,
             error_type=error_type,
             response_time_ms=response_time_ms,
+            is_stream=is_stream,
+        )
+
+    @classmethod
+    def cancelled(
+        cls,
+        metadata: RequestMetadata,
+        response_time_ms: int,
+        usage: Optional[UsageInfo] = None,
+        is_stream: bool = False,
+    ) -> "RequestResult":
+        """创建客户端取消的请求结果"""
+        return cls(
+            status=RequestStatus.CANCELLED,
+            metadata=metadata,
+            status_code=499,
+            error_message="client_disconnected",
+            error_type="client_disconnected",
+            response_time_ms=response_time_ms,
+            usage=usage or UsageInfo(),
             is_stream=is_stream,
         )
 

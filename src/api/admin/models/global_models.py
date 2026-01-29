@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.models_service import invalidate_models_list_cache
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.logger import logger
 from src.database import get_db
@@ -474,6 +475,10 @@ class AdminBatchAssignToProvidersAdapter(AdminApiAdapter):
             provider_ids=self.payload.provider_ids,
             create_models=self.payload.create_models,
         )
+
+        # 如果有成功创建的关联，清除 /v1/models 列表缓存
+        if result["success"]:
+            await invalidate_models_list_cache()
 
         logger.info(
             f"批量为 Provider 添加 GlobalModel: global_model_id={self.global_model_id} success={len(result['success'])} errors={len(result['errors'])}"

@@ -25,18 +25,26 @@ class UserService:
     @retry_on_database_error(max_retries=3)
     def create_user(
         db: Session,
-        email: str,
+        email: Optional[str],
         username: str,
         password: str,
         role: UserRole = UserRole.USER,
         quota_usd: Optional[float] = 10.0,
+        email_verified: bool = False,
+        allowed_providers: Optional[List[str]] = None,
+        allowed_api_formats: Optional[List[str]] = None,
+        allowed_models: Optional[List[str]] = None,
     ) -> User:
-        """创建新用户，quota_usd 为 None 表示无限制"""
+        """创建新用户，quota_usd 为 None 表示无限制，email 为 None 表示无邮箱"""
 
-        # 验证邮箱格式
-        valid, error_msg = EmailValidator.validate(email)
-        if not valid:
-            raise ValueError(error_msg)
+        # 验证邮箱格式（仅当提供邮箱时）
+        if email is not None:
+            valid, error_msg = EmailValidator.validate(email)
+            if not valid:
+                raise ValueError(error_msg)
+            # 检查邮箱是否已存在
+            if db.query(User).filter(User.email == email).first():
+                raise ValueError(f"邮箱已存在: {email}")
 
         # 验证用户名格式
         valid, error_msg = UsernameValidator.validate(username)
@@ -48,20 +56,20 @@ class UserService:
         if not valid:
             raise ValueError(error_msg)
 
-        # 检查邮箱是否已存在
-        if db.query(User).filter(User.email == email).first():
-            raise ValueError(f"邮箱已存在: {email}")
-
         # 检查用户名是否已存在
         if db.query(User).filter(User.username == username).first():
             raise ValueError(f"用户名已存在: {username}")
 
         user = User(
             email=email,
+            email_verified=email_verified if email else False,
             username=username,
             role=role,
             quota_usd=quota_usd,
             is_active=True,
+            allowed_providers=allowed_providers,
+            allowed_api_formats=allowed_api_formats,
+            allowed_models=allowed_models,
         )
         user.set_password(password)
 
@@ -69,7 +77,8 @@ class UserService:
         db.commit()  # 立即提交事务,释放数据库锁
         db.refresh(user)
 
-        logger.info(f"创建新用户: {email} (ID: {user.id}, 角色: {role.value})")
+        log_identifier = email if email else username
+        logger.info(f"创建新用户: {log_identifier} (ID: {user.id}, 角色: {role.value})")
         return user
 
     @staticmethod
@@ -399,28 +408,28 @@ class UserService:
         """获取用户可用的模型
 
         通过 GlobalModel + Model 关联查询用户可用模型
-        逻辑：用户可用提供商 -> Provider 的 Model 实现 -> 关联的 GlobalModel
+        逻辑：使用 AccessRestrictions 统一处理 allowed_providers 和 allowed_models 限制
         """
-        # 获取用户可用的提供商
-        if user.role == UserRole.ADMIN:
-            # 管理员可以使用所有活动提供商
-            provider_ids = [
-                p.id for p in db.query(Provider.id).filter(Provider.is_active == True).all()
-            ]
-        else:
-            # 普通用户使用关联的提供商
-            provider_ids = [p.id for p in user.providers]
+        from src.api.base.models_service import AccessRestrictions
 
-        if not provider_ids:
+        # 使用 AccessRestrictions 类来处理限制（与 /v1/models 逻辑一致）
+        restrictions = AccessRestrictions.from_api_key_and_user(api_key=None, user=user)
+
+        # 获取所有活跃的 Provider ID
+        all_active_provider_ids = [
+            p.id for p in db.query(Provider.id).filter(Provider.is_active == True).all()
+        ]
+
+        if not all_active_provider_ids:
             return []
 
-        # 查询这些提供商的所有活跃 Model（关联 GlobalModel）
-        models = (
+        # 查询所有活跃的 Model（关联 GlobalModel）
+        all_models = (
             db.query(Model)
             .join(GlobalModel, Model.global_model_id == GlobalModel.id)
             .filter(
                 and_(
-                    Model.provider_id.in_(provider_ids),
+                    Model.provider_id.in_(all_active_provider_ids),
                     Model.is_active == True,
                     GlobalModel.is_active == True,
                 )
@@ -428,6 +437,14 @@ class UserService:
             .all()
         )
 
-        logger.debug(f"用户 {user.email} 可用模型: {len(models)} 个 (提供商数: {len(provider_ids)})")
+        # 应用访问限制过滤
+        filtered_models = []
+        for model in all_models:
+            model_name = model.global_model.name if model.global_model else model.provider_model_name
+            # 使用 AccessRestrictions.is_model_allowed 检查模型是否可访问
+            if restrictions.is_model_allowed(model_name, model.provider_id):
+                filtered_models.append(model)
 
-        return models
+        logger.debug(f"用户 {user.email} 可用模型: {len(filtered_models)} 个")
+
+        return filtered_models

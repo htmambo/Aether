@@ -16,8 +16,7 @@ from sqlalchemy.orm import Session
 from src.api.base.pipeline import ApiRequestPipeline
 from src.api.handlers.gemini import build_gemini_adapter
 from src.api.handlers.gemini_cli import build_gemini_cli_adapter
-from src.core.api_format_metadata import get_api_format_definition
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat, get_api_format_definition
 from src.database import get_db
 
 # 从配置获取路径前缀

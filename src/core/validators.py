@@ -136,7 +136,7 @@ class UsernameValidator:
 
     MIN_LENGTH = 3
     MAX_LENGTH = 30
-    USERNAME_REGEX = re.compile(r"^[a-zA-Z0-9_-]+$")
+    USERNAME_REGEX = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
     @classmethod
     def validate(cls, username: str) -> tuple[bool, Optional[str]]:
@@ -159,7 +159,7 @@ class UsernameValidator:
             return False, f"用户名长度不能超过{cls.MAX_LENGTH}个字符"
 
         if not cls.USERNAME_REGEX.match(username):
-            return False, "用户名只能包含字母、数字、下划线和连字符"
+            return False, "用户名只能包含字母、数字、下划线、连字符和点号"
 
         # 检查保留用户名
         reserved_names = [

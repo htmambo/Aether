@@ -310,6 +310,7 @@
         :current="currentPage"
         :total="total"
         :page-size="pageSize"
+        cache-key="announcements-page-size"
         @update:current="loadAnnouncements($event)"
         @update:page-size="pageSize = $event; loadAnnouncements(1)"
       />

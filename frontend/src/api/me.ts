@@ -1,9 +1,10 @@
 import apiClient from './client'
 import type { ActivityHeatmap } from '@/types/activity'
+import type { TieredPricingConfig } from './endpoints/types'
 
 export interface Profile {
   id: string // UUID
-  email: string
+  email?: string | null
   username: string
   role: string
   is_active: boolean
@@ -11,8 +12,10 @@ export interface Profile {
   used_usd: number
   total_usd?: number  // 累积消费总额
   created_at: string
-  updated_at: string
+  updated_at?: string
   last_login_at?: string
+  auth_source?: 'local' | 'ldap' | 'oauth'
+  has_password?: boolean
   preferences?: UserPreferences
 }
 
@@ -119,6 +122,7 @@ export interface ApiKey {
   key?: string
   key_display: string
   is_active: boolean
+  is_locked: boolean  // 管理员锁定标志
   last_used_at?: string
   created_at: string
   total_requests?: number
@@ -130,7 +134,7 @@ export interface ApiKey {
 // 不再需要 ProviderBinding 接口
 
 export interface ChangePasswordRequest {
-  old_password: string
+  old_password?: string  // 可选：首次设置密码时不需要
   new_password: string
 }
 
@@ -219,6 +223,9 @@ export const meApi = {
       rate_multiplier?: number | null
       response_time_ms: number | null
       first_byte_time_ms: number | null
+      api_format?: string | null
+      endpoint_api_format?: string | null
+      has_format_conversion?: boolean | null
     }>
   }> {
     const params = ids ? { ids } : {}
@@ -229,6 +236,28 @@ export const meApi = {
   // 获取可用的提供商
   async getAvailableProviders(): Promise<any[]> {
     const response = await apiClient.get('/api/users/me/providers')
+    return response.data
+  },
+
+  // 获取用户可用的模型列表
+  async getAvailableModels(params?: {
+    skip?: number
+    limit?: number
+    search?: string
+  }): Promise<{
+    models: Array<{
+      id: string
+      name: string
+      display_name: string | null
+      is_active: boolean
+      default_price_per_request: number | null
+      default_tiered_pricing: TieredPricingConfig | null
+      supported_capabilities: string[] | null
+      config: Record<string, any> | null
+    }>
+    total: number
+  }> {
+    const response = await apiClient.get('/api/users/me/available-models', { params })
     return response.data
   },
 

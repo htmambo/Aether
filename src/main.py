@@ -24,6 +24,7 @@ from src.clients.http_client import HTTPClientPool, close_http_clients
 from src.config import config
 from src.core.exceptions import ExceptionHandlers, ProxyException
 from src.core.logger import logger
+from src.core.modules import get_module_registry
 from src.database import init_db
 
 from src.middleware.plugin_middleware import PluginMiddleware
@@ -146,6 +147,13 @@ async def lifespan(app: FastAPI):
     await init_batch_committer()
     logger.info("[OK] 批量提交器已启动，数据库写入性能优化已启用")
 
+    # 初始化 Usage 队列消费者（可选）
+    if config.usage_queue_enabled:
+        logger.info("初始化 Usage 队列消费者...")
+        from src.services.usage.consumer_streams import start_usage_queue_consumer
+
+        await start_usage_queue_consumer()
+
     # 初始化插件系统
     logger.info("初始化插件系统...")
     plugin_manager = get_plugin_manager()
@@ -155,22 +163,46 @@ async def lifespan(app: FastAPI):
 
     # 注册格式转换器
     logger.info("注册格式转换器...")
-    from src.api.handlers.base.format_converter_registry import register_all_converters
+    from src.core.api_format.conversion.registry import register_default_normalizers
 
-    register_all_converters()
+    register_default_normalizers()
+
+    # 初始化功能模块系统
+    logger.info("初始化功能模块系统...")
+    from src.modules import ALL_MODULES
+
+    module_registry = get_module_registry()
+    for module in ALL_MODULES:
+        module_registry.register(module)
+
+    # 注册可用模块的路由
+    # 注意：模块的 router 自带 prefix，api_prefix 字段仅用于日志和文档
+    available_modules = module_registry.get_available_modules()
+    for module in available_modules:
+        if module.router_factory:
+            router = module.router_factory()
+            app.include_router(router)
+            prefix = module.metadata.api_prefix or "(default)"
+            logger.info(f"模块 [{module.metadata.name}] 路由已注册: {prefix}")
+
+        # 执行启动钩子
+        if module.on_startup:
+            await module.on_startup()
+
+    logger.info(f"功能模块初始化完成: {len(available_modules)}/{len(ALL_MODULES)} 个模块可用")
 
     logger.info(f"服务启动成功: http://{config.host}:{config.port}")
     logger.info("=" * 60)
 
     # 启动月卡额度重置调度器（仅一个 worker 执行）
     logger.info("启动月卡额度重置调度器...")
-    from src.services.system.cleanup_scheduler import get_cleanup_scheduler
+    from src.services.system.maintenance_scheduler import get_maintenance_scheduler
     from src.services.usage.quota_scheduler import get_quota_scheduler
     from src.services.model.fetch_scheduler import get_model_fetch_scheduler
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     quota_scheduler = get_quota_scheduler()
-    cleanup_scheduler = get_cleanup_scheduler()
+    maintenance_scheduler = get_maintenance_scheduler()
     model_fetch_scheduler = get_model_fetch_scheduler()
     task_coordinator = StartupTaskCoordinator(redis_client)
 
@@ -182,14 +214,14 @@ async def lifespan(app: FastAPI):
         logger.info("检测到其他 worker 已运行额度调度器，本实例跳过")
         quota_scheduler = None
 
-    # 启动清理调度器
-    cleanup_scheduler_active = await task_coordinator.acquire("cleanup_scheduler")
-    if cleanup_scheduler_active:
-        logger.info("启动使用记录清理调度器...")
-        await cleanup_scheduler.start()
+    # 启动维护调度器
+    maintenance_scheduler_active = await task_coordinator.acquire("maintenance_scheduler")
+    if maintenance_scheduler_active:
+        logger.info("启动系统维护调度器...")
+        await maintenance_scheduler.start()
     else:
-        logger.info("检测到其他 worker 已运行清理调度器，本实例跳过")
-        cleanup_scheduler = None
+        logger.info("检测到其他 worker 已运行维护调度器，本实例跳过")
+        maintenance_scheduler = None
 
     # 启动模型自动获取调度器
     model_fetch_scheduler_active = await task_coordinator.acquire("model_fetch_scheduler")
@@ -223,11 +255,18 @@ async def lifespan(app: FastAPI):
     await shutdown_batch_committer()
     logger.info("[OK] 批量提交器已停止，所有待提交数据已保存")
 
-    # 停止清理调度器
-    if cleanup_scheduler:
-        logger.info("停止使用记录清理调度器...")
-        await cleanup_scheduler.stop()
-        await task_coordinator.release("cleanup_scheduler")
+    # 停止 Usage 队列消费者
+    if config.usage_queue_enabled:
+        logger.info("停止 Usage 队列消费者...")
+        from src.services.usage.consumer_streams import stop_usage_queue_consumer
+
+        await stop_usage_queue_consumer()
+
+    # 停止维护调度器
+    if maintenance_scheduler:
+        logger.info("停止系统维护调度器...")
+        await maintenance_scheduler.stop()
+        await task_coordinator.release("maintenance_scheduler")
 
     # 停止月卡额度重置调度器，并释放分布式锁
     logger.info("停止月卡额度重置调度器...")
@@ -249,6 +288,12 @@ async def lifespan(app: FastAPI):
     # 关闭插件系统
     logger.info("关闭插件系统...")
     await plugin_manager.shutdown_all()
+
+    # 关闭功能模块
+    logger.info("关闭功能模块...")
+    for module in available_modules:
+        if module.on_shutdown:
+            await module.on_shutdown()
 
     # 关闭并发管理器
     logger.info("关闭并发管理器...")
@@ -351,7 +396,7 @@ openapi_tags = [
 ]
 
 app = FastAPI(
-    title="Aether API Gateway",
+    title="Aether AI Gateway",
     version=app_version,
     lifespan=lifespan,
     docs_url="/docs" if config.docs_enabled else None,

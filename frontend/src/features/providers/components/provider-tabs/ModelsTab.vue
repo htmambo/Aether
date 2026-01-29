@@ -32,19 +32,11 @@
       class="overflow-hidden"
     >
       <table class="w-full text-sm table-fixed">
-        <thead class="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-          <tr>
-            <th class="text-left px-4 py-3 font-semibold w-[45%]">
-              模型
-            </th>
-            <th class="text-left px-4 py-3 font-semibold w-[30%]">
-              价格 ($/M)
-            </th>
-            <th class="text-center px-4 py-3 font-semibold w-[25%]">
-              操作
-            </th>
-          </tr>
-        </thead>
+        <colgroup>
+          <col class="w-[45%]">
+          <col class="w-[30%]">
+          <col class="w-[25%]">
+        </colgroup>
         <tbody>
           <tr
             v-for="model in sortedModels"
@@ -118,35 +110,58 @@
               </div>
             </td>
             <td class="align-top px-4 py-3">
-              <div class="flex justify-center gap-1">
+              <div class="flex justify-end gap-1">
                 <!-- 测试按钮（支持多格式选择） -->
-                <div class="relative">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="测试模型"
-                    :disabled="testingModelId === model.id"
-                    @click="handleTestClick(model)"
-                  >
-                    <Loader2 v-if="testingModelId === model.id" class="w-3.5 h-3.5 animate-spin" />
-                    <Play v-else class="w-3.5 h-3.5" />
-                  </Button>
-                  <!-- 格式选择下拉菜单 -->
-                  <div
-                    v-if="formatMenuModelId === model.id && availableApiFormats.length > 1"
-                    class="absolute top-full left-0 mt-1 z-10 bg-popover border rounded-md shadow-md py-1 min-w-[120px]"
-                  >
-                    <button
+                <DropdownMenu
+                  v-if="availableApiFormats.length > 1"
+                  v-model:open="formatMenuOpen[model.id]"
+                >
+                  <DropdownMenuTrigger as-child>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      title="测试模型"
+                      :disabled="testingModelId === model.id"
+                    >
+                      <Loader2
+                        v-if="testingModelId === model.id"
+                        class="w-3.5 h-3.5 animate-spin"
+                      />
+                      <Play
+                        v-else
+                        class="w-3.5 h-3.5"
+                      />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem
                       v-for="fmt in availableApiFormats"
                       :key="fmt"
-                      class="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors"
-                      @click="testModelConnection(model, fmt)"
+                      @select="testModelConnection(model, fmt)"
                     >
                       {{ fmt }}
-                    </button>
-                  </div>
-                </div>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  v-else
+                  variant="ghost"
+                  size="icon"
+                  class="h-8 w-8"
+                  title="测试模型"
+                  :disabled="testingModelId === model.id"
+                  @click="testModelConnection(model, availableApiFormats[0])"
+                >
+                  <Loader2
+                    v-if="testingModelId === model.id"
+                    class="w-3.5 h-3.5 animate-spin"
+                  />
+                  <Play
+                    v-else
+                    class="w-3.5 h-3.5"
+                  />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -165,15 +180,6 @@
                   @click="toggleModelActive(model)"
                 >
                   <Power class="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-8 w-8 hover:text-destructive"
-                  title="删除"
-                  @click="deleteModel(model)"
-                >
-                  <Trash2 class="w-3.5 h-3.5" />
                 </Button>
               </div>
             </td>
@@ -199,13 +205,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Box, Edit, Trash2, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
+import { ref, computed, onMounted } from 'vue'
+import { Box, Edit, Layers, Power, Copy, Loader2, Play } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem
+} from '@/components/ui'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
-import { getProviderModels, type Model, testModel } from '@/api/endpoints'
+import {
+  getProviderModels,
+  getProviderMappingPreview,
+  testModel,
+  type Model,
+  type ProviderMappingPreviewResponse
+} from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
 import { parseTestModelError } from '@/utils/errorParser'
 
@@ -223,7 +241,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'editModel': [model: Model]
-  'deleteModel': [model: Model]
   'batchAssign': []
 }>()
 
@@ -233,9 +250,10 @@ const { copyToClipboard } = useClipboard()
 // 状态
 const loading = ref(false)
 const models = ref<Model[]>([])
+const mappingPreview = ref<ProviderMappingPreviewResponse | null>(null)
 const togglingModelId = ref<string | null>(null)
 const testingModelId = ref<string | null>(null)
-const formatMenuModelId = ref<string | null>(null)
+const formatMenuOpen = ref<Record<string, boolean>>({})
 
 // 获取可用的 API 格式（有活跃端点且有活跃 Key）
 const availableApiFormats = computed(() => {
@@ -259,11 +277,19 @@ async function copyModelId(modelId: string) {
   await copyToClipboard(modelId)
 }
 
-// 加载模型
+// 加载模型和映射预览
 async function loadModels() {
   try {
     loading.value = true
-    models.value = await getProviderModels(props.provider.id)
+    const [modelsData, previewData] = await Promise.all([
+      getProviderModels(props.provider.id),
+      getProviderMappingPreview(props.provider.id).catch((err) => {
+        console.warn('Failed to load mapping preview:', err)
+        return null
+      })
+    ])
+    models.value = modelsData
+    mappingPreview.value = previewData
   } catch (err: any) {
     showError(err.response?.data?.detail || '加载失败', '错误')
   } finally {
@@ -349,11 +375,6 @@ function editModel(model: Model) {
   emit('editModel', model)
 }
 
-// 删除模型
-function deleteModel(model: Model) {
-  emit('deleteModel', model)
-}
-
 // 打开批量关联对话框
 function openBatchAssignDialog() {
   emit('batchAssign')
@@ -376,18 +397,49 @@ async function toggleModelActive(model: Model) {
   }
 }
 
+// 查找模型的正则映射信息（返回第一个匹配的活跃 key 和映射名称）
+function findRegexMapping(model: Model): { keyId: string; mappedName: string } | null {
+  if (!mappingPreview.value) return null
+
+  // 在映射预览中查找该模型的全局模型 ID
+  const globalModelId = model.global_model_id
+  if (!globalModelId) return null
+
+  for (const keyInfo of mappingPreview.value.keys) {
+    // 跳过未激活的 key
+    if (!keyInfo.is_active) continue
+
+    for (const gm of keyInfo.matching_global_models) {
+      if (gm.global_model_id === globalModelId && gm.matched_models.length > 0) {
+        // 返回第一个匹配的映射名称
+        return {
+          keyId: keyInfo.key_id,
+          mappedName: gm.matched_models[0].allowed_model
+        }
+      }
+    }
+  }
+  return null
+}
+
 // 测试模型连接性
 async function testModelConnection(model: Model, apiFormat?: string) {
   if (testingModelId.value) return
 
   testingModelId.value = model.id
-  formatMenuModelId.value = null
+  formatMenuOpen.value[model.id] = false
   try {
+    // 检查是否有正则映射，如果有则使用映射名称和指定 key
+    const regexMapping = findRegexMapping(model)
+    const modelName = regexMapping?.mappedName || model.provider_model_name
+    const apiKeyId = regexMapping?.keyId
+
     const result = await testModel({
       provider_id: props.provider.id,
-      model_name: model.provider_model_name,
+      model_name: modelName,
       message: "hello",
-      api_format: apiFormat
+      api_format: apiFormat,
+      api_key_id: apiKeyId
     })
 
     if (result.success) {
@@ -398,7 +450,7 @@ async function testModelConnection(model: Model, apiFormat?: string) {
       } else if (result.data?.content_preview) {
         showSuccess(`流式测试成功，预览: ${result.data.content_preview}`)
       } else {
-        showSuccess(`模型 "${model.provider_model_name}" 测试成功`)
+        showSuccess(`模型 "${modelName}" 测试成功`)
       }
     } else {
       showError(`模型测试失败: ${parseTestModelError(result)}`)
@@ -411,34 +463,12 @@ async function testModelConnection(model: Model, apiFormat?: string) {
   }
 }
 
-// 处理测试按钮点击
-function handleTestClick(model: Model) {
-  const formats = availableApiFormats.value
-  if (formats.length === 0) {
-    // 没有可用格式信息，使用默认行为
-    testModelConnection(model)
-  } else if (formats.length === 1) {
-    // 只有一种格式，直接测试
-    testModelConnection(model, formats[0])
-  } else {
-    // 多种格式，显示选择菜单
-    formatMenuModelId.value = formatMenuModelId.value === model.id ? null : model.id
-  }
-}
-
-// 点击外部关闭格式选择菜单
-function handleClickOutside(event: MouseEvent) {
-  if (formatMenuModelId.value && !(event.target as Element).closest('.relative')) {
-    formatMenuModelId.value = null
-  }
-}
-
 onMounted(() => {
   loadModels()
-  document.addEventListener('click', handleClickOutside)
 })
 
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
+// 暴露给父组件
+defineExpose({
+  reload: loadModels
 })
 </script>

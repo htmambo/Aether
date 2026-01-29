@@ -129,12 +129,14 @@
                       :key="cap.name"
                       class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all"
                       :class="[
+                        apiKey.is_locked ? 'opacity-50 cursor-not-allowed' : '',
                         isCapabilityEnabled(apiKey, cap.name)
                           ? 'bg-primary text-primary-foreground'
                           : 'bg-transparent text-muted-foreground border border-dashed border-muted-foreground/50 hover:border-primary/50 hover:text-foreground'
                       ]"
-                      :title="getCapabilityTooltip(cap, isCapabilityEnabled(apiKey, cap.name))"
-                      @click.stop="toggleCapability(apiKey, cap.name)"
+                      :title="apiKey.is_locked ? '已锁定' : getCapabilityTooltip(cap, isCapabilityEnabled(apiKey, cap.name))"
+                      :disabled="apiKey.is_locked"
+                      @click.stop="!apiKey.is_locked && toggleCapability(apiKey, cap.name)"
                     >
                       <Check
                         v-if="isCapabilityEnabled(apiKey, cap.name)"
@@ -191,12 +193,21 @@
 
               <!-- 状态 -->
               <TableCell class="py-4 text-center">
-                <Badge
-                  :variant="apiKey.is_active ? 'success' : 'secondary'"
-                  class="font-medium px-3 py-1"
-                >
-                  {{ apiKey.is_active ? '活跃' : '禁用' }}
-                </Badge>
+                <div class="flex flex-col items-center gap-1">
+                  <Badge
+                    :variant="apiKey.is_active ? 'success' : 'secondary'"
+                    class="font-medium px-3 py-1"
+                  >
+                    {{ apiKey.is_active ? '活跃' : '禁用' }}
+                  </Badge>
+                  <Badge
+                    v-if="apiKey.is_locked"
+                    variant="warning"
+                    class="font-medium text-[10px]"
+                  >
+                    已锁定
+                  </Badge>
+                </div>
               </TableCell>
 
               <!-- 最后使用时间 -->
@@ -211,7 +222,8 @@
                     variant="ghost"
                     size="icon"
                     class="h-8 w-8"
-                    :title="apiKey.is_active ? '禁用' : '启用'"
+                    :title="apiKey.is_locked ? '已锁定' : (apiKey.is_active ? '禁用' : '启用')"
+                    :disabled="apiKey.is_locked"
                     @click="toggleApiKey(apiKey)"
                   >
                     <Power class="h-4 w-4" />
@@ -220,7 +232,8 @@
                     variant="ghost"
                     size="icon"
                     class="h-8 w-8"
-                    title="删除"
+                    :title="apiKey.is_locked ? '已锁定' : '删除'"
+                    :disabled="apiKey.is_locked"
                     @click="confirmDelete(apiKey)"
                   >
                     <Trash2 class="h-4 w-4" />
@@ -256,6 +269,13 @@
                 >
                   {{ apiKey.is_active ? '活跃' : '禁用' }}
                 </Badge>
+                <Badge
+                  v-if="apiKey.is_locked"
+                  variant="warning"
+                  class="text-[10px] px-1.5 py-0"
+                >
+                  已锁定
+                </Badge>
               </div>
               <div class="flex items-center gap-0.5 flex-shrink-0">
                 <Button
@@ -271,7 +291,8 @@
                   variant="ghost"
                   size="icon"
                   class="h-7 w-7"
-                  :title="apiKey.is_active ? '禁用' : '启用'"
+                  :title="apiKey.is_locked ? '已锁定' : (apiKey.is_active ? '禁用' : '启用')"
+                  :disabled="apiKey.is_locked"
                   @click="toggleApiKey(apiKey)"
                 >
                   <Power class="h-3.5 w-3.5" />
@@ -280,7 +301,8 @@
                   variant="ghost"
                   size="icon"
                   class="h-7 w-7"
-                  title="删除"
+                  :title="apiKey.is_locked ? '已锁定' : '删除'"
+                  :disabled="apiKey.is_locked"
                   @click="confirmDelete(apiKey)"
                 >
                   <Trash2 class="h-3.5 w-3.5" />
@@ -317,6 +339,7 @@
         :current="currentPage"
         :total="apiKeys.length"
         :page-size="pageSize"
+        cache-key="my-api-keys-page-size"
         @update:current="currentPage = $event"
         @update:page-size="pageSize = $event"
       />

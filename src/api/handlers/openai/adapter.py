@@ -4,14 +4,12 @@ OpenAI Chat Adapter - 基于 ChatAdapterBase 的 OpenAI Chat API 适配器
 处理 /v1/chat/completions 端点的 OpenAI Chat 格式请求。
 """
 
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, Union
+from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
-from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from src.api.handlers.base.chat_adapter_base import ChatAdapterBase, register_adapter
-from src.api.handlers.base.endpoint_checker import build_safe_headers, run_endpoint_check
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
 from src.core.logger import logger
 from src.models.openai import OpenAIRequest
@@ -38,13 +36,6 @@ class OpenAIChatAdapter(ChatAdapterBase):
 
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         super().__init__(allowed_api_formats or ["OPENAI"])
-
-    def extract_api_key(self, request: Request) -> Optional[str]:
-        """从请求中提取 API 密钥 (Authorization: Bearer)"""
-        authorization = request.headers.get("authorization")
-        if authorization and authorization.startswith("Bearer "):
-            return authorization.replace("Bearer ", "")
-        return None
 
     def _validate_request_body(self, original_request_body: dict, path_params: dict = None):
         """验证请求体"""
@@ -117,6 +108,8 @@ class OpenAIChatAdapter(ChatAdapterBase):
         extra_headers: Optional[Dict[str, Any]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 OpenAI 兼容 API 支持的模型列表"""
+        from src.api.handlers.base.endpoint_checker import build_safe_headers
+
         base_headers = {"Authorization": f"Bearer {api_key}"}
         headers = build_safe_headers(
             base_headers=base_headers,
@@ -163,24 +156,6 @@ class OpenAIChatAdapter(ChatAdapterBase):
             return f"{base_url}/chat/completions"
         else:
             return f"{base_url}/v1/chat/completions"
-
-    @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建OpenAI API认证头"""
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """返回OpenAI API的保护头部key"""
-        return ("authorization", "content-type")
-
-    @classmethod
-    def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:
-        """构建OpenAI API请求体"""
-        return request_data.copy()
 
 
 __all__ = ["OpenAIChatAdapter"]

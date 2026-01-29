@@ -609,8 +609,7 @@ class PublicApiFormatHealthMonitorAdapter(PublicApiAdapter):
             )
 
             # 获取本站入口路径
-            from src.core.api_format_metadata import get_local_path
-            from src.core.enums import APIFormat
+            from src.core.api_format import APIFormat, get_local_path
 
             try:
                 api_format_enum = APIFormat(api_format)

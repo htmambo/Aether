@@ -2,48 +2,66 @@
 统一的 Provider 请求构建工具。
 
 负责:
-- 根据 endpoint/key 构建标准请求头
 - 根据 API 格式或端点配置生成请求 URL
+- URL 脱敏（用于日志记录）
 """
 
+import re
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import urlencode
 
-from src.core.api_format_metadata import get_auth_config, get_default_path, resolve_api_format
+from src.core.api_format import (
+    APIFormat,
+    HeaderBuilder,
+    UPSTREAM_DROP_HEADERS,
+    get_auth_config,
+    get_default_path,
+    resolve_api_format,
+)
 from src.core.crypto import crypto_service
 from src.core.header_rules import apply_header_rules
-from src.core.enums import APIFormat
 from src.core.logger import logger
 
 if TYPE_CHECKING:
-    from src.models.database import ProviderAPIKey, ProviderEndpoint
+    from src.models.database import ProviderEndpoint
 
+
+# URL 中需要脱敏的查询参数（正则模式）
+_SENSITIVE_QUERY_PARAMS_PATTERN = re.compile(
+    r"([?&])(key|api_key|apikey|token|secret|password|credential)=([^&]*)",
+    re.IGNORECASE,
+)
+
+
+def redact_url_for_log(url: str) -> str:
+    """
+    对 URL 中的敏感查询参数进行脱敏，用于日志记录
+
+    将 ?key=xxx 替换为 ?key=***
+
+    Args:
+        url: 原始 URL
+
+    Returns:
+        脱敏后的 URL
+    """
+    return _SENSITIVE_QUERY_PARAMS_PATTERN.sub(r"\1\2=***", url)
 
 
 def build_provider_headers(
-    endpoint: "ProviderEndpoint",
-    key: "ProviderAPIKey",
-    original_headers: Optional[Dict[str, str]] = None,
     *,
+    endpoint: "ProviderEndpoint",
+    key: Any,
+    original_headers: Dict[str, str],
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """
-    根据 endpoint/key 构建请求头，并透传客户端自定义头。
+    构建发送给上游 Provider 的请求头
+
+    兼容两种配置格式：
+    - 新格式: endpoint.header_rules (list)
+    - 旧格式: endpoint.headers (dict / add/remove/replace_name/replace_value)
     """
-    headers: Dict[str, str] = {}
-    excluded_headers = {
-        "host",
-        "authorization",
-        "x-api-key",
-        "x-goog-api-key",
-        "content-length",
-        "transfer-encoding",
-        "connection",
-        "accept-encoding",
-    }
-
-
-
     # api_key 在数据库中是 NOT NULL，类型标注为 Optional 是 SQLAlchemy 限制
     decrypted_key = crypto_service.decrypt(key.api_key)  # type: ignore[arg-type]
 
@@ -54,40 +72,76 @@ def build_provider_headers(
         get_auth_config(resolved_format) if resolved_format else ("Authorization", "bearer")
     )
 
-    if auth_type == "bearer":
-        headers[auth_header] = f"Bearer {decrypted_key}"
-    else:
-        headers[auth_header] = decrypted_key
-    saved_auth_header = headers.get(auth_header) if auth_header in headers else None
+    auth_value = f"Bearer {decrypted_key}" if auth_type == "bearer" else decrypted_key
+    protected_keys = {auth_header.lower(), "content-type"} | set(UPSTREAM_DROP_HEADERS)
 
-    # 先合并所有原始头部（在应用规则之前）
-    if original_headers:
-        for name, value in original_headers.items():
-            if name.lower() not in excluded_headers:
-                headers[name] = value
+    builder = HeaderBuilder()
 
+    # 1. 透传原始头部（排除默认敏感头部）
+    for name, value in (original_headers or {}).items():
+        if name.lower() in UPSTREAM_DROP_HEADERS:
+            continue
+        builder.add(name, value)
+
+    # 2. 应用新格式 header_rules（认证头受保护）
+    header_rules = getattr(endpoint, "header_rules", None)
+    if isinstance(header_rules, list):
+        builder.apply_rules(header_rules, protected_keys)
+
+    # 3. 添加额外头部（保护敏感头）
     if extra_headers:
-        headers.update(extra_headers)
+        builder.add_protected(extra_headers, protected_keys)
 
-    # 应用 endpoint 规则（在合并所有 headers 之后）
-    # 支持两种格式：
-    # - 旧格式：{"X-Foo": "bar"}（语义等价于 rules.add，且不会覆盖已存在的 header）
-    # - 新格式：{"add": {...}, "remove": [...], "replace_name": {...}, "replace_value": {...}}
-    if endpoint.headers:
-        headers = apply_header_rules(headers, endpoint.headers)
-        if saved_auth_header is not None:
-            headers[auth_header] = saved_auth_header
+    headers = builder.build()
 
-    # 安全规则：自定义 headers 不能引入/覆盖敏感头部（大小写不敏感）
-    for name in list(headers.keys()):
-        if name.lower() in excluded_headers:
-            headers.pop(name, None)
-    if saved_auth_header is not None:
-        headers[auth_header] = saved_auth_header
+    # 4. 兼容旧格式 headers 规则（如有）
+    legacy_headers = getattr(endpoint, "headers", None)
+    if legacy_headers is None and isinstance(header_rules, dict):
+        legacy_headers = header_rules
 
-    if "Content-Type" not in headers and "content-type" not in headers:
+    if legacy_headers:
+        headers = _apply_legacy_headers(headers, legacy_headers, protected_keys)
+
+    # 5. 强制设置认证头（最高优先级）
+    headers[auth_header] = auth_value
+
+    # 6. 确保有 Content-Type
+    if not any(k.lower() == "content-type" for k in headers):
         headers["Content-Type"] = "application/json"
 
+    return headers
+
+
+def _apply_legacy_headers(
+    base_headers: Dict[str, str],
+    legacy_headers: Dict[str, Any],
+    protected_keys: set[str],
+) -> Dict[str, str]:
+    """
+    应用旧格式 headers 规则，并保护敏感头部不被覆盖/注入。
+    """
+    protected = {k.lower() for k in protected_keys}
+    headers = dict(base_headers)
+
+    # 检测旧规则格式
+    rule_keys = {"add", "remove", "replace_name", "replace_value"}
+    is_rule_format = isinstance(legacy_headers, dict) and any(key in legacy_headers for key in rule_keys)
+
+    if is_rule_format:
+        processed = apply_header_rules(headers, legacy_headers)
+        # 恢复受保护键的原值
+        for key, value in base_headers.items():
+            if key.lower() in protected:
+                processed[key] = value
+        # 移除任何新写入的受保护键
+        for key in list(processed.keys()):
+            if key.lower() in protected and key not in base_headers:
+                processed.pop(key, None)
+        return processed
+
+    # 旧格式：直接合并，但排除受保护键
+    safe_headers = {k: v for k, v in legacy_headers.items() if k.lower() not in protected}
+    headers.update(safe_headers)
     return headers
 
 
@@ -173,9 +227,21 @@ def build_provider_url(
     base = _normalize_base_url(endpoint.base_url, path)  # type: ignore[arg-type]
     url = f"{base}{path}"
 
+    # 合并查询参数
+    effective_query_params = dict(query_params) if query_params else {}
+
+    # Gemini 格式下清除可能存在的 key 参数（避免客户端传入的认证信息泄露到上游）
+    # 上游认证始终使用 header 方式，不使用 URL 参数
+    if resolved_format in (APIFormat.GEMINI, APIFormat.GEMINI_CLI):
+        effective_query_params.pop("key", None)
+        # Gemini streamGenerateContent 官方支持 `?alt=sse` 返回 SSE（data: {...}）。
+        # 网关侧统一使用 SSE 输出，优先向上游请求 SSE 以减少解析分支；同时保留 JSON-array 兜底解析。
+        if is_stream:
+            effective_query_params.setdefault("alt", "sse")
+
     # 添加查询参数
-    if query_params:
-        query_string = urlencode(query_params, doseq=True)
+    if effective_query_params:
+        query_string = urlencode(effective_query_params, doseq=True)
         if query_string:
             url = f"{url}?{query_string}"
 

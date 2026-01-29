@@ -74,11 +74,11 @@ class SystemConfigService:
             "description": "请求记录级别：basic(基本信息), headers(含请求头), full(完整请求响应)",
         },
         "max_request_body_size": {
-            "value": 1048576,  # 1MB
+            "value": 5242880,  # 5MB
             "description": "最大请求体记录大小（字节），超过此大小的请求体将被截断（仅影响数据库记录，不影响真实API请求）",
         },
         "max_response_body_size": {
-            "value": 1048576,  # 1MB
+            "value": 5242880,  # 5MB
             "description": "最大响应体记录大小（字节），超过此大小的响应体将被截断（仅影响数据库记录，不影响真实API响应）",
         },
         "sensitive_headers": {
@@ -109,6 +109,10 @@ class SystemConfigService:
         "cleanup_batch_size": {
             "value": 1000,
             "description": "每批次清理的记录数，避免单次操作过大影响数据库性能",
+        },
+        "enable_provider_checkin": {
+            "value": True,
+            "description": "是否启用 Provider 自动签到任务，每天凌晨 1:05 执行",
         },
         "provider_priority_mode": {
             "value": "provider",
@@ -376,7 +380,7 @@ class SystemConfigService:
     def truncate_body(cls, db: Session, body: Any, is_request: bool = True) -> Any:
         """截断过大的请求体或响应体"""
         max_size_key = "max_request_body_size" if is_request else "max_response_body_size"
-        max_size = cls.get_config(db, max_size_key, 102400)
+        max_size = cls.get_config(db, max_size_key, 5242880)  # 5MB
 
         if not body:
             return body

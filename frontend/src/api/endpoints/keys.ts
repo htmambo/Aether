@@ -1,6 +1,9 @@
 import client from '../client'
 import type { EndpointAPIKey, AllowedModels } from './types'
 
+// Re-export types for convenience
+export type { EndpointAPIKey, AllowedModels }
+
 /**
  * 能力定义类型
  */
@@ -86,8 +89,6 @@ export async function addProviderKey(
     api_formats: string[]  // 支持的 API 格式列表（必填）
     api_key: string
     name: string
-    /** @deprecated 已废弃，请使用 rate_multipliers */
-    rate_multiplier?: number  // [DEPRECATED] 默认成本倍率，已废弃
     rate_multipliers?: Record<string, number> | null  // 按 API 格式的成本倍率
     internal_priority?: number
     rpm_limit?: number | null  // RPM 限制（留空=自适应模式）
@@ -97,6 +98,8 @@ export async function addProviderKey(
     capabilities?: Record<string, boolean>
     note?: string
     auto_fetch_models?: boolean  // 是否启用自动获取模型
+    model_include_patterns?: string[]  // 模型包含规则
+    model_exclude_patterns?: string[]  // 模型排除规则
   }
 ): Promise<EndpointAPIKey> {
   const response = await client.post(`/api/admin/endpoints/providers/${providerId}/keys`, data)
@@ -112,11 +115,9 @@ export async function updateProviderKey(
     api_formats: string[]  // 支持的 API 格式列表
     api_key: string
     name: string
-    /** @deprecated 已废弃，请使用 rate_multipliers */
-    rate_multiplier: number  // [DEPRECATED] 默认成本倍率，已废弃
     rate_multipliers: Record<string, number> | null  // 按 API 格式的成本倍率
     internal_priority: number
-    global_priority: number | null
+    global_priority_by_format: Record<string, number> | null  // 按 API 格式的全局优先级
     rpm_limit: number | null  // RPM 限制（留空=自适应模式）
     cache_ttl_minutes: number
     max_probe_interval_minutes: number
@@ -126,6 +127,8 @@ export async function updateProviderKey(
     is_active: boolean
     note: string
     auto_fetch_models: boolean  // 是否启用自动获取模型
+    model_include_patterns: string[]  // 模型包含规则
+    model_exclude_patterns: string[]  // 模型排除规则
   }>
 ): Promise<EndpointAPIKey> {
   const response = await client.put(`/api/admin/endpoints/keys/${keyId}`, data)

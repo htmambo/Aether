@@ -20,6 +20,7 @@ from src.database.database import get_pool_status
 from src.models.database import Model, Provider
 from src.services.orchestration.fallback_orchestrator import FallbackOrchestrator
 from src.services.provider.transport import build_provider_url
+from src.utils.ssl_utils import get_ssl_context
 
 router = APIRouter(tags=["System Catalog"])
 
@@ -281,7 +282,7 @@ async def test_connection(
             is_stream=False,
         )
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=get_ssl_context()) as client:
             resp = await client.post(url, json=provider_payload, headers=provider_headers)
             resp.raise_for_status()
             return resp.json()

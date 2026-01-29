@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat
 from src.core.exceptions import ProviderNotAvailableException
 from src.core.logger import logger
 from src.models.database import ApiKey

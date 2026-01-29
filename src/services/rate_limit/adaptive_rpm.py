@@ -211,7 +211,11 @@ class AdaptiveRPMManager:
         if not is_adaptive:
             return None
 
-        current_limit = int(key.learned_rpm_limit or self.DEFAULT_INITIAL_LIMIT)
+        # 未碰壁学习前，不主动设置限制，让系统自由运行直到遇到 429
+        if key.learned_rpm_limit is None:
+            return None
+
+        current_limit = int(key.learned_rpm_limit)
 
         # 获取已知边界（上次触发 429 时的 RPM）
         known_boundary = key.last_rpm_peak

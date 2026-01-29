@@ -10,8 +10,10 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.models_service import invalidate_models_list_cache
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
@@ -65,7 +67,6 @@ async def list_provider_endpoints(
     - `api_format`: API 格式
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
-    - `timeout`: 超时时间（秒）
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
     - `total_keys`: Key 总数
@@ -102,8 +103,7 @@ async def create_provider_endpoint(
     - `api_format`: API 格式（如 claude、openai、gemini 等）
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径（可选）
-    - `headers`: 自定义请求头（可选）
-    - `timeout`: 超时时间（秒，默认 300）
+    - `header_rules`: 请求头规则列表（可选，支持 set/drop/rename 操作）
     - `max_retries`: 最大重试次数（默认 2）
     - `config`: 额外配置（可选）
     - `proxy`: 代理配置（可选）
@@ -139,7 +139,6 @@ async def get_endpoint(
     - `api_format`: API 格式
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
-    - `timeout`: 超时时间（秒）
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
     - `total_keys`: Key 总数
@@ -169,8 +168,7 @@ async def update_endpoint(
     **请求体字段**（均为可选）:
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
-    - `headers`: 自定义请求头
-    - `timeout`: 超时时间（秒）
+    - `header_rules`: 请求头规则列表
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
     - `config`: 额外配置
@@ -210,6 +208,17 @@ async def delete_endpoint(
 
 
 # -------- Adapters --------
+
+
+def _coerce_endpoint_headers(endpoint_dict: dict) -> None:
+    """
+    兼容旧格式 headers：
+    - 如果 header_rules 为 dict，则映射到 headers 字段，并清空 header_rules
+    """
+    header_rules = endpoint_dict.get("header_rules")
+    if isinstance(header_rules, dict):
+        endpoint_dict["headers"] = header_rules
+        endpoint_dict["header_rules"] = None
 
 
 @dataclass
@@ -263,6 +272,7 @@ class AdminListProviderEndpointsAdapter(AdminApiAdapter):
                 "proxy": mask_proxy_password(endpoint.proxy),
             }
             endpoint_dict.pop("_sa_instance_state", None)
+            _coerce_endpoint_headers(endpoint_dict)
             result.append(ProviderEndpointResponse(**endpoint_dict))
 
         return result
@@ -298,18 +308,22 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             )
 
         now = datetime.now(timezone.utc)
+        header_rules = self.endpoint_data.header_rules
+        if header_rules is None and self.endpoint_data.headers is not None:
+            header_rules = self.endpoint_data.headers
+
         new_endpoint = ProviderEndpoint(
             id=str(uuid.uuid4()),
             provider_id=self.provider_id,
             api_format=self.endpoint_data.api_format,
             base_url=self.endpoint_data.base_url,
             custom_path=self.endpoint_data.custom_path,
-            headers=self.endpoint_data.headers,
-            timeout=self.endpoint_data.timeout,
+            header_rules=header_rules,
             max_retries=self.endpoint_data.max_retries,
             is_active=True,
             config=self.endpoint_data.config,
             proxy=self.endpoint_data.proxy.model_dump() if self.endpoint_data.proxy else None,
+            format_acceptance_config=self.endpoint_data.format_acceptance_config,
             created_at=now,
             updated_at=now,
         )
@@ -318,6 +332,9 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
         db.commit()
         db.refresh(new_endpoint)
 
+        # 清除 /v1/models 列表缓存
+        await invalidate_models_list_cache()
+
         logger.info(f"[OK] 创建 Endpoint: Provider={provider.name}, Format={self.endpoint_data.api_format}, ID={new_endpoint.id}")
 
         endpoint_dict = {
@@ -325,6 +342,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             for k, v in new_endpoint.__dict__.items()
             if k not in {"api_format", "_sa_instance_state", "proxy"}
         }
+        _coerce_endpoint_headers(endpoint_dict)
         return ProviderEndpointResponse(
             **endpoint_dict,
             provider_name=provider.name,
@@ -374,6 +392,7 @@ class AdminGetProviderEndpointAdapter(AdminApiAdapter):
             for k, v in endpoint_obj.__dict__.items()
             if k not in {"api_format", "_sa_instance_state", "proxy"}
         }
+        _coerce_endpoint_headers(endpoint_dict)
         return ProviderEndpointResponse(
             **endpoint_dict,
             provider_name=provider.name,
@@ -398,6 +417,11 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
 
         update_data = self.endpoint_data.model_dump(exclude_unset=True)
+        if "headers" in update_data and "header_rules" not in update_data:
+            update_data["header_rules"] = update_data.pop("headers")
+        elif "headers" in update_data:
+            update_data.pop("headers")
+
         # 把 proxy 转换为 dict 存储，支持显式设置为 None 清除代理
         if "proxy" in update_data:
             if update_data["proxy"] is not None:
@@ -415,6 +439,9 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
 
         db.commit()
         db.refresh(endpoint)
+
+        # 清除 /v1/models 列表缓存（is_active 变更会影响模型可用性）
+        await invalidate_models_list_cache()
 
         provider = db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
         logger.info(f"[OK] 更新 Endpoint: ID={self.endpoint_id}, Updates={list(update_data.keys())}")
@@ -440,6 +467,7 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             for k, v in endpoint.__dict__.items()
             if k not in {"api_format", "_sa_instance_state", "proxy"}
         }
+        _coerce_endpoint_headers(endpoint_dict)
         return ProviderEndpointResponse(
             **endpoint_dict,
             provider_name=provider.name if provider else "Unknown",
@@ -465,16 +493,27 @@ class AdminDeleteProviderEndpointAdapter(AdminApiAdapter):
         endpoint_format = (
             endpoint.api_format if isinstance(endpoint.api_format, str) else endpoint.api_format.value
         )
+
+        # 查询包含该格式的所有 Key，并从 api_formats 中移除该格式
         keys = (
-            db.query(ProviderAPIKey.api_formats)
+            db.query(ProviderAPIKey)
             .filter(ProviderAPIKey.provider_id == endpoint.provider_id)
             .all()
         )
-        affected_keys_count = sum(
-            1 for (api_formats,) in keys if endpoint_format in (api_formats or [])
-        )
+        affected_keys_count = 0
+        for key in keys:
+            if key.api_formats and endpoint_format in key.api_formats:
+                affected_keys_count += 1
+                # 移除该格式
+                new_formats = [f for f in key.api_formats if f != endpoint_format]
+                key.api_formats = new_formats if new_formats else []
+                flag_modified(key, 'api_formats')
+
         db.delete(endpoint)
         db.commit()
+
+        # 清除 /v1/models 列表缓存
+        await invalidate_models_list_cache()
 
         logger.warning(
             f"[DELETE] 删除 Endpoint: ID={self.endpoint_id}, Format={endpoint_format}, "

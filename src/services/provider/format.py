@@ -6,8 +6,7 @@ from __future__ import annotations
 
 from typing import Optional, Union
 
-from src.core.api_format_metadata import resolve_api_format
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat, resolve_api_format
 
 
 def normalize_api_format(

@@ -14,6 +14,7 @@ from src.clients import get_redis_client
 from src.core.logger import logger
 from src.models.database import User
 from src.utils.auth_utils import require_admin
+from src.utils.ssl_utils import get_ssl_context
 
 router = APIRouter()
 
@@ -118,7 +119,7 @@ async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
 
     # 从 models.dev 获取数据
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=get_ssl_context()) as client:
             response = await client.get("https://models.dev/api.json")
             response.raise_for_status()
             data = response.json()

@@ -4,7 +4,7 @@
     title="优先级管理"
     description="调整提供商和 API Key 的优先级顺序，保存后自动切换对应的调度策略"
     :icon="ListOrdered"
-    size="3xl"
+    size="2xl"
     @update:model-value="handleDialogUpdate"
   >
     <div class="space-y-4">
@@ -39,7 +39,7 @@
       </div>
 
       <!-- 内容区域 -->
-      <div class="min-h-[420px]">
+      <div class="max-h-[70vh]">
         <!-- 提供商优先级 -->
         <div
           v-show="activeMainTab === 'provider'"
@@ -48,7 +48,7 @@
           <!-- 提示信息 -->
           <div class="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground bg-muted/30 rounded-md">
             <Info class="w-3.5 h-3.5 shrink-0" />
-            <span>拖拽调整顺序，位置越靠前优先级越高</span>
+            <span>拖拽调整顺序，点击序号可编辑（相同数字为同级，负载均衡）</span>
           </div>
 
           <!-- 空状态 -->
@@ -63,12 +63,12 @@
           <!-- 提供商列表 -->
           <div
             v-else
-            class="space-y-2 max-h-[380px] overflow-y-auto pr-1"
+            class="space-y-1 max-h-[calc(70vh-80px)] overflow-y-auto pr-1"
           >
             <div
               v-for="(provider, index) in sortedProviders"
               :key="provider.id"
-              class="group flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all duration-200"
+              class="group flex items-center gap-3 px-3 py-1.5 rounded-lg border transition-all duration-200"
               :class="[
                 draggedProvider === index
                   ? 'border-primary/50 bg-primary/5 shadow-md scale-[1.01]'
@@ -88,9 +88,27 @@
                 <GripVertical class="w-4 h-4" />
               </div>
 
-              <!-- 序号 -->
-              <div class="w-6 h-6 rounded-md bg-muted/50 flex items-center justify-center text-xs font-medium text-muted-foreground shrink-0">
-                {{ index + 1 }}
+              <!-- 可编辑序号 -->
+              <div class="shrink-0">
+                <input
+                  v-if="editingProviderPriority === provider.id"
+                  type="number"
+                  min="1"
+                  :value="provider.provider_priority"
+                  class="w-8 h-6 rounded-md bg-background border border-primary text-xs font-medium text-center focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  autofocus
+                  @blur="finishEditProviderPriority(provider, $event)"
+                  @keydown.enter="($event.target as HTMLInputElement).blur()"
+                  @keydown.escape="cancelEditProviderPriority()"
+                >
+                <div
+                  v-else
+                  class="w-6 h-6 rounded-md bg-muted/50 flex items-center justify-center text-xs font-medium text-muted-foreground cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+                  title="点击编辑优先级，相同数字为同级（负载均衡）"
+                  @click.stop="startEditProviderPriority(provider)"
+                >
+                  {{ provider.provider_priority }}
+                </div>
               </div>
 
               <!-- 提供商信息 -->
@@ -103,6 +121,30 @@
                 >
                   停用
                 </Badge>
+              </div>
+              <div class="flex items-center gap-3 shrink-0 ml-2">
+                <!-- API 格式标签 (自适应宽度) -->
+                <div class="flex items-center justify-end gap-1">
+                  <template v-if="provider.api_formats?.length">
+                    <span
+                      v-for="fmt in provider.api_formats"
+                      :key="fmt"
+                      class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground whitespace-nowrap"
+                    >
+                      {{ API_FORMAT_SHORT[fmt] || fmt }}
+                    </span>
+                  </template>
+                </div>
+                
+                <!-- 余额显示 (表格对齐) -->
+                <div class="min-w-[4rem] text-right">
+                  <span
+                    v-if="formatBalanceDisplay(provider.id)"
+                    class="text-xs font-semibold text-foreground/90 tabular-nums"
+                  >
+                    {{ formatBalanceDisplay(provider.id) }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -171,7 +213,7 @@
               >
                 <div
                   v-if="keysByFormat[format]?.length > 0"
-                  class="space-y-2 max-h-[380px] overflow-y-auto pr-1"
+                  class="space-y-2 max-h-[calc(70vh-80px)] overflow-y-auto pr-1"
                 >
                   <div
                     v-for="(key, index) in keysByFormat[format]"
@@ -289,7 +331,7 @@
                         </div>
                         <!-- 速率倍数 -->
                         <div class="text-sm font-medium tabular-nums text-primary min-w-[40px] text-right">
-                          {{ key.rate_multiplier }}x
+                          {{ key.rate_multipliers?.[format] ?? 1 }}x
                         </div>
                       </div>
                     </div>
@@ -398,15 +440,18 @@ import { useToast } from '@/composables/useToast'
 import { updateProvider, updateProviderKey } from '@/api/endpoints'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
+import { batchQueryBalance, type ActionResultResponse, type BalanceInfo } from '@/api/providerOps'
+import { API_FORMAT_SHORT } from '@/api/endpoints/types'
 
 interface KeyWithMeta {
   id: string
   name: string
   api_key_masked: string
   internal_priority: number
-  global_priority: number | null
+  global_priority_by_format: Record<string, number> | null
+  format_priority: number | null  // 当前格式的优先级（后端计算）
   priority: number  // 用于编辑的优先级
-  rate_multiplier: number
+  rate_multipliers: Record<string, number> | null
   is_active: boolean
   circuit_breaker_open: boolean
   provider_name: string
@@ -457,18 +502,85 @@ const saving = ref(false)
 // Key 优先级编辑状态
 const editingKeyPriority = ref<Record<string, string | null>>({})  // format -> keyId
 
+// Provider 优先级编辑状态
+const editingProviderPriority = ref<string | null>(null)  // providerId
+
 // 调度模式状态
 const schedulingMode = ref<'fixed_order' | 'load_balance' | 'cache_affinity'>('cache_affinity')
+
+// 余额数据缓存 {providerId: ActionResultResponse}
+const balanceCache = ref<Record<string, ActionResultResponse>>({})
+
+// 类型守卫函数
+function isBalanceInfo(data: unknown): data is BalanceInfo {
+  return data !== null && typeof data === 'object' && 'total_available' in data
+}
+
+// 获取 provider 的余额显示
+function getProviderBalance(providerId: string): { available: number | null; currency: string } | null {
+  const result = balanceCache.value[providerId]
+  if (!result || result.status !== 'success' || !result.data) {
+    return null
+  }
+  if (!isBalanceInfo(result.data)) {
+    return null
+  }
+  return {
+    available: result.data.total_available,
+    currency: result.data.currency || 'USD'
+  }
+}
+
+// 格式化余额显示
+function formatBalanceDisplay(providerId: string): string {
+  const balance = getProviderBalance(providerId)
+  if (!balance || balance.available == null) {
+    return ''
+  }
+  const symbol = balance.currency === 'USD' ? '$' : balance.currency
+  return `${symbol}${balance.available.toFixed(2)}`
+}
+
+// 异步加载余额数据（使用批量接口）
+async function loadBalances() {
+  try {
+    const opsProviderIds = sortedProviders.value
+      .filter(p => p.ops_configured)
+      .map(p => p.id)
+    if (opsProviderIds.length === 0) return
+
+    const results = await batchQueryBalance(opsProviderIds)
+
+    // 将成功的结果存入缓存
+    for (const [providerId, result] of Object.entries(results)) {
+      if (result.status === 'success') {
+        balanceCache.value[providerId] = result
+      }
+    }
+  } catch (e) {
+    console.warn('[loadBalances] 加载余额数据失败:', e)
+  }
+}
 
 // 可用的 API 格式
 const availableFormats = computed(() => {
   return Object.keys(keysByFormat.value).sort()
 })
 
+// 排序 providers：启用的在前，停用的在后，各自按优先级排序
+function sortProvidersByActiveAndPriority(providers: ProviderWithEndpointsSummary[]) {
+  return [...providers].sort((a, b) => {
+    if (a.is_active !== b.is_active) {
+      return a.is_active ? -1 : 1
+    }
+    return a.provider_priority - b.provider_priority
+  })
+}
+
 // 监听 props.providers 变化
 watch(() => props.providers, (newProviders) => {
   if (newProviders) {
-    sortedProviders.value = [...newProviders].sort((a, b) => a.provider_priority - b.provider_priority)
+    sortedProviders.value = sortProvidersByActiveAndPriority(newProviders)
   }
 }, { immediate: true })
 
@@ -477,6 +589,8 @@ watch(internalOpen, async (open) => {
   if (open) {
     await loadCurrentPriorityMode()
     await loadKeysByFormat()
+    // 异步加载余额数据
+    loadBalances()
   }
 })
 
@@ -509,13 +623,25 @@ async function loadKeysByFormat() {
     const { default: client } = await import('@/api/client')
     const response = await client.get('/api/admin/endpoints/keys/grouped-by-format')
 
-    // 为每个 key 添加 priority 字段，基于 global_priority 计算显示优先级
+    // 每个格式独立管理优先级，使用后端返回的 format_priority
     const data: Record<string, KeyWithMeta[]> = {}
     for (const [format, keys] of Object.entries(response.data as Record<string, any[]>)) {
-      data[format] = keys.map((key, index) => ({
+      // 计算该格式下的默认优先级
+      let maxPriority = 0
+      for (const key of keys) {
+        if (key.format_priority != null) {
+          maxPriority = Math.max(maxPriority, key.format_priority)
+        }
+      }
+
+      let nextPriority = maxPriority + 1
+      data[format] = keys.map((key) => ({
         ...key,
-        priority: key.global_priority ?? index + 1
+        // 使用格式特定优先级，如果没有则分配默认值
+        priority: key.format_priority ?? nextPriority++
       }))
+      // 按优先级排序
+      data[format].sort((a, b) => a.priority - b.priority)
     }
     keysByFormat.value = data
 
@@ -544,12 +670,42 @@ function finishEditKeyPriority(format: string, key: KeyWithMeta, event: FocusEve
   const newPriority = parseInt(input.value, 10)
 
   if (!isNaN(newPriority) && newPriority >= 1) {
+    // 每个格式独立管理优先级，只更新当前格式
     key.priority = newPriority
-    // 按 priority 重新排序
+    // 重新排序当前格式
     keysByFormat.value[format] = [...keysByFormat.value[format]].sort((a, b) => a.priority - b.priority)
   }
 
   editingKeyPriority.value[format] = null
+}
+
+// Provider 优先级编辑
+function startEditProviderPriority(provider: ProviderWithEndpointsSummary) {
+  editingProviderPriority.value = provider.id
+}
+
+function cancelEditProviderPriority() {
+  editingProviderPriority.value = null
+}
+
+function finishEditProviderPriority(provider: ProviderWithEndpointsSummary, event: FocusEvent) {
+  const input = event.target as HTMLInputElement
+  const newPriority = parseInt(input.value, 10)
+
+  if (!isNaN(newPriority) && newPriority >= 1) {
+    // 更新该 provider 的优先级
+    const idx = sortedProviders.value.findIndex(p => p.id === provider.id)
+    if (idx !== -1) {
+      sortedProviders.value[idx] = {
+        ...sortedProviders.value[idx],
+        provider_priority: newPriority
+      }
+    }
+    // 重新排序
+    sortedProviders.value = sortProvidersByActiveAndPriority(sortedProviders.value)
+  }
+
+  editingProviderPriority.value = null
 }
 
 // Provider 拖拽处理
@@ -576,21 +732,64 @@ function handleProviderDragLeave() {
 
 function handleProviderDrop(dropIndex: number) {
   if (draggedProvider.value === null || draggedProvider.value === dropIndex) {
+    draggedProvider.value = null
+    dragOverProvider.value = null
     return
   }
 
-  const providers = [...sortedProviders.value]
-  const draggedItem = providers[draggedProvider.value]
+  const providers = sortedProviders.value
+  const dragIndex = draggedProvider.value
+  const draggedItem = providers[dragIndex]
+  const targetItem = providers[dropIndex]
+  const draggedPriority = draggedItem.provider_priority
+  const targetPriority = targetItem.provider_priority
 
-  providers.splice(draggedProvider.value, 1)
-  providers.splice(dropIndex, 0, draggedItem)
+  // 同优先级组内拖拽，忽略
+  if (draggedPriority === targetPriority) {
+    draggedProvider.value = null
+    dragOverProvider.value = null
+    return
+  }
 
-  sortedProviders.value = providers.map((provider, index) => ({
-    ...provider,
-    provider_priority: index + 1
-  }))
+  // 记录每个 provider 的原始优先级
+  const originalPriorityMap = new Map<string, number>()
+  providers.forEach(p => {
+    originalPriorityMap.set(p.id, p.provider_priority)
+  })
 
+  // 重排数组：将被拖动项移到目标位置
+  const items = [...providers]
+  items.splice(dragIndex, 1)
+  items.splice(dropIndex, 0, draggedItem)
+
+  // 按新顺序分配优先级：被拖动项单独成组，其他同组项保持在一起
+  const groupNewPriority = new Map<number, number>()
+  let currentPriority = 1
+
+  items.forEach(provider => {
+    const originalPriority = originalPriorityMap.get(provider.id)!
+
+    if (provider === draggedItem) {
+      // 被拖动的项单独成组
+      provider.provider_priority = currentPriority
+      currentPriority++
+    } else {
+      if (groupNewPriority.has(originalPriority)) {
+        // 同组的其他项使用相同的新优先级
+        provider.provider_priority = groupNewPriority.get(originalPriority)!
+      } else {
+        // 新组，分配新优先级
+        groupNewPriority.set(originalPriority, currentPriority)
+        provider.provider_priority = currentPriority
+        currentPriority++
+      }
+    }
+  })
+
+  // 重新排序
+  sortedProviders.value = sortProvidersByActiveAndPriority(items)
   draggedProvider.value = null
+  dragOverProvider.value = null
 }
 
 // Key 拖拽处理
@@ -619,50 +818,62 @@ function handleKeyDrop(format: string, dropIndex: number) {
   const dragIndex = draggedKey.value[format]
   if (dragIndex === null || dragIndex === dropIndex) {
     draggedKey.value[format] = null
+    dragOverKey.value[format] = null
     return
   }
 
-  const keys = [...keysByFormat.value[format]]
+  const keys = keysByFormat.value[format]
   const draggedItem = keys[dragIndex]
+  const targetItem = keys[dropIndex]
+  const draggedPriority = draggedItem.priority
+  const targetPriority = targetItem.priority
 
-  // 记录每个 key 的原始优先级（在修改前）
-  const originalPriorityMap = new Map<string, number>()
-  for (const key of keys) {
-    originalPriorityMap.set(key.id, key.priority)
+  // 同优先级组内拖拽，忽略
+  if (draggedPriority === targetPriority) {
+    draggedKey.value[format] = null
+    dragOverKey.value[format] = null
+    return
   }
 
-  // 重排数组
-  keys.splice(dragIndex, 1)
-  keys.splice(dropIndex, 0, draggedItem)
+  // 记录每个 key 的原始优先级
+  const originalPriorityMap = new Map<string, number>()
+  keys.forEach(k => {
+    originalPriorityMap.set(k.id, k.priority)
+  })
 
-  // 按新顺序为每个组分配新的优先级
-  // 同组的 Key 保持相同的优先级
-  const groupNewPriority = new Map<number, number>() // 原优先级 -> 新优先级
+  // 重排数组：将被拖动项移到目标位置
+  const items = [...keys]
+  items.splice(dragIndex, 1)
+  items.splice(dropIndex, 0, draggedItem)
+
+  // 按新顺序分配优先级：被拖动项单独成组，其他同组项保持在一起
+  const groupNewPriority = new Map<number, number>()
   let currentPriority = 1
 
-  for (const key of keys) {
-    if (key.id === draggedItem.id) {
-      // 被拖动的 Key 是独立的新组，获得当前优先级
+  items.forEach(key => {
+    const originalPriority = originalPriorityMap.get(key.id)!
+
+    if (key === draggedItem) {
+      // 被拖动的项单独成组
       key.priority = currentPriority
       currentPriority++
     } else {
-      // 使用记录的原始优先级，而不是可能已被修改的值
-      const originalPriority = originalPriorityMap.get(key.id)!
-
       if (groupNewPriority.has(originalPriority)) {
-        // 这个组已经分配过优先级，使用相同的值
+        // 同组的其他项使用相同的新优先级
         key.priority = groupNewPriority.get(originalPriority)!
       } else {
-        // 这个组第一次出现，分配新优先级
+        // 新组，分配新优先级
         groupNewPriority.set(originalPriority, currentPriority)
         key.priority = currentPriority
         currentPriority++
       }
     }
-  }
+  })
 
-  keysByFormat.value[format] = keys
+  // 按优先级重新排序
+  keysByFormat.value[format] = [...items].sort((a, b) => a.priority - b.priority)
   draggedKey.value[format] = null
+  dragOverKey.value[format] = null
 }
 
 // 保存
@@ -686,19 +897,25 @@ async function save() {
       )
     ])
 
-    const providerUpdates = sortedProviders.value.map((provider, index) =>
-      updateProvider(provider.id, { provider_priority: index + 1 })
+    const providerUpdates = sortedProviders.value.map((provider) =>
+      updateProvider(provider.id, { provider_priority: provider.provider_priority })
     )
 
-    const keyUpdates: Promise<any>[] = []
-
+    // 收集每个 Key 的按格式优先级（保留原有其他格式的配置）
+    const keyPriorityByFormatMap = new Map<string, Record<string, number>>()
     for (const format of Object.keys(keysByFormat.value)) {
       const keys = keysByFormat.value[format]
       keys.forEach((key) => {
-        // 使用用户设置的 priority 值，相同 priority 会做负载均衡
-        keyUpdates.push(updateProviderKey(key.id, { global_priority: key.priority }))
+        // 合并原有配置，避免丢失未显示格式的优先级
+        const existing = keyPriorityByFormatMap.get(key.id) || { ...key.global_priority_by_format }
+        existing[format] = key.priority
+        keyPriorityByFormatMap.set(key.id, existing)
       })
     }
+
+    const keyUpdates = Array.from(keyPriorityByFormatMap.entries()).map(([keyId, priorityByFormat]) =>
+      updateProviderKey(keyId, { global_priority_by_format: priorityByFormat })
+    )
 
     await Promise.all([...providerUpdates, ...keyUpdates])
 

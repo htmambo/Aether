@@ -2,11 +2,33 @@
 Handler 基础工具函数
 """
 
+from __future__ import annotations
+
 import json
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.core.exceptions import EmbeddedErrorException, ProviderNotAvailableException
+from src.core.api_format import filter_response_headers
 from src.core.logger import logger
+
+if TYPE_CHECKING:
+    from src.core.api_format.conversion.registry import FormatConversionRegistry
+
+
+def get_format_converter_registry() -> "FormatConversionRegistry":
+    """
+    获取格式转换注册表（线程安全）
+
+    该函数确保 normalizers 已注册后再返回全局注册表实例。
+    register_default_normalizers 内部已有双重检查锁，可安全多次调用。
+    """
+    from src.core.api_format.conversion.registry import (
+        format_conversion_registry,
+        register_default_normalizers,
+    )
+
+    register_default_normalizers()
+    return format_conversion_registry
 
 
 def extract_cache_creation_tokens(usage: Dict[str, Any]) -> int:
@@ -94,25 +116,6 @@ def build_sse_headers(extra_headers: Optional[Dict[str, str]] = None) -> Dict[st
     return headers
 
 
-_PROXY_RESPONSE_HEADER_BLOCKLIST = frozenset(
-    {
-        # Body-dependent headers: 我们会重编码响应体（JSONResponse / SSE），不能透传上游值
-        "content-length",
-        "content-encoding",
-        "transfer-encoding",
-        "content-type",
-        # Hop-by-hop headers (RFC 7230)
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "upgrade",
-    }
-)
-
-
 def filter_proxy_response_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
     """
     过滤上游响应头中不应透传给客户端的字段。
@@ -123,9 +126,7 @@ def filter_proxy_response_headers(headers: Optional[Dict[str, str]]) -> Dict[str
 
     如果透传上游的 `content-length/content-encoding/...`，会导致客户端解码失败或等待更多字节。
     """
-    if not headers:
-        return {}
-    return {k: v for k, v in headers.items() if k.lower() not in _PROXY_RESPONSE_HEADER_BLOCKLIST}
+    return filter_response_headers(headers)
 
 
 def check_html_response(line: str) -> bool:
@@ -206,15 +207,12 @@ def check_prefetched_response_error(
                     f"  [{request_id}] 检测到 JSON 错误响应: "
                     f"Provider={provider_name}, "
                     f"error_type={parsed.error_type}, "
+                    f"embedded_status={parsed.embedded_status_code}, "
                     f"message={parsed.error_message}"
                 )
                 raise EmbeddedErrorException(
                     provider_name=provider_name,
-                    error_code=(
-                        int(parsed.error_type)
-                        if parsed.error_type and parsed.error_type.isdigit()
-                        else None
-                    ),
+                    error_code=parsed.embedded_status_code,
                     error_message=parsed.error_message,
                     error_status=parsed.error_type,
                 )

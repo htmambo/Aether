@@ -402,6 +402,7 @@
           :current="catalogCurrentPage"
           :total="filteredGlobalModels.length"
           :page-size="catalogPageSize"
+          cache-key="model-management-page-size"
           @update:current="catalogCurrentPage = $event"
           @update:page-size="catalogPageSize = $event"
         />

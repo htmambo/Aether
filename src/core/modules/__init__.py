@@ -1,0 +1,26 @@
+"""
+模块化系统核心
+
+提供可扩展的功能模块管理，支持：
+- 声明式模块注册
+- available/enabled 双层状态控制
+- 延迟导入避免重依赖加载
+- 前后端状态同步
+"""
+
+from src.core.modules.base import (
+    ModuleCategory,
+    ModuleDefinition,
+    ModuleMetadata,
+    ModuleStatus,
+)
+from src.core.modules.registry import ModuleRegistry, get_module_registry
+
+__all__ = [
+    "ModuleCategory",
+    "ModuleMetadata",
+    "ModuleDefinition",
+    "ModuleStatus",
+    "ModuleRegistry",
+    "get_module_registry",
+]

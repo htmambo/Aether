@@ -19,6 +19,7 @@ import httpx
 
 from src.config import config
 from src.core.logger import logger
+from src.utils.ssl_utils import get_ssl_context
 
 # 模块级锁，避免类属性延迟初始化的竞态条件
 _proxy_clients_lock = asyncio.Lock()
@@ -130,7 +131,7 @@ class HTTPClientPool:
             if cls._default_client is None:
                 cls._default_client = httpx.AsyncClient(
                     http2=False,  # 暂时禁用HTTP/2以提高兼容性
-                    verify=True,  # 启用SSL验证
+                    verify=get_ssl_context(),  # 使用 certifi 证书
                     timeout=httpx.Timeout(
                         connect=config.http_connect_timeout,
                         read=config.http_read_timeout,
@@ -163,7 +164,7 @@ class HTTPClientPool:
         if cls._default_client is None:
             cls._default_client = httpx.AsyncClient(
                 http2=False,  # 暂时禁用HTTP/2以提高兼容性
-                verify=True,  # 启用SSL验证
+                verify=get_ssl_context(),  # 使用 certifi 证书
                 timeout=httpx.Timeout(
                     connect=config.http_connect_timeout,
                     read=config.http_read_timeout,
@@ -200,7 +201,7 @@ class HTTPClientPool:
             # 合并默认配置和自定义配置
             default_config = {
                 "http2": False,
-                "verify": True,
+                "verify": get_ssl_context(),
                 "timeout": httpx.Timeout(
                     connect=config.http_connect_timeout,
                     read=config.http_read_timeout,
@@ -281,7 +282,7 @@ class HTTPClientPool:
             # 创建新客户端（使用默认超时，请求时可覆盖）
             client_config: Dict[str, Any] = {
                 "http2": False,
-                "verify": True,
+                "verify": get_ssl_context(),
                 "follow_redirects": True,
                 "limits": httpx.Limits(
                     max_connections=config.http_max_connections,
@@ -350,7 +351,7 @@ class HTTPClientPool:
         """
         default_config = {
             "http2": False,
-            "verify": True,
+            "verify": get_ssl_context(),
             "timeout": httpx.Timeout(
                 connect=config.http_connect_timeout,
                 read=config.http_read_timeout,
@@ -388,7 +389,7 @@ class HTTPClientPool:
         """
         client_config: Dict[str, Any] = {
             "http2": False,
-            "verify": True,
+            "verify": get_ssl_context(),
             "follow_redirects": True,
         }
 

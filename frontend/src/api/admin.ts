@@ -1,11 +1,46 @@
 import apiClient from './client'
 
+// LDAP 配置导出结构
+export interface LDAPConfigExport {
+  server_url: string
+  bind_dn: string
+  bind_password?: string
+  base_dn: string
+  user_search_filter?: string
+  username_attr?: string
+  email_attr?: string
+  display_name_attr?: string
+  is_enabled?: boolean
+  is_exclusive?: boolean
+  use_starttls?: boolean
+  connect_timeout?: number
+}
+
+// OAuth Provider 导出结构
+export interface OAuthProviderExport {
+  provider_type: string
+  display_name: string
+  client_id: string
+  client_secret?: string
+  authorization_url_override?: string | null
+  token_url_override?: string | null
+  userinfo_url_override?: string | null
+  scopes?: string[] | null
+  redirect_uri: string
+  frontend_callback_url: string
+  attribute_mapping?: any
+  extra_config?: any
+  is_enabled?: boolean
+}
+
 // 配置导出数据结构
 export interface ConfigExportData {
   version: string
   exported_at: string
   global_models: GlobalModelExport[]
   providers: ProviderExport[]
+  ldap_config?: LDAPConfigExport | null
+  oauth_providers?: OAuthProviderExport[]
 }
 
 // 用户导出数据结构
@@ -76,7 +111,6 @@ export interface ProviderExport {
   provider_priority?: number
   is_active: boolean
   concurrent_limit?: number | null
-  timeout?: number | null
   max_retries?: number | null
   proxy?: any
   config?: any
@@ -89,7 +123,6 @@ export interface EndpointExport {
   api_format: string
   base_url: string
   headers?: any
-  timeout?: number
   max_retries?: number
   is_active: boolean
   custom_path?: string | null
@@ -102,10 +135,9 @@ export interface ProviderKeyExport {
   name?: string | null
   note?: string | null
   api_formats: string[]
-  rate_multiplier?: number
   rate_multipliers?: Record<string, number> | null
   internal_priority?: number
-  global_priority?: number | null
+  global_priority_by_format?: Record<string, number> | null
   rpm_limit?: number | null
   allowed_models?: any
   capabilities?: any
@@ -222,6 +254,7 @@ export interface ProviderModelsQueryResponse {
       api_format?: string
     }>
     error?: string
+    from_cache?: boolean
   }
   provider: {
     id: string
@@ -256,6 +289,8 @@ export interface ConfigImportResponse {
     endpoints: { created: number; updated: number; skipped: number }
     keys: { created: number; updated: number; skipped: number }
     models: { created: number; updated: number; skipped: number }
+    ldap?: { created: number; updated: number; skipped: number }
+    oauth?: { created: number; updated: number; skipped: number }
     errors: string[]
   }
 }
@@ -269,6 +304,7 @@ export interface AdminApiKey {
   name?: string
   key_display?: string  // 脱敏后的密钥显示
   is_active: boolean
+  is_locked: boolean  // 管理员锁定标志
   is_standalone: boolean  // 是否为独立余额Key
   balance_used_usd?: number  // 已使用余额（仅独立Key）
   current_balance_usd?: number | null  // 当前余额（独立Key预付费模式，null表示无限制）
@@ -307,6 +343,12 @@ export interface AdminApiKeysResponse {
 export interface ApiKeyToggleResponse {
   id: string // UUID
   is_active: boolean
+  message: string
+}
+
+export interface ApiKeyLockResponse {
+  id: string // UUID
+  is_locked: boolean
   message: string
 }
 
@@ -354,6 +396,14 @@ export const adminApi = {
   async deleteApiKey(keyId: string): Promise<{ message: string }> {
     const response = await apiClient.delete<{ message: string}>(
       `/api/admin/api-keys/${keyId}`
+    )
+    return response.data
+  },
+
+  // 切换API密钥锁定状态（锁定/解锁）
+  async toggleLockApiKey(keyId: string): Promise<ApiKeyLockResponse> {
+    const response = await apiClient.patch<ApiKeyLockResponse>(
+      `/api/admin/api-keys/${keyId}/lock`
     )
     return response.data
   },
@@ -466,10 +516,10 @@ export const adminApi = {
   },
 
   // 查询 Provider 可用模型（从上游 API 获取）
-  async queryProviderModels(providerId: string, apiKeyId?: string): Promise<ProviderModelsQueryResponse> {
+  async queryProviderModels(providerId: string, apiKeyId?: string, forceRefresh = false): Promise<ProviderModelsQueryResponse> {
     const response = await apiClient.post<ProviderModelsQueryResponse>(
       '/api/admin/provider-query/models',
-      { provider_id: providerId, api_key_id: apiKeyId }
+      { provider_id: providerId, api_key_id: apiKeyId, force_refresh: forceRefresh }
     )
     return response.data
   },

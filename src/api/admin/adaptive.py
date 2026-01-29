@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
-from src.config.constants import RPMDefaults
 from src.core.exceptions import InvalidRequestException, translate_pydantic_error
 from src.database import get_db
 from src.models.database import ProviderAPIKey
@@ -226,7 +225,7 @@ class ListAdaptiveKeysAdapter(AdminApiAdapter):
                 is_adaptive=key.rpm_limit is None,
                 rpm_limit=key.rpm_limit,
                 effective_limit=(
-                    (key.learned_rpm_limit if key.learned_rpm_limit is not None else RPMDefaults.INITIAL_LIMIT)
+                    key.learned_rpm_limit  # 自适应模式：使用学习值，未学习时为 None（不限制）
                     if key.rpm_limit is None
                     else key.rpm_limit
                 ),
@@ -279,7 +278,7 @@ class ToggleAdaptiveModeAdapter(AdminApiAdapter):
             "is_adaptive": is_adaptive,
             "rpm_limit": key.rpm_limit,
             "effective_limit": (
-                (key.learned_rpm_limit if key.learned_rpm_limit is not None else RPMDefaults.INITIAL_LIMIT)
+                key.learned_rpm_limit  # 自适应模式：使用学习值，未学习时为 None（不限制）
                 if is_adaptive
                 else key.rpm_limit
             ),

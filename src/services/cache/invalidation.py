@@ -51,11 +51,19 @@ class CacheInvalidationService:
         except Exception as e:
             logger.error(f"[CacheInvalidation] 失效 ModelCacheService 缓存失败: {e}")
 
+        # 4. 清除 /v1/models 列表缓存
+        from src.api.base.models_service import invalidate_models_list_cache
+
+        try:
+            await invalidate_models_list_cache()
+        except Exception as e:
+            logger.error(f"[CacheInvalidation] 失效 models list 缓存失败: {e}")
+
     def on_model_changed(self, provider_id: str, global_model_id: str):
         """Model 变更时的缓存失效"""
         self._refresh_provider_cache(provider_id)
 
-    def on_key_allowed_models_changed(self, provider_id: str) -> None:
+    async def on_key_allowed_models_changed(self, provider_id: str) -> None:
         """
         Key 的 allowed_models 变更时的缓存失效
 
@@ -67,6 +75,14 @@ class CacheInvalidationService:
         """
         logger.info(f"[CacheInvalidation] Key allowed_models 变更: provider_id={provider_id}")
         self._refresh_provider_cache(provider_id)
+
+        # 清除 /v1/models 列表缓存（allowed_models 变更会影响模型可用性）
+        from src.api.base.models_service import invalidate_models_list_cache
+
+        try:
+            await invalidate_models_list_cache()
+        except Exception as e:
+            logger.error(f"[CacheInvalidation] 失效 models list 缓存失败: {e}")
 
     def _refresh_provider_cache(self, provider_id: str) -> None:
         """刷新指定 Provider 的 ModelMapper 缓存"""

@@ -395,10 +395,13 @@
 
     <!-- 趋势图表区域 -->
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <!-- 请求次数和费用趋势 -->
-      <Card class="p-5">
+      <!-- 每日使用趋势（折线图）- 普通用户可见 -->
+      <Card
+        v-if="!isAdmin"
+        class="p-5"
+      >
         <h4 class="mb-3 text-xs font-semibold text-foreground uppercase tracking-wider">
-          请求次数 / 费用趋势
+          每日使用趋势
         </h4>
         <div
           v-if="loadingDaily"
@@ -411,9 +414,9 @@
           style="height: 280px;"
         >
           <LineChart
-            v-if="chartData.requests"
-            :data="chartData.requests"
-            :options="chartOptions.requests"
+            v-if="dailyUsageTrendChartData.labels && dailyUsageTrendChartData.labels.length > 0"
+            :data="dailyUsageTrendChartData"
+            :options="dailyUsageTrendChartOptions"
           />
           <div
             v-else
@@ -424,8 +427,75 @@
         </div>
       </Card>
 
-      <!-- 每日模型成本（堆叠柱状图） -->
-      <Card class="p-5">
+      <!-- 每日模型成本（堆叠柱状图）- 仅管理员可见 -->
+      <Card
+        v-if="isAdmin"
+        class="p-5"
+      >
+        <h4 class="mb-3 text-xs font-semibold text-foreground uppercase tracking-wider">
+          每日模型成本
+        </h4>
+        <div
+          v-if="loadingDaily"
+          class="flex items-center justify-center h-[280px]"
+        >
+          <Skeleton class="h-full w-full" />
+        </div>
+        <div
+          v-else
+          style="height: 280px;"
+        >
+          <BarChart
+            v-if="dailyModelCostChartData.labels && dailyModelCostChartData.labels.length > 0"
+            :data="dailyModelCostChartData"
+            :options="dailyModelCostChartOptions"
+          />
+          <div
+            v-else
+            class="flex h-full items-center justify-center text-xs text-muted-foreground"
+          >
+            暂无数据
+          </div>
+        </div>
+      </Card>
+
+      <!-- 提供商成本分布（环形图）- 仅管理员可见 -->
+      <Card
+        v-if="isAdmin"
+        class="p-5"
+      >
+        <h4 class="mb-3 text-xs font-semibold text-foreground uppercase tracking-wider">
+          提供商成本分布
+        </h4>
+        <div
+          v-if="loadingDaily"
+          class="flex items-center justify-center h-[280px]"
+        >
+          <Skeleton class="h-full w-full" />
+        </div>
+        <div
+          v-else
+          style="height: 280px;"
+        >
+          <DoughnutChart
+            v-if="providerCostChartData.labels && providerCostChartData.labels.length > 0"
+            :data="providerCostChartData"
+            :options="providerCostChartOptions"
+          />
+          <div
+            v-else
+            class="flex h-full items-center justify-center text-xs text-muted-foreground"
+          >
+            暂无数据
+          </div>
+        </div>
+      </Card>
+
+      <!-- 每日模型成本（堆叠柱状图）- 普通用户可见 -->
+      <Card
+        v-if="!isAdmin"
+        class="p-5"
+      >
         <h4 class="mb-3 text-xs font-semibold text-foreground uppercase tracking-wider">
           每日模型成本
         </h4>
@@ -538,7 +608,10 @@
             <TableHead class="text-center">
               使用模型
             </TableHead>
-            <TableHead class="text-center">
+            <TableHead
+              v-if="isAdmin"
+              class="text-center"
+            >
               使用提供商
             </TableHead>
           </TableRow>
@@ -546,7 +619,7 @@
         <TableBody>
           <TableRow v-if="loadingDaily">
             <TableCell
-              colspan="7"
+              :colspan="isAdmin ? 7 : 6"
               class="text-center py-8"
             >
               <div class="flex items-center justify-center gap-2">
@@ -557,7 +630,7 @@
           </TableRow>
           <TableRow v-else-if="dailyStats.length === 0">
             <TableCell
-              colspan="7"
+              :colspan="isAdmin ? 7 : 6"
               class="text-center py-8 text-muted-foreground text-xs"
             >
               暂无数据
@@ -601,7 +674,10 @@
               <TableCell class="text-center text-xs">
                 {{ stat.unique_models }}
               </TableCell>
-              <TableCell class="text-center text-xs">
+              <TableCell
+                v-if="isAdmin"
+                class="text-center text-xs"
+              >
                 {{ stat.unique_providers }}
               </TableCell>
             </TableRow>
@@ -707,7 +783,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { dashboardApi, type DashboardStat, type DailyStat } from '@/api/dashboard'
+import { dashboardApi, type DashboardStat, type DailyStat, type ProviderSummary } from '@/api/dashboard'
 import { announcementApi, type Announcement } from '@/api/announcements'
 import {
   Card,
@@ -722,8 +798,9 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui'
-import LineChart from '@/components/charts/LineChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
+import DoughnutChart from '@/components/charts/DoughnutChart.vue'
+import LineChart from '@/components/charts/LineChart.vue'
 import {
   Users,
   Activity,
@@ -894,6 +971,7 @@ const tokenBreakdown = ref<{
 
 const activeUsers = ref(0)
 const dailyStats = ref<DailyStat[]>([])
+const providerSummary = ref<ProviderSummary[]>([])
 const selectedDays = ref(7)
 const loadingDaily = ref(false)
 const loading = ref(false)
@@ -943,41 +1021,6 @@ const totalStats = computed(() => {
     tokens: totals.tokens,
     cost: totals.cost,
     avgResponseTime: totals.requests > 0 ? totals.totalResponseTime / totals.requests : 0
-  }
-})
-
-// 图表数据
-const chartData = computed(() => {
-  if (dailyStats.value.length === 0) {
-    return { requests: null }
-  }
-
-  const labels = dailyStats.value.map(stat => formatDateForChart(stat.date))
-  const requests = dailyStats.value.map(stat => stat.requests)
-  const costs = dailyStats.value.map(stat => stat.cost)
-
-  return {
-    requests: {
-      labels,
-      datasets: [
-        {
-          label: '请求次数',
-          data: requests,
-          borderColor: 'rgb(59, 130, 246)',
-          backgroundColor: 'rgba(59, 130, 246, 0.1)',
-          tension: 0.4,
-          yAxisID: 'y'
-        },
-        {
-          label: '费用 ($)',
-          data: costs,
-          borderColor: 'rgb(34, 197, 94)',
-          backgroundColor: 'rgba(34, 197, 94, 0.1)',
-          tension: 0.4,
-          yAxisID: 'y1'
-        }
-      ]
-    } as ChartData<'line'>
   }
 })
 
@@ -1077,38 +1120,144 @@ const dailyModelCostChartOptions = computed<ChartOptions<'bar'>>(() => ({
   }
 }))
 
-const chartOptions = computed(() => ({
-  requests: {
+// 提供商成本分布（环形图）
+const PROVIDER_COLORS = [
+  'rgba(59, 130, 246, 0.8)',   // blue
+  'rgba(239, 68, 68, 0.8)',    // red
+  'rgba(16, 185, 129, 0.8)',   // green
+  'rgba(245, 158, 11, 0.8)',   // amber
+  'rgba(139, 92, 246, 0.8)',   // purple
+  'rgba(6, 182, 212, 0.8)',    // cyan
+  'rgba(132, 204, 22, 0.8)',   // lime
+  'rgba(249, 115, 22, 0.8)'    // orange
+]
+
+const providerCostChartData = computed<ChartData<'doughnut'>>(() => {
+  if (providerSummary.value.length === 0) {
+    return { labels: [], datasets: [] }
+  }
+
+  return {
+    labels: providerSummary.value.map(p => p.provider),
+    datasets: [{
+      data: providerSummary.value.map(p => p.cost),
+      backgroundColor: providerSummary.value.map((_, i) => PROVIDER_COLORS[i % PROVIDER_COLORS.length]),
+      borderWidth: 2,
+      borderColor: 'rgba(255, 255, 255, 0.1)'
+    }]
+  }
+})
+
+const providerCostChartOptions = computed<ChartOptions<'doughnut'>>(() => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  cutout: '60%',
+  plugins: {
+    legend: {
+      position: 'right',
+      labels: {
+        font: { size: 10 },
+        boxWidth: 12,
+        padding: 8
+      }
+    },
+    tooltip: {
+      callbacks: {
+        label: (context) => {
+          const value = context.raw as number
+          const total = (context.dataset.data as number[]).reduce((a, b) => a + b, 0)
+          const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : '0'
+          return `${context.label}: $${value.toFixed(4)} (${percentage}%)`
+        }
+      }
+    }
+  }
+}))
+
+// 每日使用趋势（折线图）- 普通用户
+const dailyUsageTrendChartData = computed<ChartData<'line'>>(() => {
+  // 管理员不需要此图表，直接返回空数据
+  if (isAdmin.value || dailyStats.value.length === 0) {
+    return { labels: [], datasets: [] }
+  }
+
+  return {
+    labels: dailyStats.value.map(stat => formatDateForChart(stat.date)),
+    datasets: [
+      {
+        label: '请求数',
+        data: dailyStats.value.map(stat => stat.requests),
+        borderColor: 'rgba(59, 130, 246, 0.8)',
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        fill: true,
+        tension: 0.3,
+        yAxisID: 'y'
+      },
+      {
+        label: 'Tokens (K)',
+        data: dailyStats.value.map(stat => stat.tokens / 1000),
+        borderColor: 'rgba(16, 185, 129, 0.8)',
+        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        fill: true,
+        tension: 0.3,
+        yAxisID: 'y1'
+      }
+    ]
+  }
+})
+
+const dailyUsageTrendChartOptions = computed<ChartOptions<'line'>>(() => {
+  // 管理员不需要此图表
+  if (isAdmin.value) {
+    return {} as ChartOptions<'line'>
+  }
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {
+      mode: 'index',
+      intersect: false
+    },
     scales: {
+      x: {
+        ticks: { font: { size: 10 } }
+      },
       y: {
         type: 'linear',
         display: true,
         position: 'left',
-        title: { display: true, text: '请求次数', color: 'rgb(107, 114, 128)', font: { size: 10 } }
+        title: { display: true, text: '请求数', color: 'rgb(107, 114, 128)', font: { size: 10 } },
+        ticks: { font: { size: 10 } }
       },
       y1: {
         type: 'linear',
         display: true,
         position: 'right',
-        title: { display: true, text: '费用 ($)', color: 'rgb(107, 114, 128)', font: { size: 10 } },
+        title: { display: true, text: 'Tokens (K)', color: 'rgb(107, 114, 128)', font: { size: 10 } },
+        ticks: { font: { size: 10 } },
         grid: { drawOnChartArea: false }
       }
     },
     plugins: {
-      legend: { labels: { font: { size: 11 } } },
+      legend: {
+        display: true,
+        position: 'bottom',
+        labels: { font: { size: 10 }, boxWidth: 12, padding: 8 }
+      },
       tooltip: {
         callbacks: {
-          label: (context: any) => {
-            const label = context.dataset.label || ''
-            const value = context.parsed.y
-            if (label.includes('费用')) return `${label}: $${value.toFixed(4)}`
-            return `${label}: ${value.toLocaleString()}`
+          label: (context) => {
+            const value = context.raw as number
+            if (context.dataset.label === 'Tokens (K)') {
+              return `${context.dataset.label}: ${value.toFixed(1)}K`
+            }
+            return `${context.dataset.label}: ${value}`
           }
         }
       }
     }
-  } as ChartOptions<'line'>
-}))
+  }
+})
 
 onMounted(async () => {
   checkScreenSize()
@@ -1170,8 +1319,10 @@ async function loadDailyStats() {
   try {
     const response = await dashboardApi.getDailyStats(selectedDays.value)
     dailyStats.value = response.daily_stats
+    providerSummary.value = response.provider_summary || []
   } catch {
     dailyStats.value = []
+    providerSummary.value = []
   } finally {
     loadingDaily.value = false
   }

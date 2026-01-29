@@ -13,8 +13,7 @@ from sqlalchemy.orm import Session
 from src.api.base.pipeline import ApiRequestPipeline
 from src.api.handlers.openai import OpenAIChatAdapter
 from src.api.handlers.openai_cli import OpenAICliAdapter
-from src.core.api_format_metadata import get_api_format_definition
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat, get_api_format_definition
 from src.database import get_db
 
 _openai_def = get_api_format_definition(APIFormat.OPENAI)

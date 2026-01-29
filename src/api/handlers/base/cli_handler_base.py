@@ -15,21 +15,29 @@ import codecs
 import json
 import time
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Callable,
     Dict,
+    List,
     Optional,
+    Tuple,
 )
 
 import httpx
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+if TYPE_CHECKING:
+    from src.core.api_format import ApiFormatDefinition
+
 from src.api.handlers.base.base_handler import (
     BaseMessageHandler,
+    ClientDisconnectedException,
     MessageTelemetry,
+    wait_for_with_disconnect_detection,
 )
 from src.api.handlers.base.parsers import get_parser_for_format
 from src.api.handlers.base.request_builder import PassthroughRequestBuilder
@@ -45,6 +53,7 @@ from src.api.handlers.base.utils import (
     check_html_response,
     check_prefetched_response_error,
     filter_proxy_response_headers,
+    get_format_converter_registry,
 )
 from src.config.constants import StreamDefaults
 from src.config.settings import config
@@ -55,6 +64,7 @@ from src.core.exceptions import (
     ProviderNotAvailableException,
     ProviderRateLimitException,
     ProviderTimeoutException,
+    ThinkingSignatureException,
 )
 from src.core.logger import logger
 from src.database import get_db
@@ -69,6 +79,108 @@ from src.services.cache.aware_scheduler import ProviderCandidate
 from src.services.provider.transport import build_provider_url
 from src.utils.sse_parser import SSEEventParser
 from src.utils.timeout import read_first_chunk_with_ttfb_timeout
+
+
+# ==============================================================================
+# SSE 行解析辅助函数
+# ==============================================================================
+
+
+def _parse_sse_data_line(line: str) -> Tuple[Optional[Any], str]:
+    """
+    解析标准 SSE data 行
+
+    Args:
+        line: 以 "data:" 开头的 SSE 行
+
+    Returns:
+        (parsed_json, status) 元组：
+        - (parsed_dict, "ok") - 解析成功
+        - (None, "empty") - 内容为空
+        - (None, "invalid") - JSON 解析失败，调用方应透传原始行
+    """
+    data_content = line[5:].strip()
+    if not data_content:
+        return None, "empty"
+    try:
+        return json.loads(data_content), "ok"
+    except json.JSONDecodeError:
+        return None, "invalid"
+
+
+def _parse_sse_event_data_line(line: str) -> Tuple[Optional[Any], str]:
+    """
+    解析 event + data 同行格式（如 "event: xxx data: {...}"）
+
+    Args:
+        line: 以 "event:" 开头且包含 " data:" 的 SSE 行
+
+    Returns:
+        (parsed_json, status) 元组
+    """
+    _event_part, data_part = line.split(" data:", 1)
+    data_content = data_part.strip()
+    try:
+        return json.loads(data_content), "ok"
+    except json.JSONDecodeError:
+        return None, "invalid"
+
+
+def _parse_gemini_json_array_line(line: str) -> Tuple[Optional[Any], str]:
+    """
+    解析 Gemini JSON-array 格式的裸 JSON 行
+
+    Gemini 流式响应可能是 JSON 数组格式，每行是数组元素。
+
+    Args:
+        line: 原始行（可能是 "[", "]", ",", 或 JSON 对象）
+
+    Returns:
+        (parsed_json, status) 元组
+    """
+    stripped = line.strip()
+    if stripped in ("", "[", "]", ","):
+        return None, "skip"
+
+    candidate = stripped.lstrip(",").rstrip(",").strip()
+    try:
+        return json.loads(candidate), "ok"
+    except json.JSONDecodeError:
+        logger.debug(f"Gemini JSON-array line skip: {stripped[:50]}")
+        return None, "invalid"
+
+
+def _format_converted_events_to_sse(
+    converted_events: List[Dict[str, Any]],
+    client_format: str,
+) -> List[str]:
+    """
+    将转换后的事件格式化为 SSE 行
+
+    Args:
+        converted_events: 转换后的事件列表
+        client_format: 客户端 API 格式
+
+    Returns:
+        SSE 行列表（每个元素是完整的 SSE 事件，包含尾部空行）
+    """
+    result: List[str] = []
+    needs_event_line = client_format.upper() in ("CLAUDE", "CLAUDE_CLI")
+
+    for evt in converted_events:
+        payload = json.dumps(evt, ensure_ascii=False)
+        if needs_event_line:
+            evt_type = evt.get("type") if isinstance(evt, dict) else None
+            if isinstance(evt_type, str) and evt_type:
+                # Claude 格式：event + data + 空行
+                result.append(f"event: {evt_type}\ndata: {payload}\n")
+            else:
+                result.append(f"data: {payload}\n")
+        else:
+            # OpenAI 格式：data + 空行
+            result.append(f"data: {payload}\n")
+
+    return result
 
 
 class CliMessageHandlerBase(BaseMessageHandler):
@@ -246,6 +358,111 @@ class CliMessageHandlerBase(BaseMessageHandler):
         """
         return request_body
 
+    @staticmethod
+    def _get_format_metadata(format_id: str) -> Optional["ApiFormatDefinition"]:
+        """获取格式元数据（解析失败返回 None）"""
+        from src.core.api_format import APIFormat
+        from src.core.api_format.metadata import API_FORMAT_DEFINITIONS
+
+        try:
+            fmt = APIFormat(format_id.upper())
+            return API_FORMAT_DEFINITIONS.get(fmt)
+        except (ValueError, KeyError):
+            return None
+
+    def _finalize_converted_request(
+        self,
+        request_body: Dict[str, Any],
+        client_api_format: str,
+        provider_api_format: str,
+        mapped_model: Optional[str],
+        fallback_model: str,
+        is_stream: bool,
+    ) -> None:
+        """
+        跨格式转换后统一设置并清理 model/stream 字段（原地修改）
+
+        处理逻辑：
+        1. 根据目标格式决定是否在 body 中设置 model
+        2. 若客户端格式不含 stream 字段但 Provider 需要，则显式设置
+        3. 移除目标格式不允许在 body 中携带的字段（如 Gemini 的 model/stream）
+
+        Args:
+            request_body: 转换后的请求体（会被原地修改）
+            client_api_format: 客户端 API 格式
+            provider_api_format: Provider API 格式
+            mapped_model: 映射后的模型名
+            fallback_model: 备用模型名
+            is_stream: 是否流式请求
+        """
+        client_meta = self._get_format_metadata(client_api_format)
+        provider_meta = self._get_format_metadata(provider_api_format)
+
+        # 默认：model_in_body=True, stream_in_body=True（如 OpenAI/Claude）
+        client_uses_stream = client_meta.stream_in_body if client_meta else True
+        provider_model_in_body = provider_meta.model_in_body if provider_meta else True
+        provider_stream_in_body = provider_meta.stream_in_body if provider_meta else True
+
+        # 设置 model（仅当 Provider 允许且 body 中需要）
+        if provider_model_in_body:
+            request_body["model"] = mapped_model or fallback_model
+        else:
+            request_body.pop("model", None)
+
+        # 设置 stream（客户端不带但 Provider 需要时显式设置；Provider 不需要时移除）
+        if provider_stream_in_body:
+            if not client_uses_stream:
+                request_body["stream"] = is_stream
+        else:
+            request_body.pop("stream", None)
+
+    def _convert_request_for_cross_format(
+        self,
+        request_body: Dict[str, Any],
+        client_api_format: str,
+        provider_api_format: str,
+        mapped_model: Optional[str],
+        fallback_model: str,
+        is_stream: bool,
+    ) -> Tuple[Dict[str, Any], str]:
+        """
+        跨格式请求转换的公共逻辑
+
+        将客户端格式的请求体转换为 Provider 格式，并处理 model/stream 字段的补齐和清理。
+
+        Args:
+            request_body: 原始请求体（会被修改）
+            client_api_format: 客户端 API 格式
+            provider_api_format: Provider API 格式
+            mapped_model: 映射后的模型名
+            fallback_model: 备用模型名（通常是原始请求的 model）
+            is_stream: 是否流式请求
+
+        Returns:
+            (转换后的请求体, 用于 URL 的模型名)
+        """
+        registry = get_format_converter_registry()
+        converted_body = registry.convert_request(
+            request_body,
+            str(client_api_format),
+            str(provider_api_format),
+        )
+
+        # 先计算 URL 模型（在清理 body 中的 model 字段之前）
+        url_model = self.get_model_for_url(converted_body, mapped_model) or mapped_model or fallback_model
+
+        # 统一设置并清理 model/stream 字段
+        self._finalize_converted_request(
+            converted_body,
+            str(client_api_format),
+            str(provider_api_format),
+            mapped_model,
+            fallback_model,
+            is_stream,
+        )
+
+        return converted_body, url_model
+
     def get_model_for_url(
         self,
         request_body: Dict[str, Any],
@@ -290,6 +507,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         original_headers: Dict[str, str],
         query_params: Optional[Dict[str, str]] = None,
         path_params: Optional[Dict[str, Any]] = None,
+        http_request: Optional[Request] = None,
     ) -> StreamingResponse:
         """
         处理流式请求
@@ -299,10 +517,22 @@ class CliMessageHandlerBase(BaseMessageHandler):
         2. 定义请求函数（供 FallbackOrchestrator 调用）
         3. 执行请求并返回 StreamingResponse
         4. 后台任务记录统计信息
+
+        Args:
+            original_request_body: 原始请求体
+            original_headers: 原始请求头
+            query_params: 查询参数
+            path_params: 路径参数
+            http_request: FastAPI Request 对象，用于检测客户端断连
         """
         logger.debug(f"开始流式响应处理 ({self.FORMAT_ID})")
 
+        # 可变请求体容器：允许 orchestrator 在遇到 Thinking 签名错误时整流请求体后重试
+        # 结构: {"body": 实际请求体, "_rectified": 是否已整流, "_rectified_this_turn": 本轮是否整流}
+        request_body_ref: Dict[str, Any] = {"body": original_request_body}
+
         # 使用子类实现的方法提取 model（不同 API 格式的 model 位置不同）
+        # 注意：使用 original_request_body，因为整流只修改 messages，不影响 model 字段
         model = self.extract_model_from_request(original_request_body, path_params)
 
         # 创建流上下文
@@ -326,10 +556,11 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 provider,
                 endpoint,
                 key,
-                original_request_body,
+                request_body_ref["body"],  # 使用容器中的请求体
                 original_headers,
                 query_params,
                 candidate,
+                http_request,  # 传递 http_request 用于断连检测
             )
 
         try:
@@ -355,6 +586,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 request_id=self.request_id,
                 is_stream=True,
                 capability_requirements=capability_requirements or None,
+                request_body_ref=request_body_ref,  # 传递容器引用
             )
 
             # 更新上下文（确保 provider 信息已设置，用于 streaming 状态更新）
@@ -367,6 +599,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 ctx.endpoint_id = endpoint_id
             if not ctx.key_id:
                 ctx.key_id = key_id
+            # 同步整流状态（如果请求体被整流过）
+            ctx.rectified = request_body_ref.get("_rectified", False)
 
             # 创建后台任务记录统计
             background_tasks = BackgroundTasks()
@@ -377,8 +611,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 original_request_body,
             )
 
-            # 创建监控流
-            monitored_stream = self._create_monitored_stream(ctx, stream_generator)
+            # 创建监控流（传递 http_request 用于断连检测）
+            monitored_stream = self._create_monitored_stream(ctx, stream_generator, http_request)
 
             # 透传提供商的响应头给客户端
             # 同时添加必要的 SSE 头以确保流式传输正常工作
@@ -395,6 +629,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 background=background_tasks,
             )
 
+        except ThinkingSignatureException as e:
+            # Thinking 签名错误：orchestrator 层已处理整流重试但仍失败
+            # 记录 original_request_body（客户端原始请求），便于排查问题根因
+            self._log_request_error("流式请求失败（签名错误）", e)
+            await self._record_stream_failure(ctx, e, original_headers, original_request_body)
+            raise
+
         except Exception as e:
             self._log_request_error("流式请求失败", e)
             await self._record_stream_failure(ctx, e, original_headers, original_request_body)
@@ -410,6 +651,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         original_headers: Dict[str, str],
         query_params: Optional[Dict[str, str]] = None,
         candidate: Optional[ProviderCandidate] = None,
+        http_request: Optional[Request] = None,
     ) -> AsyncGenerator[bytes, None]:
         """执行流式请求并返回流生成器"""
         # 重置上下文状态（重试时清除之前的数据，避免累积）
@@ -452,11 +694,33 @@ class CliMessageHandlerBase(BaseMessageHandler):
         else:
             request_body = original_request_body
 
-        # 准备发送给 Provider 的请求体（子类可覆盖以移除不需要的字段）
-        request_body = self.prepare_provider_request_body(request_body)
+        client_api_format = (
+            ctx.client_api_format.value
+            if hasattr(ctx.client_api_format, "value")
+            else str(ctx.client_api_format)
+        )
+        provider_api_format = str(ctx.provider_api_format or "")
+        needs_conversion = bool(getattr(candidate, "needs_conversion", False)) if candidate else False
+        ctx.needs_conversion = needs_conversion
+
+        # 跨格式：先做请求体转换（失败触发 failover）
+        if needs_conversion and provider_api_format:
+            request_body, url_model = self._convert_request_for_cross_format(
+                request_body,
+                client_api_format,
+                provider_api_format,
+                mapped_model,
+                ctx.model,
+                is_stream=True,
+            )
+        else:
+            # 同格式：按原逻辑做轻量清理（子类可覆盖）
+            request_body = self.prepare_provider_request_body(request_body)
+            url_model = self.get_model_for_url(request_body, mapped_model) or mapped_model or ctx.model
 
         # 使用 RequestBuilder 构建请求体和请求头
         # 注意：mapped_model 已经应用到 request_body，这里不再传递
+        # 上游始终使用 header 认证，不跟随客户端的 query 方式
         provider_payload, provider_headers = self._request_builder.build(
             request_body,
             original_headers,
@@ -468,10 +732,6 @@ class CliMessageHandlerBase(BaseMessageHandler):
         # 保存发送给 Provider 的请求信息（用于调试和统计）
         ctx.provider_request_headers = provider_headers
         ctx.provider_request_body = provider_payload
-
-        # 获取用于 URL 的模型名（子类可覆盖此方法，如 Gemini 需要特殊处理）
-        # 使用 ctx.model 作为 fallback（它已从 path_params 获取）
-        url_model = self.get_model_for_url(request_body, mapped_model) or ctx.model
 
         url = build_provider_url(
             endpoint,
@@ -490,8 +750,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             pool=config.http_pool_timeout,
         )
 
-        # provider.timeout 作为整体请求超时（建立连接 + 获取首字节）
-        request_timeout = float(provider.timeout or 300)
+        # 流式请求使用 stream_first_byte_timeout 作为首字节超时
+        # 优先使用 Provider 配置，否则使用全局配置
+        request_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
 
         logger.debug(
             f"  └─ [{self.request_id}] 发送流式请求: "
@@ -539,8 +800,17 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
         try:
             # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
-            # provider.timeout 控制整体超时，避免上游长时间无响应
-            await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
+            # stream_first_byte_timeout 控制首字节超时，避免上游长时间无响应
+            # 同时检测客户端断连，避免客户端已断开但服务端仍在等待上游响应
+            if http_request is not None:
+                await wait_for_with_disconnect_detection(
+                    _connect_and_prefetch(),
+                    timeout=request_timeout,
+                    is_disconnected=http_request.is_disconnected,
+                    request_id=self.request_id,
+                )
+            else:
+                await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
 
         except asyncio.TimeoutError:
             # 整体请求超时（建立连接 + 获取首字节）
@@ -558,6 +828,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 provider_name=str(provider.name),
                 timeout=int(request_timeout),
             )
+
+        except ClientDisconnectedException:
+            # 客户端断开连接，清理资源
+            if response_ctx is not None:
+                try:
+                    await response_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            await http_client.aclose()
+            logger.warning(f"  [{self.request_id}] 客户端在等待首字节时断开连接")
+            ctx.status_code = 499
+            ctx.error_message = "client_disconnected_during_prefetch"
+            raise
 
         except httpx.HTTPStatusError as e:
             error_text = await self._extract_error_text(e)
@@ -613,8 +896,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-            # 检查是否需要格式转换
-            needs_conversion = self._needs_format_conversion(ctx)
+            # 使用已设置的 ctx.needs_conversion（由候选筛选阶段根据端点配置判断）
+            # 不再调用 _needs_format_conversion，它只检查格式差异，不检查端点配置
+            needs_conversion = ctx.needs_conversion
 
             async for chunk in stream_response.aiter_bytes():
                 buffer += chunk
@@ -640,6 +924,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                                 ctx,
                                 event.get("event"),
                                 event.get("data") or "",
+                                record_chunk=not needs_conversion,
                             )
                         self._mark_first_output(ctx, output_state)
                         yield b"\n"
@@ -671,10 +956,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
                     # 格式转换或直接透传
                     if needs_conversion:
-                        converted_line = self._convert_sse_line(ctx, line, events)
-                        if converted_line:
-                            self._mark_first_output(ctx, output_state)
-                            yield (converted_line + "\n").encode("utf-8")
+                        converted_lines, converted_events = self._convert_sse_line(ctx, line, events)
+                        # 记录转换后的数据到 parsed_chunks
+                        self._record_converted_chunks(ctx, converted_events)
+                        for converted_line in converted_lines:
+                            if converted_line:
+                                self._mark_first_output(ctx, output_state)
+                                yield (converted_line + "\n").encode("utf-8")
                     else:
                         self._mark_first_output(ctx, output_state)
                         yield (line + "\n").encode("utf-8")
@@ -684,6 +972,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         ctx,
                         event.get("event"),
                         event.get("data") or "",
+                        record_chunk=not needs_conversion,
                     )
 
                 if ctx.data_count > 0:
@@ -695,6 +984,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     ctx,
                     event.get("event"),
                     event.get("data") or "",
+                    record_chunk=not needs_conversion,
                 )
 
             # 检查是否收到数据
@@ -716,6 +1006,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
             else:
                 logger.debug("流式数据转发完成")
+                # 为 OpenAI 客户端补齐 [DONE] 标记（非 CLI 格式）
+                client_fmt = (ctx.client_api_format or "").upper()
+                if needs_conversion and client_fmt == "OPENAI":
+                    yield b"data: [DONE]\n\n"
 
         except GeneratorExit:
             raise
@@ -810,7 +1104,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 provider_parser = self.parser
 
             # 使用共享的 TTFB 超时函数读取首字节
-            ttfb_timeout = config.stream_first_byte_timeout
+            # 优先使用 Provider 配置，否则使用全局配置
+            ttfb_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
             first_chunk, aiter = await read_first_chunk_with_ttfb_timeout(
                 byte_iterator,
                 timeout=ttfb_timeout,
@@ -854,7 +1149,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                             "上游服务返回了非预期的响应格式",
                             provider_name=str(provider.name),
                             upstream_status=200,
-                            upstream_response=normalized_line[:500] if normalized_line else "(empty)",
+                            upstream_response=(
+                                normalized_line[:500] if normalized_line else "(empty)"
+                            ),
                         )
 
                     if not normalized_line or normalized_line.startswith(":"):
@@ -962,8 +1259,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-            # 检查是否需要格式转换
-            needs_conversion = self._needs_format_conversion(ctx)
+            # 使用已设置的 ctx.needs_conversion（由候选筛选阶段根据端点配置判断）
+            # 不再调用 _needs_format_conversion，它只检查格式差异，不检查端点配置
+            needs_conversion = ctx.needs_conversion
 
             # 先处理预读的字节块
             for chunk in prefetched_chunks:
@@ -990,6 +1288,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                                 ctx,
                                 event.get("event"),
                                 event.get("data") or "",
+                                record_chunk=not needs_conversion,
                             )
                         self._mark_first_output(ctx, output_state)
                         yield b"\n"
@@ -999,10 +1298,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
                     # 格式转换或直接透传
                     if needs_conversion:
-                        converted_line = self._convert_sse_line(ctx, line, events)
-                        if converted_line:
-                            self._mark_first_output(ctx, output_state)
-                            yield (converted_line + "\n").encode("utf-8")
+                        converted_lines, converted_events = self._convert_sse_line(ctx, line, events)
+                        # 记录转换后的数据到 parsed_chunks
+                        self._record_converted_chunks(ctx, converted_events)
+                        for converted_line in converted_lines:
+                            if converted_line:
+                                self._mark_first_output(ctx, output_state)
+                                yield (converted_line + "\n").encode("utf-8")
                     else:
                         self._mark_first_output(ctx, output_state)
                         yield (line + "\n").encode("utf-8")
@@ -1012,6 +1314,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                             ctx,
                             event.get("event"),
                             event.get("data") or "",
+                            record_chunk=not needs_conversion,
                         )
 
                     if ctx.data_count > 0:
@@ -1042,6 +1345,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                                 ctx,
                                 event.get("event"),
                                 event.get("data") or "",
+                                record_chunk=not needs_conversion,
                             )
                         self._mark_first_output(ctx, output_state)
                         yield b"\n"
@@ -1073,10 +1377,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
                     # 格式转换或直接透传
                     if needs_conversion:
-                        converted_line = self._convert_sse_line(ctx, line, events)
-                        if converted_line:
-                            self._mark_first_output(ctx, output_state)
-                            yield (converted_line + "\n").encode("utf-8")
+                        converted_lines, converted_events = self._convert_sse_line(ctx, line, events)
+                        # 记录转换后的数据到 parsed_chunks
+                        self._record_converted_chunks(ctx, converted_events)
+                        for converted_line in converted_lines:
+                            if converted_line:
+                                self._mark_first_output(ctx, output_state)
+                                yield (converted_line + "\n").encode("utf-8")
                     else:
                         self._mark_first_output(ctx, output_state)
                         yield (line + "\n").encode("utf-8")
@@ -1086,6 +1393,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                             ctx,
                             event.get("event"),
                             event.get("data") or "",
+                            record_chunk=not needs_conversion,
                         )
 
                     if ctx.data_count > 0:
@@ -1098,6 +1406,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     ctx,
                     event.get("event"),
                     event.get("data") or "",
+                    record_chunk=not needs_conversion,
                 )
 
             # 检查是否收到数据
@@ -1121,6 +1430,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
             else:
                 logger.debug("流式数据转发完成")
+                # 为 OpenAI 客户端补齐 [DONE] 标记（非 CLI 格式）
+                client_fmt = (ctx.client_api_format or "").upper()
+                if needs_conversion and client_fmt == "OPENAI":
+                    yield b"data: [DONE]\n\n"
 
         except GeneratorExit:
             raise
@@ -1166,12 +1479,21 @@ class CliMessageHandlerBase(BaseMessageHandler):
         ctx: StreamContext,
         event_name: Optional[str],
         data_str: str,
+        record_chunk: bool = False,
     ) -> None:
         """
         处理 SSE 事件
 
         通用框架：解析 JSON、更新计数器
         子类可覆盖 _process_event_data() 实现格式特定逻辑
+
+        Args:
+            ctx: 流上下文
+            event_name: 事件名称（如 message_start, content_block_delta 等）
+            data_str: 事件数据字符串（JSON 格式）
+            record_chunk: 是否记录到 parsed_chunks（不需要格式转换时应为 True）
+                          当为 True 时，同时更新 data_count；
+                          当为 False 时，data_count 由 _record_converted_chunks 更新
         """
         if not data_str:
             return
@@ -1185,8 +1507,11 @@ class CliMessageHandlerBase(BaseMessageHandler):
         except json.JSONDecodeError:
             return
 
-        ctx.data_count += 1
-        ctx.parsed_chunks.append(data)
+        # 当不需要格式转换时，记录原始数据到 parsed_chunks 并更新 data_count
+        # 当需要格式转换时（record_chunk=False），data_count 由 _record_converted_chunks 更新
+        if record_chunk and isinstance(data, dict):
+            ctx.parsed_chunks.append(data)
+            ctx.data_count += 1
 
         if not isinstance(data, dict):
             return
@@ -1194,6 +1519,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         event_type = event_name or data.get("type", "")
 
         # 调用格式特定的处理逻辑
+        # 注意：跨格式转换时，_process_event_data 会自动选择正确的 Provider 解析器
         self._process_event_data(ctx, event_type, data)
 
     def _process_event_data(
@@ -1216,15 +1542,51 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 ctx.response_id = data["id"]
 
         # 使用解析器提取 usage
-        usage = self.parser.extract_usage_from_response(data)
-        if usage and not ctx.final_usage:
-            ctx.input_tokens = usage.get("input_tokens", 0)
-            ctx.output_tokens = usage.get("output_tokens", 0)
-            ctx.cached_tokens = usage.get("cache_read_tokens", 0)
-            ctx.final_usage = usage
+        # Claude/CLI 流式响应的 usage 可能在首个 chunk 或最后一个 chunk 中
+        # 首个 chunk 可能部分为 0，最后一个 chunk 包含完整值，因此取最大值确保正确计费
+        #
+        # 重要：当跨格式转换时，收到的数据是 Provider 格式，需要使用 Provider 格式的解析器
+        # 而不是客户端格式的解析器（self.parser）
+        parser = self.parser
+        if ctx.provider_api_format and ctx.provider_api_format != ctx.client_api_format:
+            # 跨格式转换：使用 Provider 格式的解析器
+            try:
+                provider_parser = get_parser_for_format(ctx.provider_api_format)
+                if provider_parser:
+                    parser = provider_parser
+                    logger.debug(
+                        f"[{getattr(ctx, 'request_id', 'unknown')}] 使用 Provider 解析器: "
+                        f"{ctx.provider_api_format} (client={ctx.client_api_format})"
+                    )
+            except KeyError:
+                logger.debug(
+                    f"[{getattr(ctx, 'request_id', 'unknown')}] 未找到 Provider 格式解析器: "
+                    f"{ctx.provider_api_format}, 回退使用客户端格式解析器"
+                )
 
-        # 提取文本内容
-        text = self.parser.extract_text_content(data)
+        usage = parser.extract_usage_from_response(data)
+        if usage:
+            new_input = usage.get("input_tokens", 0)
+            new_output = usage.get("output_tokens", 0)
+            new_cached = usage.get("cache_read_tokens", 0)
+            new_cache_creation = usage.get("cache_creation_tokens", 0)
+
+            # 取最大值更新
+            if new_input > ctx.input_tokens:
+                ctx.input_tokens = new_input
+            if new_output > ctx.output_tokens:
+                ctx.output_tokens = new_output
+            if new_cached > ctx.cached_tokens:
+                ctx.cached_tokens = new_cached
+            if new_cache_creation > ctx.cache_creation_tokens:
+                ctx.cache_creation_tokens = new_cache_creation
+
+            # 保存最后一个非空 usage 作为 final_usage
+            if any([new_input, new_output, new_cached, new_cache_creation]):
+                ctx.final_usage = usage
+
+        # 提取文本内容（同样使用正确的解析器）
+        text = parser.extract_text_content(data)
         if text:
             ctx.append_text(text)
 
@@ -1234,6 +1596,118 @@ class CliMessageHandlerBase(BaseMessageHandler):
             response_obj = data.get("response")
             if isinstance(response_obj, dict):
                 ctx.final_response = response_obj
+
+    def _record_converted_chunks(
+        self,
+        ctx: StreamContext,
+        converted_events: List[Dict[str, Any]],
+    ) -> None:
+        """
+        记录转换后的 chunk 数据到 parsed_chunks，并更新统计信息
+
+        当需要格式转换时，记录的是转换后的数据（客户端实际收到的格式）；
+        同时更新 data_count、has_completion 等统计信息。
+
+        重要：此方法也从转换后的事件中提取 usage 信息，作为 _process_event_data
+        从原始数据提取的补充。这确保即使原始 Provider 数据中没有 usage（如 OpenAI
+        未设置 stream_options），也能从转换后的格式中获取。
+
+        Args:
+            ctx: 流上下文
+            converted_events: 转换后的事件列表
+        """
+        for evt in converted_events:
+            if isinstance(evt, dict):
+                ctx.parsed_chunks.append(evt)
+                ctx.data_count += 1
+
+                # 检测完成事件（根据客户端格式判断）
+                # OpenAI 格式: choices[].finish_reason
+                # Claude 格式: type == "message_stop" 或 stop_reason
+                event_type = evt.get("type", "")
+                if event_type == "message_stop":
+                    ctx.has_completion = True
+                elif event_type == "response.completed":
+                    ctx.has_completion = True
+                elif "choices" in evt:
+                    choices = evt.get("choices", [])
+                    for choice in choices:
+                        if isinstance(choice, dict) and choice.get("finish_reason"):
+                            ctx.has_completion = True
+                            break
+
+                # 从转换后的事件中提取 usage（补充 _process_event_data 的提取）
+                # Claude 格式: message_delta.usage 或 message_start.message.usage
+                # OpenAI 格式: chunk.usage
+                self._extract_usage_from_converted_event(ctx, evt, event_type)
+
+    def _extract_usage_from_converted_event(
+        self,
+        ctx: StreamContext,
+        evt: Dict[str, Any],
+        event_type: str,
+    ) -> None:
+        """
+        从转换后的事件中提取 usage 信息
+
+        支持多种格式：
+        - Claude: message_delta.usage, message_start.message.usage
+        - OpenAI: chunk.usage
+        - Gemini: usageMetadata
+
+        Args:
+            ctx: 流上下文
+            evt: 转换后的事件
+            event_type: 事件类型
+        """
+        usage: Optional[Dict[str, Any]] = None
+
+        # Claude 格式: message_delta 或 message_start
+        if event_type == "message_delta":
+            usage = evt.get("usage")
+        elif event_type == "message_start":
+            message = evt.get("message", {})
+            if isinstance(message, dict):
+                usage = message.get("usage")
+        # OpenAI 格式: 直接在 chunk 中
+        elif "usage" in evt:
+            usage = evt.get("usage")
+        # Gemini 格式: usageMetadata
+        elif "usageMetadata" in evt:
+            meta = evt.get("usageMetadata", {})
+            if isinstance(meta, dict):
+                usage = {
+                    "input_tokens": meta.get("promptTokenCount", 0),
+                    "output_tokens": meta.get("candidatesTokenCount", 0),
+                    "cache_read_tokens": meta.get("cachedContentTokenCount", 0),
+                    "cache_creation_tokens": 0,  # Gemini 目前不支持缓存创建
+                }
+
+        if usage and isinstance(usage, dict):
+            new_input = usage.get("input_tokens", 0) or 0
+            new_output = usage.get("output_tokens", 0) or 0
+            new_cached = usage.get("cache_read_tokens") or usage.get("cache_read_input_tokens") or 0
+            new_cache_creation = usage.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens") or 0
+
+            # 取最大值更新（与 _process_event_data 相同的策略）
+            if new_input > ctx.input_tokens:
+                ctx.input_tokens = new_input
+                logger.debug(
+                    f"[{ctx.request_id}] 从转换后事件更新 input_tokens: {new_input}"
+                )
+            if new_output > ctx.output_tokens:
+                ctx.output_tokens = new_output
+                logger.debug(
+                    f"[{ctx.request_id}] 从转换后事件更新 output_tokens: {new_output}"
+                )
+            if new_cached > ctx.cached_tokens:
+                ctx.cached_tokens = new_cached
+            if new_cache_creation > ctx.cache_creation_tokens:
+                ctx.cache_creation_tokens = new_cache_creation
+
+            # 保存最后一个非空 usage
+            if any([new_input, new_output, new_cached, new_cache_creation]):
+                ctx.final_usage = usage
 
     def _finalize_stream_metadata(self, ctx: StreamContext) -> None:
         """
@@ -1252,17 +1726,74 @@ class CliMessageHandlerBase(BaseMessageHandler):
         self,
         ctx: StreamContext,
         stream_generator: AsyncGenerator[bytes, None],
+        http_request: Optional[Request] = None,
     ) -> AsyncGenerator[bytes, None]:
-        """创建带监控的流生成器"""
+        """
+        创建带监控的流生成器
+
+        支持两种断连检测方式：
+        1. 如果提供了 http_request，使用后台任务主动检测客户端断连
+        2. 如果未提供，仅依赖 asyncio.CancelledError 被动检测
+
+        Args:
+            ctx: 流上下文
+            stream_generator: 底层流生成器
+            http_request: FastAPI Request 对象，用于检测客户端断连
+        """
         import time as time_module
 
         last_chunk_time = time_module.time()
         chunk_count = 0
+
         try:
-            async for chunk in stream_generator:
-                last_chunk_time = time_module.time()
-                chunk_count += 1
-                yield chunk
+            if http_request is not None:
+                # 使用后台任务检测断连，完全不阻塞流式传输
+                disconnected = False
+
+                async def check_disconnect_background() -> None:
+                    nonlocal disconnected
+                    while not disconnected and not ctx.has_completion:
+                        await asyncio.sleep(0.5)
+                        try:
+                            if await http_request.is_disconnected():
+                                disconnected = True
+                                break
+                        except Exception as e:
+                            # 检测失败时不中断流，继续传输
+                            logger.debug(f"ID:{ctx.request_id} | 断连检测异常: {e}")
+
+                # 启动后台检查任务
+                check_task = asyncio.create_task(check_disconnect_background())
+
+                try:
+                    async for chunk in stream_generator:
+                        if disconnected:
+                            # 如果响应已完成，客户端断开不算失败
+                            if ctx.has_completion:
+                                logger.info(
+                                    f"ID:{ctx.request_id} | Client disconnected after completion"
+                                )
+                            else:
+                                logger.warning(f"ID:{ctx.request_id} | Client disconnected")
+                                ctx.status_code = 499
+                                ctx.error_message = "client_disconnected"
+                            break
+                        last_chunk_time = time_module.time()
+                        chunk_count += 1
+                        yield chunk
+                finally:
+                    check_task.cancel()
+                    try:
+                        await check_task
+                    except asyncio.CancelledError:
+                        pass
+            else:
+                # 无 http_request，仅被动监控
+                async for chunk in stream_generator:
+                    last_chunk_time = time_module.time()
+                    chunk_count += 1
+                    yield chunk
+
         except asyncio.CancelledError:
             # 计算距离上次收到 chunk 的时间
             time_since_last_chunk = time_module.time() - last_chunk_time
@@ -1320,6 +1851,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 api_key = bg_db.query(ApiKeyModel).filter(ApiKeyModel.id == ctx.api_key_id).first()
 
                 if not user or not api_key:
+                    logger.warning(
+                        f"[{ctx.request_id}] 无法记录统计: user={user is not None}, api_key={api_key is not None}"
+                    )
                     return
 
                 bg_telemetry = MessageTelemetry(
@@ -1346,7 +1880,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     # 记录失败的 Usage，但使用已收到的预估 token 信息（来自 message_start）
                     # 这样即使请求中断，也能记录预估成本
                     # 失败时返回给客户端的是 JSON 错误响应，如果没有设置则使用默认值
-                    client_response_headers = ctx.client_response_headers or {"content-type": "application/json"}
+                    client_response_headers = ctx.client_response_headers or {
+                        "content-type": "application/json"
+                    }
                     await bg_telemetry.record_failure(
                         provider=ctx.provider_name or "unknown",
                         model=ctx.model,
@@ -1366,6 +1902,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         response_body=response_body,
                         response_headers=ctx.response_headers,
                         client_response_headers=client_response_headers,
+                        # 格式转换追踪
+                        endpoint_api_format=ctx.provider_api_format or None,
+                        has_format_conversion=ctx.needs_conversion,
                         # 模型映射信息
                         target_model=ctx.mapped_model,
                     )
@@ -1381,12 +1920,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
                     # 流式成功时，返回给客户端的是提供商响应头 + SSE 必需头
                     client_response_headers = filter_proxy_response_headers(ctx.response_headers)
-                    client_response_headers.update({
-                        "Cache-Control": "no-cache, no-transform",
-                        "X-Accel-Buffering": "no",
-                        "content-type": "text/event-stream",
-                    })
+                    client_response_headers.update(
+                        {
+                            "Cache-Control": "no-cache, no-transform",
+                            "X-Accel-Buffering": "no",
+                            "content-type": "text/event-stream",
+                        }
+                    )
 
+                    logger.debug(
+                        f"[{ctx.request_id}] 开始记录 Usage: "
+                        f"provider={ctx.provider_name}, model={ctx.model}, "
+                        f"in={actual_input_tokens}, out={ctx.output_tokens}"
+                    )
                     total_cost = await bg_telemetry.record_success(
                         provider=ctx.provider_name,
                         model=ctx.model,
@@ -1405,6 +1951,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         is_stream=True,
                         provider_request_headers=ctx.provider_request_headers,
                         api_format=ctx.api_format,
+                        # 格式转换追踪
+                        endpoint_api_format=ctx.provider_api_format or None,
+                        has_format_conversion=ctx.needs_conversion,
                         # Provider 侧追踪信息（用于记录真实成本）
                         provider_id=ctx.provider_id,
                         provider_endpoint_id=ctx.endpoint_id,
@@ -1414,7 +1963,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         # Provider 响应元数据（如 Gemini 的 modelVersion）
                         response_metadata=ctx.response_metadata if ctx.response_metadata else None,
                     )
-                    logger.debug(f"{self.FORMAT_ID} 流式响应完成")
+                    logger.debug(
+                        f"[{ctx.request_id}] Usage 记录完成: cost=${total_cost:.6f}"
+                    )
                     # 简洁的请求完成摘要（两行格式）
                     line1 = f"[OK] {self.request_id[:8]} | {ctx.model} | {ctx.provider_name}"
                     if ctx.first_byte_time_ms:
@@ -1435,11 +1986,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     # 计算候选自身的 TTFB
                     candidate_first_byte_time_ms: Optional[int] = None
                     if ctx.first_byte_time_ms is not None:
-                        candidate_first_byte_time_ms = RequestCandidateService.calculate_candidate_ttfb(
-                            db=bg_db,
-                            candidate_id=ctx.attempt_id,
-                            request_start_time=self.start_time,
-                            global_first_byte_time_ms=ctx.first_byte_time_ms,
+                        candidate_first_byte_time_ms = (
+                            RequestCandidateService.calculate_candidate_ttfb(
+                                db=bg_db,
+                                candidate_id=ctx.attempt_id,
+                                request_start_time=self.start_time,
+                                global_first_byte_time_ms=ctx.first_byte_time_ms,
+                            )
                         )
 
                     # 根据状态码决定是成功还是失败
@@ -1447,7 +2000,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     # 503 = 服务不可用（如流中断），应标记为失败
                     if ctx.status_code and ctx.status_code >= 400:
                         # 请求链路追踪使用 upstream_response（原始响应），回退到 error_message（友好消息）
-                        trace_error_message = ctx.upstream_response or ctx.error_message or f"HTTP {ctx.status_code}"
+                        trace_error_message = (
+                            ctx.upstream_response or ctx.error_message or f"HTTP {ctx.status_code}"
+                        )
                         extra_data = {
                             "stream_completed": False,
                             "chunk_count": ctx.chunk_count,
@@ -1472,6 +2027,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
                             "chunk_count": ctx.chunk_count,
                             "data_count": ctx.data_count,
                         }
+                        if ctx.rectified:
+                            extra_data["rectified"] = True
                         if candidate_first_byte_time_ms is not None:
                             extra_data["first_byte_time_ms"] = candidate_first_byte_time_ms
                         RequestCandidateService.mark_candidate_success(
@@ -1500,7 +2057,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
         response_time_ms = int((time.time() - self.start_time) * 1000)
 
         status_code = 503
-        if isinstance(error, ProviderAuthException):
+        if isinstance(error, ThinkingSignatureException):
+            status_code = 400
+        elif isinstance(error, ProviderAuthException):
             status_code = 503
         elif isinstance(error, ProviderRateLimitException):
             status_code = 429
@@ -1529,6 +2088,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             provider_request_headers=ctx.provider_request_headers,
             response_headers=ctx.response_headers,
             client_response_headers=client_response_headers,
+            # 格式转换追踪
+            endpoint_api_format=ctx.provider_api_format or None,
+            has_format_conversion=ctx.needs_conversion,
             # 模型映射信息
             target_model=ctx.mapped_model,
         )
@@ -1569,6 +2131,11 @@ class CliMessageHandlerBase(BaseMessageHandler):
         key_id = None  # Key ID（用于失败记录）
         mapped_model_result = None  # 映射后的目标模型名（用于 Usage 记录）
         response_metadata_result: Dict[str, Any] = {}  # Provider 响应元数据
+        needs_conversion = False  # 是否需要格式转换（由 candidate 决定）
+
+        # 可变请求体容器：允许 orchestrator 在遇到 Thinking 签名错误时整流请求体后重试
+        # 结构: {"body": 实际请求体, "_rectified": 是否已整流, "_rectified_this_turn": 本轮是否整流}
+        request_body_ref: Dict[str, Any] = {"body": original_request_body}
 
         async def sync_request_func(
             provider: Provider,
@@ -1576,7 +2143,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             key: ProviderAPIKey,
             candidate: ProviderCandidate,
         ) -> Dict[str, Any]:
-            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result
+            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result, needs_conversion
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
 
@@ -1591,15 +2158,33 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 应用模型映射到请求体（子类可覆盖此方法处理不同格式）
             if mapped_model:
                 mapped_model_result = mapped_model  # 保存映射后的模型名，用于 Usage 记录
-                request_body = self.apply_mapped_model(original_request_body, mapped_model)
+                request_body = self.apply_mapped_model(request_body_ref["body"], mapped_model)
             else:
-                request_body = original_request_body
+                request_body = dict(request_body_ref["body"])
 
-            # 准备发送给 Provider 的请求体（子类可覆盖以移除不需要的字段）
-            request_body = self.prepare_provider_request_body(request_body)
+            client_api_format = (
+                api_format.value if hasattr(api_format, "value") else str(api_format)
+            )
+            needs_conversion = bool(getattr(candidate, "needs_conversion", False))
+
+            # 跨格式：先做请求体转换（失败触发 failover）
+            if needs_conversion and provider_api_format:
+                request_body, url_model = self._convert_request_for_cross_format(
+                    request_body,
+                    client_api_format,
+                    provider_api_format,
+                    mapped_model,
+                    model,
+                    is_stream=False,
+                )
+            else:
+                # 同格式：按原逻辑做轻量清理（子类可覆盖）
+                request_body = self.prepare_provider_request_body(request_body)
+                url_model = self.get_model_for_url(request_body, mapped_model) or mapped_model or model
 
             # 使用 RequestBuilder 构建请求体和请求头
             # 注意：mapped_model 已经应用到 request_body，这里不再传递
+            # 上游始终使用 header 认证，不跟随客户端的 query 方式
             provider_payload, provider_headers = self._request_builder.build(
                 request_body,
                 original_headers,
@@ -1611,9 +2196,6 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 保存发送给 Provider 的请求信息（用于调试和统计）
             provider_request_headers = provider_headers
             provider_request_body = provider_payload
-
-            # 获取用于 URL 的模型名（子类可覆盖此方法，如 Gemini 需要特殊处理）
-            url_model = self.get_model_for_url(request_body, mapped_model)
 
             url = build_provider_url(
                 endpoint,
@@ -1633,7 +2215,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
             from src.clients.http_client import HTTPClientPool
 
-            request_timeout = float(provider.timeout or 300)
+            # 非流式请求使用 http_request_timeout 作为整体超时
+            # 优先使用 Provider 配置，否则使用全局配置
+            request_timeout = provider.request_timeout or config.http_request_timeout
             http_client = await HTTPClientPool.get_proxy_client(
                 proxy_config=provider.proxy,
             )
@@ -1744,6 +2328,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 request_func=sync_request_func,
                 request_id=self.request_id,
                 capability_requirements=capability_requirements or None,
+                request_body_ref=request_body_ref,  # 传递容器引用
             )
 
             provider_name = actual_provider_name
@@ -1753,19 +2338,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
             if response_json is None:
                 response_json = {}
 
-            # 检查是否需要格式转换
-            if (
-                provider_api_format
-                and api_format
-                and provider_api_format.upper() != api_format.upper()
-            ):
-                from src.api.handlers.base.format_converter_registry import converter_registry
+            # 检查是否需要格式转换（同族格式无需转换，如 CLAUDE 和 CLAUDE_CLI）
+            from src.core.api_format.utils import get_base_format
 
+            provider_base = get_base_format(provider_api_format) if provider_api_format else None
+            client_base = get_base_format(api_format) if api_format else None
+            if provider_base and client_base and provider_base != client_base:
                 try:
-                    response_json = converter_registry.convert_response(
+                    registry = get_format_converter_registry()
+                    response_json = registry.convert_response(
                         response_json,
                         provider_api_format,
                         api_format,
+                        requested_model=model,  # 使用用户请求的原始模型名
                     )
                     logger.debug(f"非流式响应格式转换完成: {provider_api_format} -> {api_format}")
                 except Exception as conv_err:
@@ -1806,6 +2391,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 is_stream=False,
                 provider_request_headers=provider_request_headers,
                 api_format=api_format,
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format or None,
+                has_format_conversion=needs_conversion,
                 # Provider 侧追踪信息（用于记录真实成本）
                 provider_id=provider_id,
                 provider_endpoint_id=endpoint_id,
@@ -1824,6 +2412,24 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 content=response_json,
                 headers=client_response_headers,
             )
+
+        except ThinkingSignatureException as e:
+            # Thinking 签名错误：orchestrator 层已处理整流重试但仍失败
+            # 记录实际发送给 Provider 的请求体，便于排查问题根因
+            response_time_ms = int((time.time() - sync_start_time) * 1000)
+            actual_request_body = provider_request_body or original_request_body
+            await self.telemetry.record_failure(
+                provider=provider_name or "unknown",
+                model=model,
+                response_time_ms=response_time_ms,
+                status_code=e.status_code or 400,
+                request_headers=original_headers,
+                request_body=actual_request_body,
+                error_message=str(e),
+                is_stream=False,
+                api_format=api_format,
+            )
+            raise
 
         except Exception as e:
             response_time_ms = int((time.time() - sync_start_time) * 1000)
@@ -1860,6 +2466,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 response_headers=error_response_headers,
                 # 非流式失败返回给客户端的是 JSON 错误响应
                 client_response_headers={"content-type": "application/json"},
+                # 格式转换追踪
+                endpoint_api_format=provider_api_format or None,
+                has_format_conversion=needs_conversion,
                 # 模型映射信息
                 target_model=mapped_model_result,
             )
@@ -1890,14 +2499,63 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
     def _needs_format_conversion(self, ctx: StreamContext) -> bool:
         """
-        检查是否需要进行格式转换
+        [已废弃] 仅根据格式差异判断是否需要转换
+
+        警告：此方法只检查格式是否不同，不检查端点的 format_acceptance_config 配置！
+        正确的判断应使用候选筛选阶段的结果（ctx.needs_conversion），该结果由
+        is_format_compatible() 函数根据全局开关和端点配置计算得出。
+
+        此方法保留仅供调试和日志输出使用，流生成器中不应调用此方法。
 
         当 Provider 的 API 格式与客户端请求的 API 格式不同时，需要转换响应。
         例如：客户端请求 Claude 格式，但 Provider 返回 OpenAI 格式。
+
+        注意：
+        - CLAUDE 和 CLAUDE_CLI、GEMINI 和 GEMINI_CLI：格式相同，只是认证不同，可透传
+        - OPENAI 和 OPENAI_CLI：格式不同（Chat Completions vs Responses API），需要转换
         """
+        from src.core.api_format.utils import get_base_format
+
         if not ctx.provider_api_format or not ctx.client_api_format:
+            logger.debug(
+                f"[{getattr(ctx, 'request_id', 'unknown')}] _needs_format_conversion: "
+                f"provider_api_format={ctx.provider_api_format!r}, client_api_format={ctx.client_api_format!r} -> False (missing)"
+            )
             return False
-        return ctx.provider_api_format.upper() != ctx.client_api_format.upper()
+
+        provider_format = str(ctx.provider_api_format).upper()
+        client_format = str(ctx.client_api_format).upper()
+
+        # 1. 格式完全匹配 -> 不需要转换
+        if provider_format == client_format:
+            logger.debug(
+                f"[{getattr(ctx, 'request_id', 'unknown')}] _needs_format_conversion: "
+                f"provider={provider_format}, client={client_format} -> False (exact match)"
+            )
+            return False
+
+        # 2. 同族格式检查
+        provider_base = get_base_format(provider_format)
+        client_base = get_base_format(client_format)
+
+        if provider_base == client_base:
+            # OPENAI 和 OPENAI_CLI 的请求/响应格式不同，需要转换
+            # CLAUDE 和 CLAUDE_CLI、GEMINI 和 GEMINI_CLI 格式相同，可透传
+            result = provider_base == "OPENAI"
+            logger.debug(
+                f"[{getattr(ctx, 'request_id', 'unknown')}] _needs_format_conversion: "
+                f"provider={provider_format}(base={provider_base}), "
+                f"client={client_format}(base={client_base}) -> {result} (same family, OPENAI needs conversion)"
+            )
+            return result
+
+        # 3. 跨格式 -> 需要转换
+        logger.debug(
+            f"[{getattr(ctx, 'request_id', 'unknown')}] _needs_format_conversion: "
+            f"provider={provider_format}(base={provider_base}), "
+            f"client={client_format}(base={client_base}) -> True (cross-format)"
+        )
+        return True
 
     def _mark_first_output(self, ctx: StreamContext, state: Dict[str, bool]) -> None:
         """
@@ -1922,48 +2580,129 @@ class CliMessageHandlerBase(BaseMessageHandler):
         self,
         ctx: StreamContext,
         line: str,
-        events: list,
-    ) -> Optional[str]:
+        events: list,  # noqa: ARG002 - 预留给上下文感知转换
+    ) -> Tuple[List[str], List[Dict[str, Any]]]:
         """
         将 SSE 行从 Provider 格式转换为客户端格式
 
         Args:
             ctx: 流上下文
             line: 原始 SSE 行
-            events: 解析后的事件列表
+            events: 当前累积的事件列表（预留参数，用于未来上下文感知转换如合并相邻事件）
 
         Returns:
-            转换后的 SSE 行，如果无法转换则返回 None
+            (sse_lines, converted_events) 元组：
+            - sse_lines: 转换后的 SSE 行列表（一入多出），空列表表示跳过该行
+            - converted_events: 转换后的事件对象列表（用于记录到 parsed_chunks）
         """
-        from src.api.handlers.base.format_converter_registry import converter_registry
+        # 空行直接返回
+        if not line or line.strip() == "":
+            return ([line] if line else [], [])
 
-        # 如果是空行或特殊控制行，直接返回
-        if not line or line.strip() == "" or line == "data: [DONE]":
-            return line
+        client_format = (ctx.client_api_format or "").upper()
 
-        # 如果不是 data 行，直接透传
-        if not line.startswith("data:"):
-            return line
+        # [DONE] 标记处理：只有 OpenAI 客户端需要，Claude 客户端不需要
+        if line == "data: [DONE]":
+            if client_format.startswith("OPENAI"):
+                return [line], []
+            else:
+                # Claude/Gemini 客户端不需要 [DONE] 标记
+                return [], []
 
-        # 提取 data 内容
-        data_content = line[5:].strip()  # 去掉 "data:" 前缀
+        provider_format = (ctx.provider_api_format or "").upper()
 
-        # 尝试解析 JSON
-        try:
-            data_obj = json.loads(data_content)
-        except json.JSONDecodeError:
-            # 无法解析，直接透传
-            return line
+        # 过滤上游控制行（id/retry），避免与目标格式混淆
+        if line.startswith(("id:", "retry:")):
+            return [], []
 
-        # 使用注册表进行格式转换
-        try:
-            converted_obj = converter_registry.convert_stream_chunk(
-                data_obj,
-                ctx.provider_api_format,
-                ctx.client_api_format,
+        # 解析 SSE 行为 JSON 对象
+        data_obj, status = self._parse_sse_line_to_json(line, provider_format)
+
+        # 根据解析状态决定行为
+        if status == "empty" or status == "skip":
+            return [], []
+        if status == "invalid" or status == "passthrough":
+            return [line], []
+
+        # 初始化流式转换状态
+        if ctx.stream_conversion_state is None:
+            from src.core.api_format.conversion.stream_state import StreamState
+
+            # 使用客户端请求的模型（ctx.model），而非映射后的上游模型（ctx.mapped_model）
+            init_model = ctx.model or ""
+            logger.debug(
+                f"[{ctx.request_id}] StreamState init: ctx.model={ctx.model!r}, "
+                f"mapped_model={ctx.mapped_model!r}, using={init_model!r}"
             )
-            # 重新构建 SSE 行
-            return f"data: {json.dumps(converted_obj, ensure_ascii=False)}"
+            ctx.stream_conversion_state = StreamState(
+                model=init_model,
+                message_id=ctx.response_id or ctx.request_id or "",
+            )
+
+        # 执行格式转换
+        try:
+            registry = get_format_converter_registry()
+            # status == "ok" 时 data_obj 必定是有效的 dict（防御性检查）
+            if data_obj is None:
+                return [], []
+            converted_events = registry.convert_stream_chunk(
+                data_obj,
+                provider_format,
+                client_format,
+                state=ctx.stream_conversion_state,
+            )
+            result = _format_converted_events_to_sse(converted_events, client_format)
+            if result:
+                logger.debug(
+                    f"[{getattr(ctx, 'request_id', 'unknown')}] 流式转换: "
+                    f"{provider_format}->{client_format}, events={len(converted_events)}, "
+                    f"first_output={result[0][:100] if result else 'empty'}..."
+                )
+            return result, converted_events
+
         except Exception as e:
             logger.warning(f"格式转换失败，透传原始数据: {e}")
-            return line
+            return [line], []
+
+    def _parse_sse_line_to_json(
+        self, line: str, provider_format: str
+    ) -> Tuple[Optional[Any], str]:
+        """
+        解析 SSE 行为 JSON 对象
+
+        支持多种格式：
+        - 标准 SSE: "data: {...}"
+        - event+data 同行: "event: xxx data: {...}"
+        - Gemini JSON-array: 裸 JSON 行
+
+        Args:
+            line: 原始 SSE 行
+            provider_format: Provider API 格式
+
+        Returns:
+            (parsed_json, status) 元组：
+            - (obj, "ok") - 解析成功
+            - (None, "empty") - 内容为空，应跳过
+            - (None, "invalid") - JSON 解析失败，应透传原始行
+            - (None, "skip") - 应跳过（如纯 event 行）
+            - (None, "passthrough") - 无法识别，应透传原始行
+        """
+        # 标准 SSE: data: {...}
+        if line.startswith("data:"):
+            return _parse_sse_data_line(line)
+
+        # event + data 同行: event: xxx data: {...}
+        if line.startswith("event:") and " data:" in line:
+            return _parse_sse_event_data_line(line)
+
+        # 纯 event 行不参与转换
+        if line.startswith("event:"):
+            return None, "skip"
+
+        # Gemini JSON-array 格式
+        if provider_format == "GEMINI":
+            return _parse_gemini_json_array_line(line)
+
+        # 其他格式：无法识别，透传
+        return None, "passthrough"
+

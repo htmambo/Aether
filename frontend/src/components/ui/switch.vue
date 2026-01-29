@@ -3,7 +3,8 @@
     type="button"
     role="switch"
     :aria-checked="modelValue"
-    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+    :disabled="disabled"
+    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
     :class="[
       modelValue ? 'bg-primary' : 'bg-muted'
     ]"
@@ -21,6 +22,7 @@
 <script setup lang="ts">
 defineProps<{
   modelValue: boolean
+  disabled?: boolean
 }>()
 
 defineEmits<{

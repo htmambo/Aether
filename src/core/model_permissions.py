@@ -49,7 +49,6 @@ def normalize_allowed_models(allowed_models: AllowedModels) -> Optional[set[str]
 def check_model_allowed(
     model_name: str,
     allowed_models: AllowedModels,
-    resolved_model_name: Optional[str] = None,
 ) -> bool:
     """
     检查模型是否被允许
@@ -57,7 +56,6 @@ def check_model_allowed(
     Args:
         model_name: 请求的模型名称
         allowed_models: 允许的模型配置
-        resolved_model_name: 解析后的 GlobalModel.name（可选）
 
     Returns:
         True: 允许使用该模型
@@ -73,14 +71,8 @@ def check_model_allowed(
         # 空集合 = 拒绝所有
         return False
 
-    # 检查请求的模型名或解析后的名称是否在白名单中
-    if model_name in allowed_set:
-        return True
-
-    if resolved_model_name and resolved_model_name in allowed_set:
-        return True
-
-    return False
+    # 检查请求的模型名是否在白名单中
+    return model_name in allowed_set
 
 
 def merge_allowed_models(
@@ -350,7 +342,6 @@ def match_model_with_pattern(pattern: str, model_name: str) -> bool:
 def check_model_allowed_with_mappings(
     model_name: str,
     allowed_models: AllowedModels,
-    resolved_model_name: Optional[str] = None,
     model_mappings: Optional[List[str]] = None,
     candidate_models: Optional[set[str]] = None,
 ) -> tuple[bool, Optional[str]]:
@@ -358,9 +349,9 @@ def check_model_allowed_with_mappings(
     检查模型是否被允许（支持映射通配符匹配）
 
     匹配优先级：
-    1. 精确匹配 model_name（用户请求的模型名）
-    2. 精确匹配 resolved_model_name（GlobalModel.name）
-    3. 遍历 model_mappings，检查每个映射是否匹配 allowed_models 中的任一项
+    1. 精确匹配 model_name（用户请求的模型名，即 GlobalModel.name）
+    2. 精确匹配 candidate_models ∩ allowed_models（Provider 支持且 Key 允许的模型名）
+    3. 遍历 model_mappings 正则，检查 allowed_models 中是否有匹配项
 
     映射匹配顺序说明：
     - 按 allowed_models 集合的迭代顺序遍历（通常为字母顺序，因为内部使用 set）
@@ -369,24 +360,22 @@ def check_model_allowed_with_mappings(
     - 如需确定性行为，请确保 model_mappings 中的规则从最具体到最通用排序
 
     Args:
-        model_name: 请求的模型名称
+        model_name: 请求的模型名称（GlobalModel.name）
         allowed_models: 允许的模型配置（来自 Provider Key）
-        resolved_model_name: 解析后的 GlobalModel.name
-        model_mappings: GlobalModel 的映射列表（来自 config.model_mappings）
-        candidate_models: 可选的候选模型集合（用于限制映射匹配只能落到这些模型名上）
+        model_mappings: GlobalModel 的映射列表（来自 config.model_mappings），支持正则表达式
+        candidate_models: 可选的候选模型集合（Provider 的 provider_model_names），
+                         仅用于步骤 2 的精确匹配，不影响步骤 3 的正则匹配
 
     Returns:
         (is_allowed, matched_model_name):
         - is_allowed: 是否允许使用该模型
-        - matched_model_name: 通过映射匹配到的模型名（仅映射匹配时有值，精确匹配时为 None）
+        - matched_model_name: 匹配到的模型名（用于实际请求时的模型名替换）
+          - model_name 精确匹配时为 None（无需替换）
+          - candidate_models 或 model_mappings 匹配时返回匹配到的模型名
     """
-    # 先尝试精确匹配（使用原有逻辑）
-    if check_model_allowed(model_name, allowed_models, resolved_model_name):
+    # 先尝试精确匹配 model_name
+    if check_model_allowed(model_name, allowed_models):
         return True, None
-
-    # 如果精确匹配失败且有映射配置，尝试映射匹配
-    if not model_mappings:
-        return False, None
 
     # 获取 allowed_models 的集合
     allowed_set = normalize_allowed_models(allowed_models)
@@ -399,19 +388,33 @@ def check_model_allowed_with_mappings(
         # 空集合 = 拒绝所有
         return False, None
 
-    # 如果提供了候选集合，只允许在候选集合中进行映射匹配
-    if candidate_models is not None:
-        allowed_set = allowed_set & candidate_models
-        if len(allowed_set) == 0:
-            return False, None
+    # 检查 candidate_models 与 allowed_models 的交集
+    # candidate_models = Provider 实际支持的模型名（provider_model_name + provider_model_mappings）
+    # 如果有交集，说明 Key 的 allowed_models 中有 Provider 支持的模型名，可以直接使用
+    if candidate_models:
+        intersection = allowed_set & candidate_models
+        if intersection:
+            # 返回第一个匹配的模型名（排序确保确定性），用于实际请求时替换 model_name
+            return True, sorted(intersection)[0]
 
-    # 遍历 allowed_models 中的每个模型名，检查是否有映射能匹配
-    # 注意：为了避免 set 迭代顺序带来的非确定性，这里对 allowed_set 做排序
-    # 返回第一个匹配的模型名，匹配顺序由 allowed_models 排序结果和 model_mappings 数组顺序共同决定
+    # 如果精确匹配失败且有映射配置，尝试映射匹配
+    if not model_mappings:
+        return False, None
+
+    # 正则映射匹配：直接在 allowed_models 上进行匹配
+    # GlobalModel.config.model_mappings 定义了"可以用哪些 Provider 模型名来提供服务"
+    # 如果 Key 的 allowed_models 中有能被正则匹配的模型名，说明这个 Key 可以用于请求
+    #
+    # 注意：不再用 candidate_models 限制搜索空间
+    # 原因：用户可能只配置了 GlobalModel 的正则映射规则，而没有在 Provider Model 的
+    # provider_model_mappings 中添加对应的模型名。正则映射的语义是"将请求重定向到匹配的模型名"，
+    # 所以应该直接检查 Key 的 allowed_models 是否包含能被正则匹配的模型名。
+    #
+    # 遍历 allowed_set，检查是否有模型名能匹配 model_mappings 中的任一正则
+    # 排序确保确定性行为
     for allowed_model in sorted(allowed_set):
         for mapping_pattern in model_mappings:
             if match_model_with_pattern(mapping_pattern, allowed_model):
-                # 返回匹配到的模型名，用于实际请求
                 return True, allowed_model
 
     return False, None

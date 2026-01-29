@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.models_service import invalidate_models_list_cache
+from src.services.cache.model_cache import ModelCacheService
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.enums import ProviderBillingType
 from src.core.exceptions import InvalidRequestException, NotFoundException
@@ -140,7 +142,6 @@ async def create_provider(request: Request, db: Session = Depends(get_db)):
     - `provider_priority`: 提供商优先级（数字越小优先级越高，默认 100）
     - `is_active`: 是否启用（默认 true）
     - `concurrent_limit`: 并发限制（可选）
-    - `timeout`: 请求超时（秒，可选）
     - `max_retries`: 最大重试次数（可选）
     - `proxy`: 代理配置（可选）
     - `config`: 额外配置信息（JSON，可选）
@@ -176,7 +177,6 @@ async def update_provider(provider_id: str, request: Request, db: Session = Depe
     - `provider_priority`: 提供商优先级
     - `is_active`: 是否启用
     - `concurrent_limit`: 并发限制
-    - `timeout`: 请求超时（秒）
     - `max_retries`: 最大重试次数
     - `proxy`: 代理配置
     - `config`: 额外配置信息（JSON）
@@ -293,15 +293,20 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                 provider_priority=validated_data.provider_priority,
                 is_active=validated_data.is_active,
                 concurrent_limit=validated_data.concurrent_limit,
-                timeout=validated_data.timeout,
                 max_retries=validated_data.max_retries,
                 proxy=validated_data.proxy.model_dump() if validated_data.proxy else None,
+                # 超时配置
+                stream_first_byte_timeout=validated_data.stream_first_byte_timeout,
+                request_timeout=validated_data.request_timeout,
                 config=validated_data.config,
             )
 
             db.add(provider)
             db.commit()
             db.refresh(provider)
+
+            # 清除 /v1/models 列表缓存
+            await invalidate_models_list_cache()
 
             context.add_audit_metadata(
                 action="create_provider",
@@ -369,6 +374,14 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
             db.commit()
             db.refresh(provider)
 
+            # 清除 /v1/models 列表缓存（is_active 变更会影响模型可用性）
+            await invalidate_models_list_cache()
+
+            # 如果更新了 is_active，清除 GlobalModel 解析缓存
+            # Provider 状态变更会影响模型解析结果
+            if "is_active" in update_data:
+                await ModelCacheService.invalidate_all_resolve_cache()
+
             # 如果更新了 billing_type，清除缓存
             if "billing_type" in update_data:
                 await ProviderCacheService.invalidate_provider_cache(provider.id)
@@ -413,6 +426,13 @@ class AdminDeleteProviderAdapter(AdminApiAdapter):
         )
         db.delete(provider)
         db.commit()
+
+        # 清除 /v1/models 列表缓存
+        await invalidate_models_list_cache()
+
+        # 清除 GlobalModel 解析缓存（删除 Provider 会影响模型解析结果）
+        await ModelCacheService.invalidate_all_resolve_cache()
+
         return {"message": "提供商已删除"}
 
 

@@ -15,6 +15,7 @@ from src.database import get_db
 from src.models.admin_requests import UpdateUserRequest
 from src.models.api import CreateApiKeyRequest, CreateUserRequest
 from src.models.database import ApiKey, User, UserRole
+from src.services.system.config import SystemConfigService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.service import UserService
 
@@ -218,6 +219,19 @@ class AdminCreateUserAdapter(AdminApiAdapter):
         except (KeyError, AttributeError):
             raise InvalidRequestException("角色参数不合法")
 
+        # 确定配额：unlimited 优先，其次是指定值，最后是系统默认
+        if request.unlimited:
+            quota_usd = None  # None 表示无限制
+        elif request.quota_usd is not None:
+            quota_usd = request.quota_usd
+        else:
+            quota_usd = SystemConfigService.get_config(db, "default_user_quota_usd", default=10.0)
+
+        # 处理访问权限字段：空数组转为 None（表示无限制）
+        allowed_providers = request.allowed_providers if request.allowed_providers else None
+        allowed_api_formats = request.allowed_api_formats if request.allowed_api_formats else None
+        allowed_models = request.allowed_models if request.allowed_models else None
+
         try:
             user = UserService.create_user(
                 db=db,
@@ -225,7 +239,10 @@ class AdminCreateUserAdapter(AdminApiAdapter):
                 username=request.username,
                 password=request.password,
                 role=role,
-                quota_usd=request.quota_usd,
+                quota_usd=quota_usd,
+                allowed_providers=allowed_providers,
+                allowed_api_formats=allowed_api_formats,
+                allowed_models=allowed_models,
             )
         except ValueError as exc:
             raise InvalidRequestException(str(exc))
@@ -480,6 +497,7 @@ class AdminGetUserKeysAdapter(AdminApiAdapter):
                     "name": key.name,
                     "key_display": key.get_display_key(),
                     "is_active": key.is_active,
+                    "is_locked": key.is_locked,
                     "total_requests": key.total_requests,
                     "total_cost_usd": float(key.total_cost_usd or 0),
                     "rate_limit": key.rate_limit,

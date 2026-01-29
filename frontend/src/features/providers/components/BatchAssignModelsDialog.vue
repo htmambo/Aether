@@ -257,7 +257,7 @@ const emit = defineEmits<{
   'changed': []
 }>()
 
-const { fetchModels: fetchCachedModels, clearCache, getCachedModels } = useUpstreamModelsCache()
+const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
 
 const { error: showError, success } = useToast()
 const { confirmWarning } = useConfirm()
@@ -633,24 +633,8 @@ async function loadData() {
   // 同步全局模型选择状态
   syncGlobalModelSelection()
 
-  // 检查缓存
-  const cachedModels = getCachedModels(props.providerId)
-  if (cachedModels && cachedModels.length > 0) {
-    upstreamModels.value = cachedModels
-    upstreamModelsLoaded.value = true
-    // 同步上游模型选择状态
-    syncUpstreamModelSelection()
-    // 有多个分组时全部折叠
-    const allGroups = new Set(['global'])
-    for (const model of cachedModels) {
-      if (model.api_format) {
-        allGroups.add(model.api_format)
-      }
-    }
-    collapsedGroups.value = allGroups
-  } else {
-    collapsedGroups.value = new Set()
-  }
+  // 初始折叠状态
+  collapsedGroups.value = new Set()
 }
 
 // 加载全局模型列表
@@ -677,13 +661,9 @@ async function loadExistingModels() {
 
 // 从提供商获取模型
 async function fetchUpstreamModels(forceRefresh = false) {
-  if (forceRefresh) {
-    clearCache(props.providerId)
-  }
-
   try {
     fetchingUpstreamModels.value = true
-    const result = await fetchCachedModels(props.providerId, forceRefresh)
+    const result = await fetchCachedModels(props.providerId, undefined, forceRefresh)
     if (result) {
       if (result.error) {
         showError(result.error, '错误')

@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session, joinedload
 from src.config import config
 from src.core.logger import logger
 from src.core.enums import AuthSource
+from src.core.exceptions import ForbiddenException
+from src.services.system.config import SystemConfigService
 
 if TYPE_CHECKING:
     from src.models.database import ManagementToken
@@ -88,6 +90,43 @@ REFRESH_TOKEN_EXPIRATION_DAYS = 7
 
 class AuthService:
     """认证服务"""
+
+    @staticmethod
+    def token_identity_matches_user(payload: Dict[str, Any], user: User) -> bool:
+        """
+        校验 token 的身份字段是否与用户一致。
+
+        兼容策略：
+        - email：旧 token 可能包含；新 token 允许不包含（支持无邮箱用户）
+        - created_at：用于替代 email 作为"防止身份混淆"的校验字段；旧 token 可能没有
+
+        时区处理说明：
+        - 本项目所有 created_at 统一使用 UTC 时区存储（PostgreSQL TIMESTAMPTZ）
+        - 对于 naive datetime（无时区信息），假定为 UTC
+        - 若历史数据使用了非 UTC 本地时区的 naive datetime，可能导致校验失败
+        """
+        token_email = payload.get("email")
+        if token_email is not None and user.email is not None and user.email != token_email:
+            return False
+
+        token_created_at = payload.get("created_at")
+        if not token_created_at or not user.created_at:
+            return True
+
+        try:
+            token_created = datetime.fromisoformat(str(token_created_at).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+
+        # 统一时区：若是 naive datetime，按 UTC 处理
+        # 注意：本项目约定所有时间戳使用 UTC，若旧数据不符合此约定可能导致校验失败
+        user_created = user.created_at
+        if user_created.tzinfo is None:
+            user_created = user_created.replace(tzinfo=timezone.utc)
+        if token_created.tzinfo is None:
+            token_created = token_created.replace(tzinfo=timezone.utc)
+
+        return abs((user_created - token_created).total_seconds()) <= 1
 
     @staticmethod
     def create_access_token(data: dict) -> str:
@@ -192,6 +231,9 @@ class AuthService:
             if not user:
                 # 已有本地账号但来源不匹配等情况
                 return None
+            if user.is_deleted:
+                logger.warning(f"登录失败 - 用户已删除: {email}")
+                return None
             if not user.is_active:
                 logger.warning(f"登录失败 - 用户已禁用: {email}")
                 return None
@@ -207,6 +249,10 @@ class AuthService:
 
         if not user:
             logger.warning(f"登录失败 - 用户不存在: {email}")
+            return None
+
+        if user.is_deleted:
+            logger.warning(f"登录失败 - 用户已删除: {email}")
             return None
 
         # 检查 LDAP exclusive 模式：仅允许本地管理员登录（紧急恢复通道）
@@ -273,6 +319,10 @@ class AuthService:
             user = db.query(User).filter(User.email == email).with_for_update().first()
 
         if user:
+            if user.is_deleted:
+                logger.warning(f"LDAP 登录失败 - 用户已删除: {email}")
+                return None
+
             if user.auth_source != AuthSource.LDAP:
                 # 避免覆盖已有本地账户（不同来源时拒绝登录）
                 logger.warning(
@@ -291,6 +341,7 @@ class AuthService:
                     logger.warning(f"LDAP 登录拒绝 - 新邮箱已被占用: {email}")
                     return None
                 user.email = email
+                user.email_verified = True
 
             # 同步 LDAP 标识（首次填充或 LDAP 侧发生变化）
             if ldap_dn and user.ldap_dn != ldap_dn:
@@ -317,17 +368,22 @@ class AuthService:
                 username = f"{base_username}_ldap_{int(time.time())}{uuid.uuid4().hex[:4]}"
                 logger.info(f"LDAP 用户名冲突，使用新用户名: {ldap_user['username']} -> {username}")
 
+            # 读取系统配置的默认配额
+            default_quota = SystemConfigService.get_config(db, "default_user_quota_usd", default=10.0)
+
             # 创建新用户
             user = User(
                 email=email,
+                email_verified=True,
                 username=username,
-                password_hash="",  # LDAP 用户无本地密码
+                password_hash=None,  # LDAP 用户无本地密码
                 auth_source=AuthSource.LDAP,
                 ldap_dn=ldap_dn,
                 ldap_username=ldap_username,
                 role=UserRole.USER,
                 is_active=True,
                 last_login_at=datetime.now(timezone.utc),
+                quota_usd=default_quota,
             )
 
             try:
@@ -380,6 +436,10 @@ class AuthService:
             logger.warning("API认证失败 - 密钥已禁用")
             return None
 
+        if key_record.is_locked:
+            logger.warning("API认证失败 - 密钥已被管理员锁定")
+            raise ForbiddenException("该密钥已被管理员锁定，请联系管理员")
+
         # 检查过期时间
         if key_record.expires_at:
             # 确保 expires_at 是 aware datetime
@@ -405,6 +465,9 @@ class AuthService:
         user = key_record.user
         if not user.is_active:
             logger.warning(f"API认证失败 - 用户已禁用: {user.email}")
+            return None
+        if user.is_deleted:
+            logger.warning(f"API认证失败 - 用户已删除: {user.email}")
             return None
 
         # 更新最后使用时间（使用节流策略，减少数据库写入）
@@ -625,6 +688,9 @@ class AuthService:
         # 获取用户
         user = token_record.user
         if not user or not user.is_active:
+            logger.warning("Management Token 认证失败 - 用户不存在或已禁用")
+            return None
+        if user.is_deleted:
             logger.warning("Management Token 认证失败 - 用户不存在或已禁用")
             return None
 

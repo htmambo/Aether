@@ -5,6 +5,7 @@
 不再经过 Protocol 抽象层。
 """
 
+import re
 from typing import Any, Dict, Optional, Tuple, Type
 
 from src.api.handlers.base.response_parser import (
@@ -14,6 +15,9 @@ from src.api.handlers.base.response_parser import (
     StreamStats,
 )
 from src.api.handlers.base.utils import extract_cache_creation_tokens
+
+# is_cli_format 权威定义在 core 层
+from src.core.api_format import is_cli_format
 
 
 def _check_nested_error(response: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
@@ -58,6 +62,71 @@ def _check_nested_error(response: Dict[str, Any]) -> Tuple[bool, Optional[Dict[s
     return False, None
 
 
+def _extract_embedded_status_code(error_info: Optional[Dict[str, Any]]) -> Optional[int]:
+    """
+    从错误信息中提取嵌套的状态码
+
+    支持多种格式:
+    1. 直接的 code 字段: {"code": 400}
+    2. status 字段: {"status": 400}
+    3. 从 message 中正则提取: "Request failed with status code 400"
+    4. 从 type 字段映射: "invalid_request_error" -> 400
+
+    Args:
+        error_info: 错误信息字典
+
+    Returns:
+        提取的状态码，如果无法提取则返回 None
+    """
+    if not error_info:
+        return None
+
+    # 1. 直接的 code 字段（Gemini 等）
+    code = error_info.get("code")
+    if isinstance(code, int) and 100 <= code < 600:
+        return code
+    if isinstance(code, str) and code.isdigit():
+        code_int = int(code)
+        if 100 <= code_int < 600:
+            return code_int
+
+    # 2. status 字段
+    status = error_info.get("status")
+    if isinstance(status, int) and 100 <= status < 600:
+        return status
+    if isinstance(status, str) and status.isdigit():
+        status_int = int(status)
+        if 100 <= status_int < 600:
+            return status_int
+
+    # 3. 从 message 中正则提取 (例如 "Request failed with status code 400")
+    message = error_info.get("message", "")
+    if message:
+        # 匹配 "status code XXX" 或 "status XXX" 或 "HTTP XXX"
+        match = re.search(r"(?:status\s*(?:code\s*)?|HTTP\s*)(\d{3})", message, re.IGNORECASE)
+        if match:
+            code_int = int(match.group(1))
+            if 100 <= code_int < 600:
+                return code_int
+
+    # 4. 从 type 字段映射常见的错误类型
+    error_type = error_info.get("type", "")
+    type_to_status = {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "overloaded_error": 503,
+        "api_error": 500,
+        "internal_error": 500,
+    }
+    if error_type and error_type.lower() in type_to_status:
+        return type_to_status[error_type.lower()]
+
+    return None
+
+
 class OpenAIResponseParser(ResponseParser):
     """OpenAI 格式响应解析器"""
 
@@ -100,14 +169,17 @@ class OpenAIResponseParser(ResponseParser):
 
         # 提取 usage 信息（某些 OpenAI 兼容 API 如豆包会在最后一个 chunk 中发送 usage）
         # 这个 chunk 通常 choices 为空数组，但包含完整的 usage 信息
+        # 使用取最大值策略确保正确统计
         usage = parsed.get("usage")
         if usage and isinstance(usage, dict):
             chunk.input_tokens = usage.get("prompt_tokens", 0)
             chunk.output_tokens = usage.get("completion_tokens", 0)
 
-            # 更新 stats
-            stats.input_tokens = chunk.input_tokens
-            stats.output_tokens = chunk.output_tokens
+            # 取最大值更新 stats
+            if chunk.input_tokens > stats.input_tokens:
+                stats.input_tokens = chunk.input_tokens
+            if chunk.output_tokens > stats.output_tokens:
+                stats.output_tokens = chunk.output_tokens
 
         stats.chunk_count += 1
         stats.data_count += 1
@@ -131,7 +203,7 @@ class OpenAIResponseParser(ResponseParser):
         result.response_id = response.get("id")
 
         # 提取 usage
-        usage = response.get("usage", {})
+        usage = response.get("usage") or {}
         result.input_tokens = usage.get("prompt_tokens", 0)
         result.output_tokens = usage.get("completion_tokens", 0)
 
@@ -141,11 +213,12 @@ class OpenAIResponseParser(ResponseParser):
             result.is_error = True
             result.error_type = error_info.get("type")
             result.error_message = error_info.get("message")
+            result.embedded_status_code = _extract_embedded_status_code(error_info)
 
         return result
 
     def extract_usage_from_response(self, response: Dict[str, Any]) -> Dict[str, int]:
-        usage = response.get("usage", {})
+        usage = response.get("usage") or {}
         return {
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),
@@ -217,6 +290,9 @@ class ClaudeResponseParser(ResponseParser):
             stats.has_completion = True
 
         # 提取 usage
+        # Claude 流式响应的 usage 可能在首个 chunk（message_start）或最后一个 chunk（message_delta）中
+        # 首个 chunk 通常包含 input_tokens，最后一个 chunk 包含 output_tokens
+        # 使用取最大值策略确保正确统计
         usage = self._parser.extract_usage(parsed)
         if usage:
             chunk.input_tokens = usage.get("input_tokens", 0)
@@ -224,10 +300,15 @@ class ClaudeResponseParser(ResponseParser):
             chunk.cache_creation_tokens = usage.get("cache_creation_tokens", 0)
             chunk.cache_read_tokens = usage.get("cache_read_tokens", 0)
 
-            stats.input_tokens = chunk.input_tokens
-            stats.output_tokens = chunk.output_tokens
-            stats.cache_creation_tokens = chunk.cache_creation_tokens
-            stats.cache_read_tokens = chunk.cache_read_tokens
+            # 取最大值更新 stats
+            if chunk.input_tokens > stats.input_tokens:
+                stats.input_tokens = chunk.input_tokens
+            if chunk.output_tokens > stats.output_tokens:
+                stats.output_tokens = chunk.output_tokens
+            if chunk.cache_creation_tokens > stats.cache_creation_tokens:
+                stats.cache_creation_tokens = chunk.cache_creation_tokens
+            if chunk.cache_read_tokens > stats.cache_read_tokens:
+                stats.cache_read_tokens = chunk.cache_read_tokens
 
         # 检查错误
         if self._parser.is_error_event(parsed):
@@ -261,7 +342,7 @@ class ClaudeResponseParser(ResponseParser):
         result.response_id = response.get("id")
 
         # 提取 usage
-        usage = response.get("usage", {})
+        usage = response.get("usage") or {}
         result.input_tokens = usage.get("input_tokens", 0)
         result.output_tokens = usage.get("output_tokens", 0)
         result.cache_creation_tokens = extract_cache_creation_tokens(usage)
@@ -273,15 +354,16 @@ class ClaudeResponseParser(ResponseParser):
             result.is_error = True
             result.error_type = error_info.get("type")
             result.error_message = error_info.get("message")
+            result.embedded_status_code = _extract_embedded_status_code(error_info)
 
         return result
 
     def extract_usage_from_response(self, response: Dict[str, Any]) -> Dict[str, int]:
         # 对于 message_start 事件，usage 在 message.usage 路径下
         # 对于其他响应，usage 在顶层
-        usage = response.get("usage", {})
+        usage = response.get("usage") or {}
         if not usage and "message" in response:
-            usage = response.get("message", {}).get("usage", {})
+            usage = (response.get("message") or {}).get("usage") or {}
 
         return {
             "input_tokens": usage.get("input_tokens", 0),
@@ -361,15 +443,21 @@ class GeminiResponseParser(ResponseParser):
             stats.has_completion = True
 
         # 提取 usage
+        # Gemini 流式响应的 usage 可能出现在多个 chunk 中
+        # 使用取最大值策略确保正确统计
         usage = self._parser.extract_usage(parsed)
         if usage:
             chunk.input_tokens = usage.get("input_tokens", 0)
             chunk.output_tokens = usage.get("output_tokens", 0)
             chunk.cache_read_tokens = usage.get("cached_tokens", 0)
 
-            stats.input_tokens = chunk.input_tokens
-            stats.output_tokens = chunk.output_tokens
-            stats.cache_read_tokens = chunk.cache_read_tokens
+            # 取最大值更新 stats
+            if chunk.input_tokens > stats.input_tokens:
+                stats.input_tokens = chunk.input_tokens
+            if chunk.output_tokens > stats.output_tokens:
+                stats.output_tokens = chunk.output_tokens
+            if chunk.cache_read_tokens > stats.cache_read_tokens:
+                stats.cache_read_tokens = chunk.cache_read_tokens
 
         # 检查错误
         if self._parser.is_error_event(parsed):
@@ -417,6 +505,7 @@ class GeminiResponseParser(ResponseParser):
             result.is_error = True
             result.error_type = error_info.get("status")
             result.error_message = error_info.get("message")
+            result.embedded_status_code = _extract_embedded_status_code(error_info)
 
         return result
 
@@ -500,11 +589,6 @@ def get_parser_for_format(format_id: str) -> ResponseParser:
     if format_id not in _PARSERS:
         raise KeyError(f"Unknown format: {format_id}")
     return _PARSERS[format_id]()
-
-
-def is_cli_format(format_id: str) -> bool:
-    """判断是否为 CLI 格式"""
-    return format_id.upper().endswith("_CLI")
 
 
 __all__ = [

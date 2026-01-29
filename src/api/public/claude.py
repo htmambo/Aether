@@ -15,8 +15,7 @@ from src.api.handlers.claude import (
     ClaudeTokenCountAdapter,
     build_claude_adapter,
 )
-from src.core.api_format_metadata import get_api_format_definition
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat, get_api_format_definition
 from src.database import get_db
 
 _claude_def = get_api_format_definition(APIFormat.CLAUDE)

@@ -19,11 +19,13 @@ from src.database import get_db
 from src.models.api import (
     ChangePasswordRequest,
     CreateMyApiKeyRequest,
+    PublicGlobalModelListResponse,
+    PublicGlobalModelResponse,
     UpdateApiKeyProvidersRequest,
     UpdatePreferencesRequest,
     UpdateProfileRequest,
 )
-from src.models.database import ApiKey, Provider, Usage, User
+from src.models.database import ApiKey, GlobalModel, Model, Provider, Usage, User
 from src.services.usage.service import UsageService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.preference import PreferenceService
@@ -261,6 +263,34 @@ async def list_available_providers(request: Request, db: Session = Depends(get_d
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.get("/available-models")
+async def list_available_models(
+    request: Request,
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=1000, description="返回记录数限制"),
+    search: Optional[str] = Query(None, description="搜索关键词"),
+    db: Session = Depends(get_db),
+):
+    """
+    获取用户可用的模型列表
+
+    根据用户权限返回可用的 GlobalModel 列表。
+    - 管理员：可以看到所有活跃提供商的模型
+    - 普通用户：只能看到关联提供商的模型
+
+    **查询参数**:
+    - skip: 跳过的记录数，用于分页，默认 0
+    - limit: 返回记录数限制，默认 100，范围 1-1000
+    - search: 可选，搜索关键词，支持模糊匹配模型名称
+
+    **返回字段**:
+    - models: 模型列表
+    - total: 符合条件的模型总数
+    """
+    adapter = ListAvailableModelsAdapter(skip=skip, limit=limit, search=search)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 @router.get("/endpoint-status")
 async def get_endpoint_status(request: Request, db: Session = Depends(get_db)):
     """
@@ -446,16 +476,31 @@ class ChangePasswordAdapter(AuthenticatedApiAdapter):
                 raise InvalidRequestException(translate_pydantic_error(errors[0]))
             raise InvalidRequestException("请求数据验证失败")
 
-        if not user.verify_password(request.old_password):
-            raise InvalidRequestException("旧密码错误")
+        # LDAP 用户不能修改密码
+        from src.core.enums import AuthSource
+        if user.auth_source == AuthSource.LDAP:
+            raise ForbiddenException("LDAP 用户不能在此修改密码")
+
+        # 判断用户是否已有密码
+        has_password = bool(user.password_hash)
+
+        if has_password:
+            # 已有密码：需要验证旧密码
+            if not request.old_password:
+                raise InvalidRequestException("请输入当前密码")
+            if not user.verify_password(request.old_password):
+                raise InvalidRequestException("旧密码错误")
+        # 无密码（如 OAuth 用户首次设置）：无需旧密码
+
         if len(request.new_password) < 6:
             raise InvalidRequestException("密码长度至少6位")
 
         user.set_password(request.new_password)
         user.updated_at = datetime.now(timezone.utc)
         db.commit()
-        logger.info(f"用户修改密码: {user.email}")
-        return {"message": "密码修改成功"}
+        action = "修改" if has_password else "设置"
+        logger.info(f"用户{action}密码: {user.email}")
+        return {"message": f"密码{action}成功"}
 
 
 class ListMyApiKeysAdapter(AuthenticatedApiAdapter):
@@ -514,6 +559,7 @@ class ListMyApiKeysAdapter(AuthenticatedApiAdapter):
                     "name": key.name,
                     "key_display": key.get_display_key(),
                     "is_active": key.is_active,
+                    "is_locked": key.is_locked,
                     "last_used_at": (
                         real_stats["last_used_at"].isoformat()
                         if real_stats["last_used_at"]
@@ -614,6 +660,7 @@ class GetMyApiKeyDetailAdapter(AuthenticatedApiAdapter):
             "name": api_key.name,
             "key_display": api_key.get_display_key(),
             "is_active": api_key.is_active,
+            "is_locked": api_key.is_locked,
             "allowed_providers": api_key.allowed_providers,
             "force_capabilities": api_key.force_capabilities,
             "rate_limit": api_key.rate_limit,
@@ -637,6 +684,8 @@ class DeleteMyApiKeyAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法删除")
         context.db.delete(api_key)
         context.db.commit()
         return {"message": "API密钥已删除"}
@@ -656,6 +705,8 @@ class ToggleMyApiKeyAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在", "api_key")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法修改状态")
         api_key.is_active = not api_key.is_active
         context.db.commit()
         context.db.refresh(api_key)
@@ -679,6 +730,7 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
     async def handle(self, context):  # type: ignore[override]
         from sqlalchemy import or_
 
+        from src.models.database import ProviderEndpoint
         from src.utils.database_helpers import escape_like_pattern, safe_truncate_escaped
 
         db = context.db
@@ -786,8 +838,9 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
         summary_by_provider = sorted(summary_by_provider, key=lambda x: x["requests"], reverse=True)
 
         query = (
-            db.query(Usage, ApiKey)
+            db.query(Usage, ApiKey, ProviderEndpoint)
             .outerjoin(ApiKey, Usage.api_key_id == ApiKey.id)
+            .outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
             .filter(Usage.user_id == user.id)
         )
         if self.start_date:
@@ -836,7 +889,6 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
             "quota_usd": user.quota_usd,
             "used_usd": user.used_usd,
             "summary_by_model": summary_by_model,
-            "summary_by_provider": summary_by_provider,
             # 分页信息
             "pagination": {
                 "total": total_records,
@@ -844,48 +896,14 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                 "offset": self.offset,
                 "has_more": self.offset + self.limit < total_records,
             },
-            "records": [
-                {
-                    "id": r.id,
-                    "provider": r.provider_name,
-                    "model": r.model,
-                    "target_model": r.target_model,  # 映射后的目标模型名
-                    "api_format": r.api_format,
-                    "input_tokens": r.input_tokens,
-                    "output_tokens": r.output_tokens,
-                    "total_tokens": r.total_tokens,
-                    "cost": r.total_cost_usd,
-                    "response_time_ms": r.response_time_ms,
-                    "is_stream": r.is_stream,
-                    "status": r.status,  # 请求状态: pending, streaming, completed, failed
-                    "created_at": r.created_at.isoformat(),
-                    "cache_creation_input_tokens": r.cache_creation_input_tokens,
-                    "cache_read_input_tokens": r.cache_read_input_tokens,
-                    "status_code": r.status_code,
-                    "error_message": r.error_message,
-                    "input_price_per_1m": r.input_price_per_1m,
-                    "output_price_per_1m": r.output_price_per_1m,
-                    "cache_creation_price_per_1m": r.cache_creation_price_per_1m,
-                    "cache_read_price_per_1m": r.cache_read_price_per_1m,
-                    "api_key": (
-                        {
-                            "id": str(api_key.id),
-                            "name": api_key.name,
-                            "display": api_key.get_display_key(),
-                        }
-                        if api_key
-                        else None
-                    ),
-                }
-                for r, api_key in usage_records
-            ],
+            "records": self._build_usage_records(usage_records, is_admin=(user.role == "admin")),
         }
 
         # 管理员可以看到真实成本
         if user.role == "admin":
             response_data["total_actual_cost"] = total_actual_cost
             # 为每条记录添加真实成本和倍率信息
-            for i, (r, _) in enumerate(usage_records):
+            for i, (r, _, _) in enumerate(usage_records):
                 # 确保字段有值，避免前端显示 -
                 actual_cost = (
                     r.actual_total_cost_usd if r.actual_total_cost_usd is not None else 0.0
@@ -894,15 +912,71 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
                 response_data["records"][i]["actual_cost"] = actual_cost
                 response_data["records"][i]["rate_multiplier"] = rate_mult
 
-                # 调试日志：检查前几条记录
-                if i < 3:
-                    from src.core.logger import logger
-                    logger.debug(
-                        f"Usage record {i}: id={r.id}, actual_total_cost_usd={r.actual_total_cost_usd}, "
-                        f"rate_multiplier={r.rate_multiplier}, returned: actual_cost={actual_cost}, rate_mult={rate_mult}"
-                    )
-
         return response_data
+
+    def _build_usage_records(self, usage_records: list, is_admin: bool = False) -> list:
+        """构建使用记录列表，包含格式转换信息的回填逻辑
+        
+        Args:
+            usage_records: 使用记录列表
+            is_admin: 是否为管理员，管理员可以看到模型映射信息
+        """
+        from src.core.api_format.metadata import can_passthrough
+
+        records = []
+        for r, api_key, endpoint in usage_records:
+            # 格式转换追踪（兼容历史数据：尽量回填可展示信息）
+            api_format = r.api_format
+            endpoint_api_format = r.endpoint_api_format or (
+                endpoint.api_format if endpoint else None
+            )
+
+            has_format_conversion = r.has_format_conversion
+            if has_format_conversion is None:
+                # 使用 can_passthrough 判断是否需要转换，与实际转换逻辑保持一致
+                client_fmt = str(api_format or "").upper()
+                endpoint_fmt = str(endpoint_api_format or "").upper()
+                if client_fmt and endpoint_fmt:
+                    has_format_conversion = not can_passthrough(client_fmt, endpoint_fmt)
+                else:
+                    has_format_conversion = False
+
+            records.append({
+                "id": r.id,
+                "model": r.model,
+                # 只有管理员可以看到模型映射信息，普通用户只能看到请求的模型
+                "target_model": r.target_model if is_admin else None,
+                "api_format": api_format,
+                "endpoint_api_format": endpoint_api_format,
+                "has_format_conversion": bool(has_format_conversion),
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "total_tokens": r.total_tokens,
+                "cost": r.total_cost_usd,
+                "response_time_ms": r.response_time_ms,
+                "first_byte_time_ms": r.first_byte_time_ms,
+                "is_stream": r.is_stream,
+                "status": r.status,  # 请求状态: pending, streaming, completed, failed
+                "created_at": r.created_at.isoformat(),
+                "cache_creation_input_tokens": r.cache_creation_input_tokens,
+                "cache_read_input_tokens": r.cache_read_input_tokens,
+                "status_code": r.status_code,
+                "error_message": r.error_message,
+                "input_price_per_1m": r.input_price_per_1m,
+                "output_price_per_1m": r.output_price_per_1m,
+                "cache_creation_price_per_1m": r.cache_creation_price_per_1m,
+                "cache_read_price_per_1m": r.cache_read_price_per_1m,
+                "api_key": (
+                    {
+                        "id": str(api_key.id),
+                        "name": api_key.name,
+                        "display": api_key.get_display_key(),
+                    }
+                    if api_key
+                    else None
+                ),
+            })
+        return records
 
 
 @dataclass
@@ -961,13 +1035,192 @@ class GetMyActivityHeatmapAdapter(AuthenticatedApiAdapter):
         return result
 
 
+@dataclass
+class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
+    """获取用户可用模型列表的适配器
+
+    考虑格式转换：如果全局格式转换启用，会包含通过格式转换可访问的模型。
+    这与 /v1/models API 的逻辑保持一致。
+    """
+
+    skip: int
+    limit: int
+    search: Optional[str]
+
+    async def handle(self, context):  # type: ignore[override]
+        from sqlalchemy import or_
+
+        from src.api.base.models_service import AccessRestrictions
+        from src.config.settings import config as app_config
+
+        db = context.db
+        user = context.user
+
+        # 使用 AccessRestrictions 类来处理限制（与 /v1/models 逻辑一致）
+        restrictions = AccessRestrictions.from_api_key_and_user(api_key=None, user=user)
+
+        # 检查全局格式转换开关
+        global_conversion_enabled = app_config.format_conversion_enabled
+
+        # 获取所有可用的 Provider ID（考虑格式转换）
+        available_provider_ids = self._get_all_available_provider_ids(
+            db, global_conversion_enabled
+        )
+
+        if not available_provider_ids:
+            return {"models": [], "total": 0}
+
+        # 查询所有活跃的 GlobalModel 及其关联的 Model
+        id_query = (
+            db.query(GlobalModel.id, GlobalModel.name, Model.provider_id)
+            .join(Model, Model.global_model_id == GlobalModel.id)
+            .filter(
+                and_(
+                    Model.provider_id.in_(available_provider_ids),
+                    Model.is_active == True,
+                    GlobalModel.is_active == True,
+                )
+            )
+        )
+
+        # 搜索过滤
+        if self.search:
+            search_term = f"%{self.search}%"
+            id_query = id_query.filter(
+                or_(
+                    GlobalModel.name.ilike(search_term),
+                    GlobalModel.display_name.ilike(search_term),
+                )
+            )
+
+        # 获取所有匹配的记录
+        all_matches = id_query.all()
+
+        # 应用访问限制过滤
+        allowed_global_model_ids = set()
+        for global_model_id, model_name, provider_id in all_matches:
+            # 使用 AccessRestrictions.is_model_allowed 检查模型是否可访问
+            # 它会同时检查 allowed_providers 和 allowed_models
+            if restrictions.is_model_allowed(model_name, provider_id):
+                allowed_global_model_ids.add(global_model_id)
+
+        # 统计总数
+        total = len(allowed_global_model_ids)
+
+        if not allowed_global_model_ids:
+            return {"models": [], "total": 0}
+
+        # 分页并获取完整的 GlobalModel 对象
+        models = (
+            db.query(GlobalModel)
+            .filter(GlobalModel.id.in_(allowed_global_model_ids))
+            .order_by(GlobalModel.name)
+            .offset(self.skip)
+            .limit(self.limit)
+            .all()
+        )
+
+        # 转换为响应格式（复用 PublicGlobalModelResponse schema）
+        model_responses = [
+            PublicGlobalModelResponse(
+                id=gm.id,
+                name=gm.name,
+                display_name=gm.display_name,
+                is_active=gm.is_active,
+                default_price_per_request=gm.default_price_per_request,
+                default_tiered_pricing=gm.default_tiered_pricing,
+                supported_capabilities=gm.supported_capabilities,
+                config=gm.config,
+            )
+            for gm in models
+        ]
+
+        logger.debug(f"用户 {user.email} 可用模型: {len(model_responses)} 个")
+        return PublicGlobalModelListResponse(models=model_responses, total=total)
+
+    def _get_all_available_provider_ids(
+        self, db: Session, global_conversion_enabled: bool
+    ) -> set[str]:
+        """
+        获取所有可用的 Provider ID（考虑格式转换）
+
+        用户模型目录需要显示通过任何客户端格式（OPENAI/CLAUDE/GEMINI）可访问的模型并集。
+        与 /v1/models 逻辑一致，确保返回的 Provider 都有活跃的端点和 Key。
+
+        优化：将 DB 查询从 6 次减少到 2 次
+        - 一次性查询所有活跃端点
+        - 在内存中进行格式兼容性过滤
+        - 一次性查询 Key 可用性
+        """
+        from src.api.base.models_service import get_available_provider_ids
+        from src.core.api_format import APIFormat
+        from src.core.api_format.conversion.compatibility import is_format_compatible
+        from src.models.database import ProviderEndpoint
+
+        # 所有 API 格式列表（包括 CLI 格式）
+        all_formats = [
+            APIFormat.OPENAI.value, APIFormat.OPENAI_CLI.value,
+            APIFormat.CLAUDE.value, APIFormat.CLAUDE_CLI.value,
+            APIFormat.GEMINI.value, APIFormat.GEMINI_CLI.value,
+        ]
+
+        # 步骤 1：一次性查询所有活跃端点（单次 DB 查询）
+        endpoint_rows = (
+            db.query(
+                ProviderEndpoint.provider_id,
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.format_acceptance_config,
+            )
+            .join(Provider, ProviderEndpoint.provider_id == Provider.id)
+            .filter(
+                Provider.is_active.is_(True),
+                ProviderEndpoint.is_active.is_(True),
+                ProviderEndpoint.api_format.in_(all_formats),
+            )
+            .all()
+        )
+
+        if not endpoint_rows:
+            return set()
+
+        # 步骤 2：在内存中对每种客户端格式进行兼容性过滤
+        # 只要端点能被任意一种客户端格式访问，就将其 Provider 加入结果
+        provider_to_formats: dict[str, set[str]] = {}
+
+        for provider_id, endpoint_format, format_acceptance_config in endpoint_rows:
+            if not provider_id or not endpoint_format:
+                continue
+
+            endpoint_format_upper = str(endpoint_format).upper()
+
+            # 检查该端点是否能被任意客户端格式访问
+            for client_format in all_formats:
+                is_compatible, _, _ = is_format_compatible(
+                    client_format,
+                    endpoint_format_upper,
+                    format_acceptance_config,
+                    is_stream=False,
+                    global_conversion_enabled=global_conversion_enabled,
+                )
+                if is_compatible:
+                    provider_to_formats.setdefault(provider_id, set()).add(endpoint_format_upper)
+                    break  # 只要有一种客户端格式能访问就够了
+
+        if not provider_to_formats:
+            return set()
+
+        # 步骤 3：检查 Provider 是否有活跃的 Key（单次 DB 查询）
+        formats = sorted({f for fmts in provider_to_formats.values() for f in fmts})
+        return get_available_provider_ids(db, formats, provider_to_formats)
+
+
 class ListAvailableProvidersAdapter(AuthenticatedApiAdapter):
     """获取可用提供商列表的适配器"""
 
     async def handle(self, context):  # type: ignore[override]
         from sqlalchemy.orm import selectinload
 
-        from src.models.database import Model, ProviderEndpoint
+        from src.models.database import ProviderEndpoint
 
         db = context.db
 
@@ -1055,6 +1308,8 @@ class UpdateApiKeyProvidersAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法修改")
 
         if request.allowed_providers is not None and len(request.allowed_providers) > 0:
             provider_ids = [cfg.provider_id for cfg in request.allowed_providers]
@@ -1101,6 +1356,8 @@ class UpdateApiKeyCapabilitiesAdapter(AuthenticatedApiAdapter):
         )
         if not api_key:
             raise NotFoundException("API密钥不存在")
+        if api_key.is_locked:
+            raise ForbiddenException("该密钥已被管理员锁定，无法修改")
 
         # 保存旧值用于审计
         old_capabilities = api_key.force_capabilities

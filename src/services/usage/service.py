@@ -10,8 +10,17 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src.core.api_format.metadata import can_passthrough
 from src.core.logger import logger
-from src.models.database import ApiKey, Provider, ProviderAPIKey, Usage, User, UserRole
+from src.models.database import (
+    ApiKey,
+    Provider,
+    ProviderAPIKey,
+    RequestCandidate,
+    Usage,
+    User,
+    UserRole,
+)
 from src.services.model.cost import ModelCostService
 from src.services.system.config import SystemConfigService
 
@@ -30,6 +39,8 @@ class UsageRecordParams:
     cache_read_input_tokens: int
     request_type: str
     api_format: Optional[str]
+    endpoint_api_format: Optional[str]  # 端点原生 API 格式
+    has_format_conversion: bool  # 是否发生了格式转换
     is_stream: bool
     response_time_ms: Optional[int]
     first_byte_time_ms: Optional[int]
@@ -78,7 +89,12 @@ class UsageRecordParams:
             raise ValueError(f"无效的 HTTP 状态码: {self.status_code}")
 
         # 状态值校验
-        valid_statuses = {"pending", "streaming", "completed", "failed"}
+        # - pending: 请求已创建，等待处理
+        # - streaming: 流式响应进行中
+        # - completed: 请求成功完成
+        # - failed: 请求失败（上游错误、超时等）
+        # - cancelled: 客户端主动断开连接
+        valid_statuses = {"pending", "streaming", "completed", "failed", "cancelled"}
         if self.status not in valid_statuses:
             raise ValueError(f"无效的状态值: {self.status}，有效值: {valid_statuses}")
 
@@ -214,6 +230,8 @@ class UsageService:
         cache_read_input_tokens: int,
         request_type: str,
         api_format: Optional[str],
+        endpoint_api_format: Optional[str],
+        has_format_conversion: bool,
         is_stream: bool,
         response_time_ms: Optional[int],
         first_byte_time_ms: Optional[int],
@@ -349,6 +367,8 @@ class UsageService:
             "price_per_request": request_price,
             "request_type": request_type,
             "api_format": api_format,
+            "endpoint_api_format": endpoint_api_format,
+            "has_format_conversion": has_format_conversion,
             "is_stream": is_stream,
             "status_code": status_code,
             "error_message": error_message,
@@ -402,12 +422,29 @@ class UsageService:
              input_cost, output_cost, cache_creation_cost, cache_read_cost, cache_cost,
              request_cost, total_cost, tier_index)
         """
-        # 获取模型价格信息
-        input_price, output_price = await cls.get_model_price_async(db, provider, model)
-        cache_creation_price, cache_read_price = await cls.get_cache_prices_async(
-            db, provider, model, input_price
+        import asyncio
+
+        service = ModelCostService(db)
+
+        # 并行获取模型价格、按次计费价格；阶梯计费时额外获取 tiered 配置
+        price_task = service.get_model_price_async(provider, model)
+        request_price_task = service.get_request_price_async(provider, model)
+
+        tiered_pricing: Optional[dict] = None
+        if use_tiered_pricing:
+            tiered_pricing_task = service.get_tiered_pricing_async(provider, model)
+            (input_price, output_price), request_price, tiered_pricing = await asyncio.gather(
+                price_task, request_price_task, tiered_pricing_task
+            )
+        else:
+            (input_price, output_price), request_price = await asyncio.gather(
+                price_task, request_price_task
+            )
+
+        # 缓存价格依赖 input_price，需要串行获取
+        cache_creation_price, cache_read_price = await service.get_cache_prices_async(
+            provider, model, input_price
         )
-        request_price = await cls.get_request_price_async(db, provider, model)
         effective_request_price = None if is_failed_request else request_price
 
         # 初始化成本变量
@@ -421,29 +458,62 @@ class UsageService:
         tier_index = None
 
         if use_tiered_pricing:
-            (
-                input_cost,
-                output_cost,
-                cache_creation_cost,
-                cache_read_cost,
-                cache_cost,
-                request_cost,
-                total_cost,
-                tier_index,
-            ) = await cls.calculate_cost_with_strategy_async(
-                db=db,
-                provider=provider,
-                model=model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_creation_input_tokens=cache_creation_input_tokens,
-                cache_read_input_tokens=cache_read_input_tokens,
-                api_format=api_format,
-                cache_ttl_minutes=cache_ttl_minutes,
-            )
-            if is_failed_request:
-                total_cost = total_cost - request_cost
-                request_cost = 0.0
+            # 使用与 ModelCostService.compute_cost_with_strategy_async 一致的 adapter 逻辑，
+            # 但复用本方法已获取的价格/配置，避免重复 I/O。
+            adapter = None
+            if api_format:
+                from src.api.handlers.base.chat_adapter_base import get_adapter_instance
+                from src.api.handlers.base.cli_adapter_base import get_cli_adapter_instance
+
+                adapter = get_adapter_instance(api_format)
+                if adapter is None:
+                    adapter = get_cli_adapter_instance(api_format)
+
+            if adapter:
+                result = adapter.compute_cost(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_creation_input_tokens=cache_creation_input_tokens,
+                    cache_read_input_tokens=cache_read_input_tokens,
+                    input_price_per_1m=input_price,
+                    output_price_per_1m=output_price,
+                    cache_creation_price_per_1m=cache_creation_price,
+                    cache_read_price_per_1m=cache_read_price,
+                    price_per_request=effective_request_price,
+                    tiered_pricing=tiered_pricing,
+                    cache_ttl_minutes=cache_ttl_minutes,
+                )
+                input_cost = result["input_cost"]
+                output_cost = result["output_cost"]
+                cache_creation_cost = result["cache_creation_cost"]
+                cache_read_cost = result["cache_read_cost"]
+                cache_cost = result["cache_cost"]
+                request_cost = result["request_cost"]
+                total_cost = result["total_cost"]
+                tier_index = result.get("tier_index")
+            else:
+                (
+                    input_cost,
+                    output_cost,
+                    cache_creation_cost,
+                    cache_read_cost,
+                    cache_cost,
+                    request_cost,
+                    total_cost,
+                    tier_index,
+                ) = ModelCostService.compute_cost_with_tiered_pricing(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_creation_input_tokens=cache_creation_input_tokens,
+                    cache_read_input_tokens=cache_read_input_tokens,
+                    tiered_pricing=tiered_pricing,
+                    cache_ttl_minutes=cache_ttl_minutes,
+                    price_per_request=effective_request_price,
+                    fallback_input_price_per_1m=input_price,
+                    fallback_output_price_per_1m=output_price,
+                    fallback_cache_creation_price_per_1m=cache_creation_price,
+                    fallback_cache_read_price_per_1m=cache_read_price,
+                )
         else:
             (
                 input_cost,
@@ -706,6 +776,8 @@ class UsageService:
             cache_read_input_tokens=params.cache_read_input_tokens,
             request_type=params.request_type,
             api_format=params.api_format,
+            endpoint_api_format=params.endpoint_api_format,
+            has_format_conversion=params.has_format_conversion,
             is_stream=params.is_stream,
             response_time_ms=params.response_time_ms,
             first_byte_time_ms=params.first_byte_time_ms,
@@ -743,6 +815,44 @@ class UsageService:
         return usage_params, total_cost
 
     @classmethod
+    async def _prepare_usage_records_batch(
+        cls,
+        params_list: List[UsageRecordParams],
+    ) -> List[Tuple[Dict[str, Any], float, Optional[Exception]]]:
+        """批量并行准备用量记录（性能优化）
+
+        并行调用 _prepare_usage_record，提高批量处理效率。
+
+        Args:
+            params_list: 用量记录参数列表
+
+        Returns:
+            列表，每项为 (usage_params, total_cost, exception)
+            如果处理成功，exception 为 None
+        """
+        import asyncio
+
+        async def prepare_single(params: UsageRecordParams) -> Tuple[Dict[str, Any], float, Optional[Exception]]:
+            try:
+                usage_params, total_cost = await cls._prepare_usage_record(params)
+                return (usage_params, total_cost, None)
+            except Exception as e:
+                return ({}, 0.0, e)
+
+        if not params_list:
+            return []
+
+        # 避免一次性创建过多 task（并且 _prepare_usage_record 内部也可能包含并行调用）
+        # 这里采用分批 gather 来限制并发量。
+        chunk_size = 50
+        results: List[Tuple[Dict[str, Any], float, Optional[Exception]]] = []
+        for i in range(0, len(params_list), chunk_size):
+            chunk = params_list[i : i + chunk_size]
+            chunk_results = await asyncio.gather(*(prepare_single(p) for p in chunk))
+            results.extend(chunk_results)
+        return results
+
+    @classmethod
     async def record_usage_async(
         cls,
         db: Session,
@@ -756,6 +866,8 @@ class UsageService:
         cache_read_input_tokens: int = 0,
         request_type: str = "chat",
         api_format: Optional[str] = None,
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
         is_stream: bool = False,
         response_time_ms: Optional[int] = None,
         first_byte_time_ms: Optional[int] = None,
@@ -794,7 +906,9 @@ class UsageService:
             input_tokens=input_tokens, output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
-            request_type=request_type, api_format=api_format, is_stream=is_stream,
+            request_type=request_type, api_format=api_format,
+            endpoint_api_format=endpoint_api_format, has_format_conversion=has_format_conversion,
+            is_stream=is_stream,
             response_time_ms=response_time_ms, first_byte_time_ms=first_byte_time_ms,
             status_code=status_code, error_message=error_message, metadata=metadata,
             request_headers=request_headers, request_body=request_body,
@@ -849,6 +963,8 @@ class UsageService:
         cache_read_input_tokens: int = 0,
         request_type: str = "chat",
         api_format: Optional[str] = None,
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
         is_stream: bool = False,
         response_time_ms: Optional[int] = None,
         first_byte_time_ms: Optional[int] = None,
@@ -889,7 +1005,9 @@ class UsageService:
             input_tokens=input_tokens, output_tokens=output_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
-            request_type=request_type, api_format=api_format, is_stream=is_stream,
+            request_type=request_type, api_format=api_format,
+            endpoint_api_format=endpoint_api_format, has_format_conversion=has_format_conversion,
+            is_stream=is_stream,
             response_time_ms=response_time_ms, first_byte_time_ms=first_byte_time_ms,
             status_code=status_code, error_message=error_message, metadata=metadata,
             request_headers=request_headers, request_body=request_body,
@@ -990,6 +1108,345 @@ class UsageService:
             raise
 
         return usage
+
+    @classmethod
+    async def record_usage_batch(
+        cls,
+        db: Session,
+        records: List[Dict[str, Any]],
+    ) -> List[Usage]:
+        """批量记录使用量（高性能版，单次提交多条记录）
+
+        此方法针对高并发场景优化，特点：
+        - 批量插入 Usage 记录，减少 commit 次数
+        - 聚合更新用户/API Key 统计（按 user_id/api_key_id 分组）
+        - 聚合更新 GlobalModel 和 Provider 统计
+        - 支持更新已存在的 pending/streaming 状态记录
+
+        Args:
+            db: 数据库会话
+            records: 记录列表，每条记录包含 record_usage 所需的参数
+
+        Returns:
+            创建的 Usage 记录列表
+        """
+        if not records:
+            return []
+
+        from collections import defaultdict
+        from sqlalchemy import update
+        from src.models.database import ApiKey as ApiKeyModel, User as UserModel, GlobalModel
+
+        # 分离需要更新和需要新建的记录
+        request_ids = [r.get("request_id") for r in records if r.get("request_id")]
+        existing_usages: Dict[str, Usage] = {}
+        records_to_update: List[Dict[str, Any]] = []
+        records_to_insert: List[Dict[str, Any]] = []
+
+        if request_ids:
+            # 查询已存在的 Usage 记录（包括 pending/streaming 状态）
+            existing_records = (
+                db.query(Usage)
+                .filter(Usage.request_id.in_(request_ids))
+                .all()
+            )
+            existing_usages = {u.request_id: u for u in existing_records}
+
+            for record in records:
+                req_id = record.get("request_id")
+                if req_id and req_id in existing_usages:
+                    existing_usage = existing_usages[req_id]
+                    # 只更新 pending/streaming 状态的记录
+                    # 已经是 completed/failed/cancelled 的记录跳过
+                    if existing_usage.status in ("pending", "streaming"):
+                        records_to_update.append(record)
+                    else:
+                        logger.debug(
+                            f"批量记录预过滤: 跳过已完成的 request_id={req_id} (status={existing_usage.status})"
+                        )
+                else:
+                    records_to_insert.append(record)
+        else:
+            records_to_insert = list(records)
+
+        if records_to_update:
+            logger.debug(
+                f"批量记录: 需要更新 {len(records_to_update)} 条已存在的 pending/streaming 记录"
+            )
+
+        usages: List[Usage] = []
+        user_costs: Dict[str, float] = defaultdict(float)  # user_id -> total_cost
+        apikey_stats: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"requests": 0, "cost": 0.0, "is_standalone": False}
+        )
+        model_counts: Dict[str, int] = defaultdict(int)  # model -> count
+        provider_costs: Dict[str, float] = defaultdict(float)  # provider_id -> cost
+
+        # 合并所有需要处理的记录（用于预取 user/api_key）
+        all_records = records_to_insert + records_to_update
+
+        # 批量预取 User 和 ApiKey，避免 N+1 查询
+        user_ids = {r.get("user_id") for r in all_records if r.get("user_id")}
+        api_key_ids = {r.get("api_key_id") for r in all_records if r.get("api_key_id")}
+
+        users_map: Dict[str, User] = {}
+        if user_ids:
+            users = db.query(User).filter(User.id.in_(user_ids)).all()
+            users_map = {str(u.id): u for u in users}
+
+        api_keys_map: Dict[str, ApiKey] = {}
+        if api_key_ids:
+            api_keys = db.query(ApiKey).filter(ApiKey.id.in_(api_key_ids)).all()
+            api_keys_map = {str(k.id): k for k in api_keys}
+
+        skipped_count = 0
+        updated_count = 0
+        total_count = len(all_records)
+
+        # 辅助函数：构建 UsageRecordParams
+        def build_params(record: Dict[str, Any], request_id: str) -> UsageRecordParams:
+            user_id = record.get("user_id")
+            api_key_id = record.get("api_key_id")
+            user = users_map.get(str(user_id)) if user_id else None
+            api_key = api_keys_map.get(str(api_key_id)) if api_key_id else None
+
+            return UsageRecordParams(
+                db=db,
+                user=user,
+                api_key=api_key,
+                provider=record.get("provider") or "unknown",
+                model=record.get("model") or "unknown",
+                input_tokens=int(record.get("input_tokens") or 0),
+                output_tokens=int(record.get("output_tokens") or 0),
+                cache_creation_input_tokens=int(record.get("cache_creation_input_tokens") or 0),
+                cache_read_input_tokens=int(record.get("cache_read_input_tokens") or 0),
+                request_type=record.get("request_type") or "chat",
+                api_format=record.get("api_format"),
+                endpoint_api_format=record.get("endpoint_api_format"),
+                has_format_conversion=bool(record.get("has_format_conversion")),
+                is_stream=bool(record.get("is_stream", True)),
+                response_time_ms=record.get("response_time_ms"),
+                first_byte_time_ms=record.get("first_byte_time_ms"),
+                status_code=int(record.get("status_code") or 200),
+                error_message=record.get("error_message"),
+                metadata=record.get("metadata"),
+                request_headers=record.get("request_headers"),
+                request_body=record.get("request_body"),
+                provider_request_headers=record.get("provider_request_headers"),
+                response_headers=record.get("response_headers"),
+                client_response_headers=record.get("client_response_headers"),
+                response_body=record.get("response_body"),
+                request_id=request_id,
+                provider_id=record.get("provider_id"),
+                provider_endpoint_id=record.get("provider_endpoint_id"),
+                provider_api_key_id=record.get("provider_api_key_id"),
+                status=record.get("status") or "completed",
+                cache_ttl_minutes=record.get("cache_ttl_minutes"),
+                use_tiered_pricing=record.get("use_tiered_pricing", True),
+                target_model=record.get("target_model"),
+            )
+
+        # 构建所有参数并并行准备
+        update_params_list: List[Tuple[Dict[str, Any], str, UsageRecordParams]] = []
+        for record in records_to_update:
+            request_id = record.get("request_id")
+            if request_id and request_id in existing_usages:
+                existing_usage = existing_usages[request_id]
+                if existing_usage:
+                    try:
+                        params = build_params(record, request_id)
+                        update_params_list.append((record, request_id, params))
+                    except Exception as e:
+                        skipped_count += 1
+                        logger.warning("批量记录中参数构建失败: %s, request_id=%s", e, request_id)
+
+        insert_params_list: List[Tuple[Dict[str, Any], str, UsageRecordParams]] = []
+        for record in records_to_insert:
+            request_id = record.get("request_id") or str(uuid.uuid4())[:8]
+            try:
+                params = build_params(record, request_id)
+                insert_params_list.append((record, request_id, params))
+            except Exception as e:
+                skipped_count += 1
+                logger.warning("批量记录中参数构建失败: %s, request_id=%s", e, request_id)
+
+        # 并行准备所有记录（性能优化）
+        all_params = [p for _, _, p in update_params_list] + [p for _, _, p in insert_params_list]
+        if all_params:
+            prepared_results = await cls._prepare_usage_records_batch(all_params)
+        else:
+            prepared_results = []
+
+        # 分配准备结果
+        update_results = prepared_results[:len(update_params_list)]
+        insert_results = prepared_results[len(update_params_list):]
+
+        # 1. 处理需要更新的记录
+        for i, (record, request_id, params) in enumerate(update_params_list):
+            try:
+                usage_params, total_cost, exc = update_results[i]
+                if exc:
+                    raise exc
+
+                # existing_usage 已在构建阶段验证存在
+                existing_usage = existing_usages[request_id]
+                user = params.user
+                api_key = params.api_key
+
+                # 更新已存在的 Usage 记录
+                cls._update_existing_usage(existing_usage, usage_params, record.get("target_model"))
+                usages.append(existing_usage)
+                updated_count += 1
+
+                # 聚合统计
+                model_name = record.get("model") or "unknown"
+                model_counts[model_name] += 1
+
+                provider_id = record.get("provider_id")
+                if provider_id:
+                    actual_cost = usage_params.get("actual_total_cost_usd", 0)
+                    provider_costs[provider_id] += actual_cost
+
+                if user and not (api_key and api_key.is_standalone):
+                    user_costs[str(user.id)] += total_cost
+
+                if api_key:
+                    key_id = str(api_key.id)
+                    apikey_stats[key_id]["requests"] += 1
+                    apikey_stats[key_id]["cost"] += total_cost
+                    apikey_stats[key_id]["is_standalone"] = api_key.is_standalone
+
+            except Exception as e:
+                skipped_count += 1
+                logger.warning("批量记录中更新失败: %s, request_id=%s", e, request_id)
+                continue
+
+        # 2. 处理需要新建的记录
+        for i, (record, request_id, params) in enumerate(insert_params_list):
+            try:
+                usage_params, total_cost, exc = insert_results[i]
+                if exc:
+                    raise exc
+
+                user = params.user
+                api_key = params.api_key
+
+                # 创建 Usage 记录
+                usage = Usage(**usage_params)
+                db.add(usage)
+                usages.append(usage)
+
+                # 聚合统计
+                model_name = record.get("model") or "unknown"
+                model_counts[model_name] += 1
+
+                provider_id = record.get("provider_id")
+                if provider_id:
+                    actual_cost = usage_params.get("actual_total_cost_usd", 0)
+                    provider_costs[provider_id] += actual_cost
+
+                # 用户统计（独立 Key 不计入创建者）
+                if user and not (api_key and api_key.is_standalone):
+                    user_costs[str(user.id)] += total_cost
+
+                # API Key 统计
+                if api_key:
+                    key_id = str(api_key.id)
+                    apikey_stats[key_id]["requests"] += 1
+                    apikey_stats[key_id]["cost"] += total_cost
+                    apikey_stats[key_id]["is_standalone"] = api_key.is_standalone
+
+            except Exception as e:
+                skipped_count += 1
+                logger.warning("批量记录中跳过无效记录: %s, request_id=%s", e, request_id)
+                continue
+
+        # 统计跳过的记录，失败率超过 10% 时提升日志级别
+        if skipped_count > 0:
+            skip_ratio = skipped_count / total_count if total_count > 0 else 0
+            if skip_ratio > 0.1:
+                logger.error(
+                    "批量记录失败率过高: %d/%d (%.1f%%) 条记录被跳过",
+                    skipped_count, total_count, skip_ratio * 100
+                )
+            else:
+                logger.warning(
+                    "批量记录部分失败: %d/%d 条记录被跳过", skipped_count, total_count
+                )
+
+        # 批量更新 GlobalModel 使用计数
+        for model_name, count in model_counts.items():
+            db.execute(
+                update(GlobalModel)
+                .where(GlobalModel.name == model_name)
+                .values(usage_count=GlobalModel.usage_count + count)
+            )
+
+        # 批量更新 Provider 月度使用量
+        for provider_id, cost in provider_costs.items():
+            if cost > 0:
+                db.execute(
+                    update(Provider)
+                    .where(Provider.id == provider_id)
+                    .values(monthly_used_usd=Provider.monthly_used_usd + cost)
+                )
+
+        # 批量更新用户使用量
+        from sqlalchemy import func as sql_func
+        for user_id, cost in user_costs.items():
+            if cost > 0:
+                db.execute(
+                    update(UserModel)
+                    .where(UserModel.id == user_id)
+                    .values(
+                        used_usd=UserModel.used_usd + cost,
+                        total_usd=UserModel.total_usd + cost,
+                        updated_at=sql_func.now(),
+                    )
+                )
+
+        # 批量更新 API Key 统计
+        for key_id, stats in apikey_stats.items():
+            if stats["is_standalone"]:
+                db.execute(
+                    update(ApiKeyModel)
+                    .where(ApiKeyModel.id == key_id)
+                    .values(
+                        total_requests=ApiKeyModel.total_requests + stats["requests"],
+                        total_cost_usd=ApiKeyModel.total_cost_usd + stats["cost"],
+                        balance_used_usd=ApiKeyModel.balance_used_usd + stats["cost"],
+                        last_used_at=sql_func.now(),
+                        updated_at=sql_func.now(),
+                    )
+                )
+            else:
+                db.execute(
+                    update(ApiKeyModel)
+                    .where(ApiKeyModel.id == key_id)
+                    .values(
+                        total_requests=ApiKeyModel.total_requests + stats["requests"],
+                        total_cost_usd=ApiKeyModel.total_cost_usd + stats["cost"],
+                        last_used_at=sql_func.now(),
+                        updated_at=sql_func.now(),
+                    )
+                )
+
+        # 单次提交所有更改
+        try:
+            db.commit()
+            inserted_count = len(usages) - updated_count
+            if updated_count > 0:
+                logger.debug(
+                    f"批量记录成功: 更新 {updated_count} 条, 新建 {inserted_count} 条"
+                )
+            else:
+                logger.debug(f"批量记录 {len(usages)} 条使用记录成功")
+        except Exception as e:
+            logger.error(f"批量提交使用记录时出错: {e}")
+            db.rollback()
+            raise
+
+        return usages
 
     @staticmethod
     def check_user_quota(
@@ -1486,6 +1943,8 @@ class UsageService:
         provider_endpoint_id: Optional[str] = None,
         provider_api_key_id: Optional[str] = None,
         api_format: Optional[str] = None,
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: Optional[bool] = None,
     ) -> Optional[Usage]:
         """
         快速更新使用记录状态
@@ -1502,6 +1961,8 @@ class UsageService:
             provider_endpoint_id: Endpoint ID（可选，streaming 状态时更新）
             provider_api_key_id: Provider API Key ID（可选，streaming 状态时更新）
             api_format: API 格式（可选，用于获取按格式配置的倍率）
+            endpoint_api_format: 端点原生 API 格式（可选）
+            has_format_conversion: 是否发生了格式转换（可选）
 
         Returns:
             更新后的 Usage 记录，如果未找到则返回 None
@@ -1540,6 +2001,10 @@ class UsageService:
             )
             if rate_multiplier is not None:
                 usage.rate_multiplier = rate_multiplier
+        if endpoint_api_format is not None:
+            usage.endpoint_api_format = endpoint_api_format
+        if has_format_conversion is not None:
+            usage.has_format_conversion = has_format_conversion
 
         db.commit()
 
@@ -1567,7 +2032,7 @@ class UsageService:
         from src.services.cache.provider_cache import ProviderCacheService
 
         provider_key = (
-            db.query(ProviderAPIKey.rate_multiplier, ProviderAPIKey.rate_multipliers)
+            db.query(ProviderAPIKey.rate_multipliers)
             .filter(ProviderAPIKey.id == provider_api_key_id)
             .first()
         )
@@ -1576,7 +2041,7 @@ class UsageService:
             return None
 
         return ProviderCacheService.compute_rate_multiplier(
-            provider_key.rate_multiplier, provider_key.rate_multipliers, api_format
+            provider_key.rate_multipliers, api_format
         )
 
     @classmethod
@@ -1703,11 +2168,9 @@ class UsageService:
         Returns:
             请求状态列表
         """
-        from src.models.database import ProviderEndpoint
-
         now = datetime.now(timezone.utc)
 
-        # 构建基础查询，包含端点的 timeout 配置
+        # 构建基础查询
         query = db.query(
             Usage.id,
             Usage.status,
@@ -1722,8 +2185,11 @@ class UsageService:
             Usage.first_byte_time_ms,  # 首字时间 (TTFB)
             Usage.created_at,
             Usage.provider_endpoint_id,
-            ProviderEndpoint.timeout.label("endpoint_timeout"),
-        ).outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
+            # API 格式 / 格式转换（streaming 状态时已可确定）
+            Usage.api_format,
+            Usage.endpoint_api_format,
+            Usage.has_format_conversion,
+        )
 
         # 管理员轮询：可附带 provider 与上游 key 名称（注意：不要在普通用户接口暴露上游 key 信息）
         if include_admin_fields:
@@ -1748,11 +2214,12 @@ class UsageService:
         records = query.all()
 
         # 检查超时的 pending/streaming 请求
-        timeout_ids = []
+        # 收集可能超时的 usage_id 列表
+        timeout_candidates: List[str] = []
         for r in records:
             if r.status in ("pending", "streaming") and r.created_at:
-                # 使用端点配置的超时时间，若无则使用默认值
-                timeout_seconds = r.endpoint_timeout or default_timeout_seconds
+                # 使用全局配置的超时时间
+                timeout_seconds = default_timeout_seconds
 
                 # 处理时区：如果 created_at 没有时区信息，假定为 UTC
                 created_at = r.created_at
@@ -1760,18 +2227,105 @@ class UsageService:
                     created_at = created_at.replace(tzinfo=timezone.utc)
                 elapsed = (now - created_at).total_seconds()
                 if elapsed > timeout_seconds:
-                    timeout_ids.append(r.id)
+                    # 需要获取 request_id 以便检查 RequestCandidate 表
+                    # r.id 是 usage_id，需要查询 request_id
+                    timeout_candidates.append(r.id)
 
-        # 批量更新超时的请求
-        if timeout_ids:
-            db.query(Usage).filter(Usage.id.in_(timeout_ids)).update(
-                {"status": "failed", "error_message": "请求超时（服务器可能已重启）"},
-                synchronize_session=False,
+        # 批量更新超时的请求（排除已有成功完成记录的请求）
+        timeout_ids = []
+        if timeout_candidates:
+            # 检查 RequestCandidate 表是否有成功完成的记录
+            # 如果流已经成功完成（stream_completed: true），不应该标记为超时
+            # 先获取这些 Usage 的 request_id
+            usage_request_ids = (
+                db.query(Usage.id, Usage.request_id)
+                .filter(Usage.id.in_(timeout_candidates))
+                .all()
             )
-            db.commit()
+            usage_id_to_request_id = {u.id: u.request_id for u in usage_request_ids}
+            request_id_to_usage_id = {u.request_id: u.id for u in usage_request_ids}
+            request_ids = list(request_id_to_usage_id.keys())
+
+            # 查询这些请求中已有成功完成记录的 request_id
+            # 包括两种情况：
+            # 1. status='success' 且 stream_completed=True（正常完成）
+            # 2. status='streaming' 且 status_code=200（流传输中但 Provider 已返回 200，可能是服务重启导致回调丢失）
+            completed_usage_ids = set()
+            if request_ids:
+                from sqlalchemy import or_
+
+                candidates = (
+                    db.query(
+                        RequestCandidate.request_id,
+                        RequestCandidate.status,
+                        RequestCandidate.status_code,
+                        RequestCandidate.extra_data,
+                    )
+                    .filter(
+                        RequestCandidate.request_id.in_(request_ids),
+                        or_(
+                            RequestCandidate.status == "success",
+                            # streaming 状态且 status_code=200，说明 Provider 响应成功
+                            # 但流传输可能因服务重启而中断
+                            (RequestCandidate.status == "streaming")
+                            & (RequestCandidate.status_code == 200),
+                        ),
+                    )
+                    .all()
+                )
+                for candidate in candidates:
+                    extra_data = candidate.extra_data or {}
+                    # 情况1：status='success' 且 stream_completed=True
+                    if candidate.status == "success" and extra_data.get(
+                        "stream_completed", False
+                    ):
+                        usage_id = request_id_to_usage_id.get(candidate.request_id)
+                        if usage_id:
+                            completed_usage_ids.add(usage_id)
+                    # 情况2：status='streaming' 且 status_code=200
+                    # 这表示 Provider 返回了 200，但流传输可能因服务重启而未正常结束
+                    # 此时应该恢复为 completed 而不是标记为 failed
+                    elif candidate.status == "streaming" and candidate.status_code == 200:
+                        usage_id = request_id_to_usage_id.get(candidate.request_id)
+                        if usage_id:
+                            completed_usage_ids.add(usage_id)
+
+            # 只对没有成功完成记录的请求标记超时
+            timeout_ids = [uid for uid in timeout_candidates if uid not in completed_usage_ids]
+
+            if timeout_ids:
+                db.query(Usage).filter(Usage.id.in_(timeout_ids)).update(
+                    {"status": "failed", "error_message": "请求超时（服务器可能已重启）"},
+                    synchronize_session=False,
+                )
+                db.commit()
+
+            # 对于已完成但状态未更新的请求，主动恢复状态为 completed
+            # 这处理了遥测回调丢失的情况（例如服务重启、后台任务未执行等）
+            if completed_usage_ids:
+                db.query(Usage).filter(Usage.id.in_(list(completed_usage_ids))).update(
+                    {"status": "completed"},
+                    synchronize_session=False,
+                )
+                db.commit()
+                logger.info(
+                    f"[Usage] 恢复 {len(completed_usage_ids)} 个已完成请求的状态（遥测回调丢失）"
+                )
 
         result: List[Dict[str, Any]] = []
         for r in records:
+            api_format = getattr(r, "api_format", None)
+            endpoint_api_format = getattr(r, "endpoint_api_format", None)
+            has_format_conversion = getattr(r, "has_format_conversion", None)
+
+            # 兼容历史数据：当 streaming 状态已拿到两个格式但 has_format_conversion 为空时，回填推断结果
+            if (
+                has_format_conversion is None
+                and api_format
+                and endpoint_api_format
+            ):
+                has_format_conversion = not can_passthrough(api_format, endpoint_api_format)
+
             item: Dict[str, Any] = {
                 "id": r.id,
                 "status": "failed" if r.id in timeout_ids else r.status,
@@ -1785,6 +2339,12 @@ class UsageService:
                 "response_time_ms": r.response_time_ms,
                 "first_byte_time_ms": r.first_byte_time_ms,  # 首字时间 (TTFB)
             }
+            if api_format:
+                item["api_format"] = api_format
+            if endpoint_api_format:
+                item["endpoint_api_format"] = endpoint_api_format
+            if has_format_conversion is not None:
+                item["has_format_conversion"] = bool(has_format_conversion)
             if include_admin_fields:
                 item["provider"] = r.provider_name
                 item["api_key_name"] = r.api_key_name

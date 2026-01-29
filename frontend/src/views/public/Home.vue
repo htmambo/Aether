@@ -1,7 +1,7 @@
 <template>
   <div
     ref="scrollContainer"
-    class="relative h-screen overflow-y-auto snap-y snap-mandatory scroll-smooth literary-grid literary-paper"
+    class="relative h-screen overflow-y-auto overflow-x-hidden snap-y snap-mandatory scroll-smooth literary-grid literary-paper"
   >
     <!-- Fixed scroll indicator -->
     <nav class="scroll-indicator">
@@ -21,12 +21,81 @@
 
     <!-- Header -->
     <header class="sticky top-0 z-50 border-b border-[#cc785c]/10 dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/90 dark:bg-[#191714]/95 backdrop-blur-xl transition-all">
-      <div class="h-16 flex items-center">
-        <!-- Centered content container (max-w-7xl) -->
-        <div class="mx-auto max-w-7xl w-full px-6 flex items-center justify-between">
-          <!-- Left: Logo & Brand -->
+      <!-- Mobile layout (< md): Logo left, buttons right -->
+      <div class="h-14 sm:h-16 flex md:hidden items-center justify-between px-3 sm:px-4">
+        <!-- Logo & Brand -->
+        <div
+          class="flex items-center gap-2 sm:gap-3 group/logo cursor-pointer shrink-0"
+          @click="scrollToSection(0)"
+        >
+          <HeaderLogo
+            size="h-7 w-7 sm:h-9 sm:w-9"
+            class-name="text-[#191919] dark:text-white"
+          />
+          <div class="flex flex-col justify-center">
+            <h1 class="text-base sm:text-lg font-bold text-[#191919] dark:text-white leading-none">
+              Aether
+            </h1>
+            <span class="text-[9px] sm:text-[10px] text-[#91918d] dark:text-muted-foreground leading-none mt-1 sm:mt-1.5 font-medium tracking-wide">AI Gateway</span>
+          </div>
+        </div>
+
+        <!-- Right: Login + Icons -->
+        <div class="flex items-center gap-2">
+          <RouterLink
+            v-if="authStore.isAuthenticated"
+            :to="dashboardPath"
+            class="min-w-[60px] text-center rounded-lg bg-[#191919] dark:bg-[#cc785c] px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-[#262625] dark:hover:bg-[#b86d52] whitespace-nowrap"
+          >
+            控制台
+          </RouterLink>
+          <button
+            v-else
+            class="min-w-[60px] text-center rounded-lg bg-[#cc785c] px-3 py-1.5 text-xs font-medium text-white shadow-lg shadow-[#cc785c]/30 transition hover:bg-[#d4a27f] whitespace-nowrap"
+            @click="showLoginDialog = true"
+          >
+            登录
+          </button>
+          <button
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
+            :title="themeMode === 'system' ? '跟随系统' : themeMode === 'dark' ? '深色模式' : '浅色模式'"
+            @click="toggleDarkMode"
+          >
+            <SunMoon
+              v-if="themeMode === 'system'"
+              class="h-3.5 w-3.5"
+            />
+            <Sun
+              v-else-if="themeMode === 'light'"
+              class="h-3.5 w-3.5"
+            />
+            <Moon
+              v-else
+              class="h-3.5 w-3.5"
+            />
+          </button>
+          <a
+            href="https://github.com/fawney19/Aether"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
+            title="GitHub 仓库"
+          >
+            <GithubIcon class="h-3.5 w-3.5" />
+          </a>
+        </div>
+      </div>
+
+      <!-- Desktop layout (>= md): Centered nav with balanced spacing -->
+      <div class="h-16 hidden md:flex items-center justify-between px-8">
+        <!-- Left spacer for balance (matches right icons width) -->
+        <div class="w-[76px] shrink-0" />
+
+        <!-- Center: Logo + Nav + Login Button -->
+        <div class="flex items-center">
+          <!-- Logo & Brand -->
           <div
-            class="flex items-center gap-3 group/logo cursor-pointer"
+            class="flex items-center gap-3 group/logo cursor-pointer shrink-0"
             @click="scrollToSection(0)"
           >
             <HeaderLogo
@@ -37,12 +106,12 @@
               <h1 class="text-lg font-bold text-[#191919] dark:text-white leading-none">
                 Aether
               </h1>
-              <span class="text-[10px] text-[#91918d] dark:text-muted-foreground leading-none mt-1.5 font-medium tracking-wide">API Gateway</span>
+              <span class="text-[10px] text-[#91918d] dark:text-muted-foreground leading-none mt-1.5 font-medium tracking-wide">AI Gateway</span>
             </div>
           </div>
 
-          <!-- Center: Navigation -->
-          <nav class="hidden md:flex items-center gap-2">
+          <!-- Navigation -->
+          <nav class="flex items-center gap-2 mx-16 lg:mx-28">
             <button
               v-for="(section, index) in sections"
               :key="index"
@@ -60,7 +129,7 @@
             </button>
           </nav>
 
-          <!-- Right: Login/Dashboard Button -->
+          <!-- Login/Dashboard Button -->
           <RouterLink
             v-if="authStore.isAuthenticated"
             :to="dashboardPath"
@@ -77,9 +146,8 @@
           </button>
         </div>
 
-        <!-- Fixed right icons (px-8 to match dashboard) -->
-        <div class="absolute right-8 top-1/2 -translate-y-1/2 flex items-center gap-2">
-          <!-- Theme Toggle -->
+        <!-- Right: Theme Toggle + GitHub Icons -->
+        <div class="flex items-center gap-1 shrink-0">
           <button
             class="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
             :title="themeMode === 'system' ? '跟随系统' : themeMode === 'dark' ? '深色模式' : '浅色模式'"
@@ -98,7 +166,6 @@
               class="h-4 w-4"
             />
           </button>
-          <!-- GitHub Link -->
           <a
             href="https://github.com/fawney19/Aether"
             target="_blank"
@@ -115,9 +182,20 @@
     <!-- Main Content -->
     <main class="relative z-10">
       <!-- Fixed Logo Container -->
-      <div class="mt-4 fixed inset-0 z-20 pointer-events-none flex items-center justify-center overflow-hidden">
+      <div class="fixed top-0 left-0 right-0 bottom-0 z-20 pointer-events-none flex items-center justify-center overflow-hidden">
+        <!-- Gemini Star Cluster - positioned behind logo -->
+        <Transition name="fade">
+          <GeminiStarCluster
+            v-if="currentSection === SECTIONS.GEMINI"
+            :is-visible="sectionVisibility[SECTIONS.GEMINI] > 0.05"
+            class="absolute gemini-stars"
+            :class="windowWidth < 768 ? 'scale-75 opacity-60' : ''"
+            :style="fixedLogoStyle"
+          />
+        </Transition>
+
         <div
-          class="mt-16 transform-gpu logo-container"
+          class="transform-gpu logo-container"
           :class="[currentSection === SECTIONS.HOME ? 'home-section' : '', `logo-transition-${scrollDirection}`]"
           :style="fixedLogoStyle"
         >
@@ -126,14 +204,14 @@
               v-if="currentSection === SECTIONS.HOME"
               ref="aetherLogoRef"
               key="aether-logo"
-              :size="400"
+              :size="homeLogoSize"
               :line-delay="50"
               :stroke-duration="1200"
               :fill-duration="1500"
               :auto-start="false"
               :loop="true"
               :loop-pause="800"
-              :stroke-width="3.5"
+              :stroke-width="windowWidth < 768 ? 2.5 : 3.5"
               :cycle-colors="true"
               :is-dark="isDark"
             />
@@ -145,7 +223,7 @@
               <RippleLogo
                 ref="rippleLogoRef"
                 :type="currentLogoType"
-                :size="320"
+                :size="windowWidth < 768 ? 200 : 320"
                 :use-adaptive="false"
                 :disable-ripple="currentSection === SECTIONS.GEMINI || currentSection === SECTIONS.FEATURES"
                 :anim-delay="logoTransitionDelay"
@@ -161,18 +239,18 @@
       <!-- Section 0: Introduction -->
       <section
         ref="section0"
-        class="min-h-screen snap-start flex items-center justify-center px-16 lg:px-20 py-20"
+        class="min-h-screen snap-start flex items-center justify-center px-4 sm:px-8 md:px-16 lg:px-20 py-20"
       >
         <div class="max-w-4xl mx-auto text-center">
-          <div class="h-80 w-full mb-16 mt-8" />
+          <div class="h-64 sm:h-80 md:h-[26rem] w-full mb-12 sm:mb-8 md:mb-10 mt-8 sm:mt-12" />
           <h1
-            class="mb-6 text-5xl md:text-7xl font-bold text-[#191919] dark:text-white leading-tight transition-all duration-700"
+            class="mb-6 text-3xl sm:text-5xl md:text-7xl font-bold text-[#191919] dark:text-white leading-tight transition-all duration-700"
             :style="getTitleStyle(SECTIONS.HOME)"
           >
-            欢迎使用 <span class="text-primary">Aether</span>
+            欢迎使用 <span class="text-primary typewriter">{{ aetherText }}<span class="cursor" :class="{ 'cursor-hidden': !showCursor }">_</span></span>
           </h1>
           <p
-            class="mb-8 text-xl text-[#666663] dark:text-gray-300 max-w-2xl mx-auto transition-all duration-700"
+            class="mb-8 text-base sm:text-lg md:text-xl text-[#666663] dark:text-[#c9c3b4] max-w-2xl mx-auto transition-all duration-700"
             :style="getDescStyle(SECTIONS.HOME)"
           >
             AI 开发工具统一接入平台<br>
@@ -196,7 +274,7 @@
         description="直接在您的终端中释放Claude的原始力量。瞬间搜索百万行代码库。将数小时的流程转化为单一命令。您的工具。您的流程。您的代码库,以思维速度进化。"
         :badge-icon="Code2"
         badge-text="IDE 集成"
-        badge-class="bg-[#cc785c]/10 dark:bg-amber-900/30 border border-[#cc785c]/20 dark:border-amber-800 text-[#cc785c] dark:text-amber-400"
+        badge-class="bg-[#cc785c]/10 dark:bg-[#cc785c]/20 border border-[#cc785c]/20 dark:border-[#d4a27f]/30 text-[#cc785c] dark:text-[#d4a27f]"
         :platform-options="platformPresets.claude.options"
         :install-command="claudeInstallCommand"
         :config-files="[{ path: '~/.claude/settings.json', content: claudeConfig, language: 'json' }]"
@@ -216,7 +294,7 @@
         description="Codex CLI 是一款可在本地终端运行的编程助手工具，它能够读取、修改并执行用户指定目录中的代码。"
         :badge-icon="Terminal"
         badge-text="命令行工具"
-        badge-class="bg-[#cc785c]/10 dark:bg-emerald-900/30 border border-[#cc785c]/20 dark:border-emerald-800 text-[#cc785c] dark:text-emerald-400"
+        badge-class="bg-[#cc785c]/10 dark:bg-[#cc785c]/20 border border-[#cc785c]/20 dark:border-[#d4a27f]/30 text-[#cc785c] dark:text-[#d4a27f]"
         :platform-options="platformPresets.codex.options"
         :install-command="codexInstallCommand"
         :config-files="[
@@ -239,7 +317,7 @@
         description="Gemini CLI 是一款开源人工智能代理，可将 Gemini 的强大功能直接带入你的终端。它提供了对 Gemini 的轻量级访问，为你提供了从提示符到我们模型的最直接路径。"
         :badge-icon="Sparkles"
         badge-text="多模态 AI"
-        badge-class="bg-[#cc785c]/10 dark:bg-primary/20 border border-[#cc785c]/20 dark:border-primary/30 text-[#cc785c] dark:text-primary"
+        badge-class="bg-[#cc785c]/10 dark:bg-[#cc785c]/20 border border-[#cc785c]/20 dark:border-[#d4a27f]/30 text-[#cc785c] dark:text-[#d4a27f]"
         :platform-options="platformPresets.gemini.options"
         :install-command="geminiInstallCommand"
         :config-files="[
@@ -252,97 +330,103 @@
         :card-style-fn="(idx) => getCardStyle(SECTIONS.GEMINI, idx)"
         content-position="right"
         @copy="copyToClipboard"
-      >
-        <template #logo>
-          <GeminiStarCluster :is-visible="currentSection === SECTIONS.GEMINI && sectionVisibility[SECTIONS.GEMINI] > 0.05" />
-        </template>
-      </CliSection>
+      />
 
       <!-- Section 4: Features -->
       <section
         ref="section4"
-        class="min-h-screen snap-start flex items-center justify-center px-16 lg:px-20 py-20 relative overflow-hidden"
+        class="min-h-screen snap-start flex items-center justify-center px-4 sm:px-8 md:px-16 lg:px-20 py-12 md:py-20 relative overflow-hidden"
       >
         <div class="max-w-4xl mx-auto text-center relative z-10">
           <div
-            class="inline-flex items-center gap-2 rounded-full bg-[#cc785c]/10 dark:bg-purple-500/20 border border-[#cc785c]/20 dark:border-purple-500/40 px-4 py-2 text-sm font-medium text-[#cc785c] dark:text-purple-300 mb-6 backdrop-blur-sm transition-all duration-500"
+            class="inline-flex items-center gap-1.5 md:gap-2 rounded-full bg-[#cc785c]/10 dark:bg-[#cc785c]/20 border border-[#cc785c]/20 dark:border-[#d4a27f]/30 px-3 md:px-4 py-1.5 md:py-2 text-xs md:text-sm font-medium text-[#cc785c] dark:text-[#d4a27f] mb-4 md:mb-6 backdrop-blur-sm transition-all duration-500"
             :style="getBadgeStyle(SECTIONS.FEATURES)"
           >
-            <Sparkles class="h-4 w-4" />
+            <Sparkles class="h-3.5 w-3.5 md:h-4 md:w-4" />
             项目进度
           </div>
 
           <h2
-            class="text-4xl md:text-5xl font-bold text-[#191919] dark:text-white mb-6 transition-all duration-700"
+            class="text-2xl md:text-5xl font-bold text-[#191919] dark:text-white mb-3 md:mb-6 transition-all duration-700"
             :style="getTitleStyle(SECTIONS.FEATURES)"
           >
             功能开发进度
           </h2>
 
           <p
-            class="text-lg text-[#666663] dark:text-gray-300 mb-12 max-w-2xl mx-auto transition-all duration-700"
+            class="text-base md:text-lg text-[#666663] dark:text-[#c9c3b4] mb-6 md:mb-12 max-w-2xl mx-auto transition-all duration-700"
             :style="getDescStyle(SECTIONS.FEATURES)"
           >
             核心 API 代理功能已完成，正在载入更多功能
           </p>
 
-          <div class="grid md:grid-cols-3 gap-6">
+          <div class="grid md:grid-cols-3 gap-3 md:gap-6">
             <div
               v-for="(feature, idx) in featureCards"
               :key="idx"
-              class="bg-white/70 dark:bg-[#262624]/80 backdrop-blur-sm rounded-2xl p-6 border border-[#e5e4df] dark:border-[rgba(227,224,211,0.16)] hover:border-[#cc785c]/30 dark:hover:border-[#d4a27f]/40 transition-all duration-700"
+              class="group bg-white/90 dark:bg-[#262624]/80 backdrop-blur-sm rounded-xl md:rounded-2xl p-4 md:p-6 border transition-all duration-700"
+              :class="feature.status === 'completed'
+                ? 'border-[#cc785c]/20 dark:border-[#d4a27f]/20'
+                : 'border-[#e5e4df] dark:border-[rgba(227,224,211,0.16)] border-dashed'"
               :style="getFeatureCardStyle(SECTIONS.FEATURES, idx)"
             >
               <div
-                class="flex h-12 w-12 items-center justify-center rounded-xl mb-4 mx-auto"
-                :class="feature.status === 'completed'
-                  ? 'bg-emerald-500/10 dark:bg-emerald-500/15'
-                  : 'bg-[#cc785c]/10 dark:bg-[#cc785c]/15'"
+                class="flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-lg md:rounded-xl mb-2 md:mb-4 mx-auto bg-[#cc785c]/8 dark:bg-[#cc785c]/12"
               >
                 <component
                   :is="feature.icon"
-                  class="h-6 w-6"
-                  :class="feature.status === 'completed'
-                    ? 'text-emerald-500 dark:text-emerald-400'
-                    : 'text-[#cc785c] dark:text-[#d4a27f] animate-spin'"
+                  class="h-5 w-5 md:h-6 md:w-6 text-[#cc785c] dark:text-[#d4a27f]"
+                  :class="{ 'opacity-50': feature.status !== 'completed' }"
                 />
               </div>
-              <h3 class="text-lg font-bold text-[#191919] dark:text-white mb-2">
+              <h3
+                class="text-base md:text-lg font-bold mb-1 md:mb-2"
+                :class="feature.status === 'completed'
+                  ? 'text-[#191919] dark:text-white'
+                  : 'text-[#666663] dark:text-[#a0a0a0]'"
+              >
                 {{ feature.title }}
               </h3>
-              <p class="text-sm text-[#666663] dark:text-[#c9c3b4]">
+              <p class="text-xs md:text-sm text-[#666663] dark:text-[#c9c3b4]">
                 {{ feature.desc }}
               </p>
               <div
-                class="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+                class="mt-2 md:mt-3 inline-flex items-center gap-1.5 px-2 md:px-2.5 py-0.5 md:py-1 rounded-full text-xs font-medium border"
                 :class="feature.status === 'completed'
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                  : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'"
+                  ? 'bg-[#cc785c]/5 text-[#cc785c] dark:text-[#d4a27f] border-[#cc785c]/20 dark:border-[#d4a27f]/20'
+                  : 'bg-transparent text-[#91918d] dark:text-[#808080] border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)]'"
               >
-                {{ feature.status === 'completed' ? '已完成' : '进行中' }}
+                {{ feature.status === 'completed' ? '已完成' : '开发中' }}
               </div>
             </div>
           </div>
 
           <div
-            class="mt-12 transition-all duration-700"
+            class="mt-6 md:mt-12 transition-all duration-700 flex items-center justify-center gap-4"
             :style="getButtonsStyle(SECTIONS.FEATURES)"
           >
             <RouterLink
+              to="/guide"
+              class="inline-flex items-center justify-center gap-2 rounded-xl bg-transparent border-2 border-[#cc785c] px-6 py-3 text-base font-semibold text-[#cc785c] dark:text-[#d4a27f] dark:border-[#d4a27f] transition hover:bg-[#cc785c]/10 dark:hover:bg-[#d4a27f]/10 hover:scale-105 w-[160px]"
+            >
+              <BookOpen class="h-5 w-5" />
+              配置教程
+            </RouterLink>
+            <RouterLink
               v-if="authStore.isAuthenticated"
               :to="dashboardPath"
-              class="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary/90 px-6 py-3 text-base font-semibold text-white shadow-lg shadow-primary/30 transition hover:shadow-primary/50 hover:scale-105"
+              class="inline-flex items-center justify-center gap-2 rounded-xl bg-transparent border-2 border-[#cc785c] px-6 py-3 text-base font-semibold text-[#cc785c] dark:text-[#d4a27f] dark:border-[#d4a27f] transition hover:bg-[#cc785c]/10 dark:hover:bg-[#d4a27f]/10 hover:scale-105 w-[160px]"
             >
               <Rocket class="h-5 w-5" />
-              立即开始使用
+              立即开始
             </RouterLink>
             <button
               v-else
-              class="inline-flex items-center gap-2 rounded-xl bg-primary hover:bg-primary/90 px-6 py-3 text-base font-semibold text-white shadow-lg shadow-primary/30 transition hover:shadow-primary/50 hover:scale-105"
+              class="inline-flex items-center justify-center gap-2 rounded-xl bg-transparent border-2 border-[#cc785c] px-6 py-3 text-base font-semibold text-[#cc785c] dark:text-[#d4a27f] dark:border-[#d4a27f] transition hover:bg-[#cc785c]/10 dark:hover:bg-[#d4a27f]/10 hover:scale-105 w-[160px]"
               @click="showLoginDialog = true"
             >
               <Rocket class="h-5 w-5" />
-              立即开始使用
+              立即开始
             </button>
           </div>
         </div>
@@ -357,6 +441,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
+  BookOpen,
   ChevronDown,
   Code2,
   Moon,
@@ -452,6 +537,9 @@ const { logoTransitionName } = useLogoTransition(currentSection, previousSection
 // Logo computed
 const currentLogoType = computed(() => getLogoType(currentSection.value))
 const currentLogoClass = computed(() => getLogoClass(currentSection.value))
+
+// Responsive logo size - matches .logo-container.home-section CSS
+const homeLogoSize = computed(() => windowWidth.value < 768 ? 280 : 400)
 const logoTransitionDelay = computed(() => {
   if (currentSection.value === SECTIONS.FEATURES) return 0
   if (previousSection.value === SECTIONS.FEATURES) return 200
@@ -474,6 +562,57 @@ const { claudeConfig, codexConfig, codexAuthConfig, geminiEnvConfig, geminiSetti
 
 // Dialog state
 const showLoginDialog = ref(false)
+
+// Typewriter effect for "Aether"
+const aetherText = ref('')
+const showCursor = ref(true)
+const typewriterFullText = 'Aether'
+let typewriterTimer: ReturnType<typeof setTimeout> | null = null
+let hasTypewriterStarted = ref(false)
+
+const startTypewriter = () => {
+  if (hasTypewriterStarted.value) return
+  hasTypewriterStarted.value = true
+  aetherText.value = ''
+  showCursor.value = true
+  
+  const typeSpeed = 200
+  const deleteSpeed = 120
+  const pauseAfterType = 3500
+  const pauseAfterDelete = 1000
+  
+  const typeLoop = () => {
+    let index = 0
+    
+    // Type phase
+    const typeNextChar = () => {
+      if (index < typewriterFullText.length) {
+        aetherText.value = typewriterFullText.slice(0, index + 1)
+        index++
+        typewriterTimer = setTimeout(typeNextChar, typeSpeed)
+      } else {
+        // Pause then start deleting
+        typewriterTimer = setTimeout(deleteChars, pauseAfterType)
+      }
+    }
+    
+    // Delete phase
+    const deleteChars = () => {
+      if (aetherText.value.length > 0) {
+        aetherText.value = aetherText.value.slice(0, -1)
+        typewriterTimer = setTimeout(deleteChars, deleteSpeed)
+      } else {
+        // Pause then restart typing
+        typewriterTimer = setTimeout(typeLoop, pauseAfterDelete)
+      }
+    }
+    
+    typeNextChar()
+  }
+  
+  // Start typing after a short delay
+  typewriterTimer = setTimeout(typeLoop, 400)
+}
 
 // Scroll handling
 let scrollEndTimer: ReturnType<typeof setTimeout> | null = null
@@ -525,6 +664,7 @@ const handleScroll = () => {
     if (currentSection.value === SECTIONS.HOME && !hasLogoAnimationStarted.value) {
       hasLogoAnimationStarted.value = true
       setTimeout(() => aetherLogoRef.value?.startAnimation(), 100)
+      startTypewriter()
     }
   }, 150)
 }
@@ -560,6 +700,7 @@ onMounted(() => {
     if (currentSection.value === SECTIONS.HOME && !hasLogoAnimationStarted.value) {
       hasLogoAnimationStarted.value = true
       setTimeout(() => aetherLogoRef.value?.startAnimation(), 100)
+      startTypewriter()
     }
   }, 300)
 })
@@ -568,6 +709,7 @@ onUnmounted(() => {
   scrollContainer.value?.removeEventListener('scroll', handleScroll)
   window.removeEventListener('resize', handleResize)
   if (scrollEndTimer) clearTimeout(scrollEndTimer)
+  if (typewriterTimer) clearTimeout(typewriterTimer)
 })
 </script>
 
@@ -776,5 +918,43 @@ h1, h2, p {
   14% { transform: scale(1.06); }
   28% { transform: scale(1); }
   42% { transform: scale(1.1); }
+}
+
+/* Gemini star cluster positioning */
+.gemini-stars {
+  z-index: -1;
+}
+
+/* Fade transition */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.6s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Typewriter cursor */
+.typewriter {
+  display: inline;
+}
+
+.typewriter .cursor {
+  font-weight: 400;
+  opacity: 1;
+  animation: cursor-blink 1s ease-in-out infinite;
+  margin-left: 1px;
+}
+
+.typewriter .cursor.cursor-hidden {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes cursor-blink {
+  0%, 45% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 </style>

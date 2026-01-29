@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from src.core.enums import APIFormat, ProviderBillingType
+from src.core.api_format import APIFormat
+from src.core.enums import ProviderBillingType
 
 
 class ProxyConfig(BaseModel):
@@ -88,9 +89,11 @@ class CreateProviderRequest(BaseModel):
     is_active: Optional[bool] = Field(True, description="是否启用")
     concurrent_limit: Optional[int] = Field(None, ge=0, description="并发限制")
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(300, ge=1, le=600, description="请求超时（秒）")
     max_retries: Optional[int] = Field(2, ge=0, le=10, description="最大重试次数")
     proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
     config: Optional[Dict[str, Any]] = Field(None, description="其他配置")
 
     @field_validator("name", "description")
@@ -159,9 +162,11 @@ class UpdateProviderRequest(BaseModel):
     is_active: Optional[bool] = None
     concurrent_limit: Optional[int] = Field(None, ge=0)
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(None, ge=1, le=600, description="请求超时（秒）")
     max_retries: Optional[int] = Field(None, ge=0, le=10, description="最大重试次数")
     proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
     config: Optional[Dict[str, Any]] = None
 
     # 复用相同的验证器
@@ -274,8 +279,8 @@ class CreateAPIKeyRequest(BaseModel):
         v = v.strip()
 
         # 检查最小长度
-        if len(v) < 10:
-            raise ValueError("API Key 长度不能少于 10 个字符")
+        if len(v) < 3:
+            raise ValueError("API Key 长度不能少于 3 个字符")
 
         # 检查危险字符（不应包含 SQL 注入字符）
         dangerous_chars = ["'", '"', ";", "--", "/*", "*/", "<", ">"]
@@ -315,8 +320,8 @@ class UpdateUserRequest(BaseModel):
         if v is None:
             return v
 
-        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
-            raise ValueError("用户名只能包含字母、数字、下划线和连字符")
+        if not re.match(r"^[a-zA-Z0-9_.\-]+$", v):
+            raise ValueError("用户名只能包含字母、数字、下划线、连字符和点号")
 
         return v
 

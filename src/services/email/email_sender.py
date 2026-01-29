@@ -3,37 +3,28 @@
 提供 SMTP 邮件发送功能
 """
 
-import asyncio
 import smtplib
-import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
+aiosmtplib: Any
 try:
-    import aiosmtplib
-
-    AIOSMTPLIB_AVAILABLE = True
+    import aiosmtplib as _aiosmtplib
 except ImportError:
     AIOSMTPLIB_AVAILABLE = False
     aiosmtplib = None
-
-
-def _create_ssl_context() -> ssl.SSLContext:
-    """创建 SSL 上下文，使用 certifi 证书或系统默认证书"""
-    try:
-        import certifi
-
-        context = ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        context = ssl.create_default_context()
-    return context
+else:
+    AIOSMTPLIB_AVAILABLE = True
+    aiosmtplib = _aiosmtplib
 
 from sqlalchemy.orm import Session
 
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.services.system.config import SystemConfigService
+from src.utils.async_utils import run_in_executor
+from src.utils.ssl_utils import get_ssl_context
 
 from .email_template import EmailTemplate
 
@@ -95,6 +86,21 @@ class EmailSenderService:
                 return False, f"缺少必要的 SMTP 配置: {field}"
 
         return True, None
+
+    @staticmethod
+    def is_smtp_configured(db: Session) -> bool:
+        """
+        检查 SMTP 是否已配置（用于前端显示判断）
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            是否已配置有效的 SMTP
+        """
+        config = EmailSenderService._get_smtp_config(db)
+        valid, _ = EmailSenderService._validate_smtp_config(config)
+        return valid
 
     @staticmethod
     async def send_verification_code(
@@ -207,7 +213,7 @@ class EmailSenderService:
                 message.attach(MIMEText(html_body, "html", "utf-8"))
 
             # 发送邮件
-            ssl_context = _create_ssl_context()
+            ssl_context = get_ssl_context()
             if config["smtp_use_ssl"]:
                 await aiosmtplib.send(
                     message,
@@ -260,9 +266,13 @@ class EmailSenderService:
         Returns:
             (是否发送成功, 错误信息)
         """
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, EmailSenderService._send_email_sync, config, to_email, subject, html_body, text_body
+        return await run_in_executor(
+            EmailSenderService._send_email_sync,
+            config,
+            to_email,
+            subject,
+            html_body,
+            text_body,
         )
 
     @staticmethod
@@ -302,8 +312,8 @@ class EmailSenderService:
                 message.attach(MIMEText(html_body, "html", "utf-8"))
 
             # 连接 SMTP 服务器
-            server = None
-            ssl_context = _create_ssl_context()
+            server: Optional[smtplib.SMTP] = None
+            ssl_context = get_ssl_context()
             try:
                 if config["smtp_use_ssl"]:
                     server = smtplib.SMTP_SSL(
@@ -320,6 +330,8 @@ class EmailSenderService:
                     )
                     if config["smtp_use_tls"]:
                         server.starttls(context=ssl_context)
+
+                assert server is not None
 
                 # 登录
                 if config["smtp_user"] and config["smtp_password"]:
@@ -369,7 +381,7 @@ class EmailSenderService:
             return False, error
 
         try:
-            ssl_context = _create_ssl_context()
+            ssl_context = get_ssl_context()
             if AIOSMTPLIB_AVAILABLE:
                 # 使用异步方式测试
                 # 注意: use_tls=True 表示隐式 SSL (端口 465)
@@ -393,6 +405,7 @@ class EmailSenderService:
                 await smtp.quit()
             else:
                 # 使用同步方式测试
+                server: Union[smtplib.SMTP, smtplib.SMTP_SSL]
                 if config["smtp_use_ssl"]:
                     server = smtplib.SMTP_SSL(
                         config["smtp_host"],

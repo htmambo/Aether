@@ -65,3 +65,18 @@ model_mapping_conflict_total = Counter(
     "model_mapping_conflict_total",
     "Total number of mapping conflicts detected (same name maps to multiple GlobalModels)",
 )
+
+# ==================== API 格式转换 ====================
+
+format_conversion_total = Counter(
+    "format_conversion_total",
+    "Total number of format conversions",
+    ["direction", "source_format", "target_format", "status"],  # status: success/error
+)
+
+format_conversion_duration_seconds = Histogram(
+    "format_conversion_duration_seconds",
+    "Duration of format conversions in seconds",
+    ["direction", "source_format", "target_format"],
+    buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)

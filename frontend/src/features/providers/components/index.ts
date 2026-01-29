@@ -11,3 +11,4 @@ export { default as BatchAssignModelsDialog } from './BatchAssignModelsDialog.vu
 
 export { default as ModelsTab } from './provider-tabs/ModelsTab.vue'
 export { default as ProviderModelAliasesTab } from './provider-tabs/ModelAliasesTab.vue'
+export { default as ProviderAuthDialog } from './ProviderAuthDialog.vue'

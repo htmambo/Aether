@@ -41,6 +41,9 @@ class StreamUsageTracker:
         provider_api_key_id: Optional[str] = None,
         # API 格式（用于选择正确的响应解析器）
         api_format: Optional[str] = None,
+        # 格式转换信息
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
     ):
         """
         初始化流式用量跟踪器
@@ -60,6 +63,8 @@ class StreamUsageTracker:
             provider_endpoint_id: Endpoint ID（用于记录真实成本）
             provider_api_key_id: API Key ID（用于记录真实成本）
             api_format: API 格式（CLAUDE, CLAUDE_CLI, OPENAI, OPENAI_CLI）
+            endpoint_api_format: 端点原生 API 格式
+            has_format_conversion: 是否发生了格式转换
         """
         self.db = db
         # 只存储ID，避免会话绑定问题
@@ -79,6 +84,8 @@ class StreamUsageTracker:
 
         # API 格式和响应解析器
         self.api_format = api_format or "CLAUDE"
+        self.endpoint_api_format = endpoint_api_format
+        self.has_format_conversion = has_format_conversion
         self.response_parser = get_parser_for_format(self.api_format)
         self.stream_stats = StreamStats()  # 解析器统计信息
 
@@ -488,6 +495,8 @@ class StreamUsageTracker:
                             provider_endpoint_id=self.provider_endpoint_id,
                             provider_api_key_id=self.provider_api_key_id,
                             api_format=self.api_format,
+                            endpoint_api_format=self.endpoint_api_format,
+                            has_format_conversion=self.has_format_conversion,
                         )
                     except Exception as e:
                         logger.warning(f"更新使用记录状态为 streaming 失败: {e}")
@@ -710,6 +719,8 @@ class StreamUsageTracker:
                 cache_read_input_tokens=self.cache_read_input_tokens,
                 request_type="chat",
                 api_format=self.api_format,
+                endpoint_api_format=self.endpoint_api_format,
+                has_format_conversion=self.has_format_conversion,
                 is_stream=True,
                 response_time_ms=response_time_ms,
                 status_code=self.status_code,  # 使用实际的状态码
@@ -801,6 +812,9 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
         provider_api_key_id: Optional[str] = None,
         # API 格式（用于选择正确的响应解析器）
         api_format: Optional[str] = None,
+        # 格式转换信息
+        endpoint_api_format: Optional[str] = None,
+        has_format_conversion: bool = False,
     ):
         super().__init__(
             db,
@@ -817,6 +831,8 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
             provider_endpoint_id,
             provider_api_key_id,
             api_format,
+            endpoint_api_format,
+            has_format_conversion,
         )
         # 用于更准确的token计算
         self._init_tokenizer()
@@ -950,6 +966,8 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
                             provider_endpoint_id=self.provider_endpoint_id,
                             provider_api_key_id=self.provider_api_key_id,
                             api_format=self.api_format,
+                            endpoint_api_format=self.endpoint_api_format,
+                            has_format_conversion=self.has_format_conversion,
                         )
                     except Exception as e:
                         logger.warning(f"更新使用记录状态为 streaming 失败: {e}")
@@ -1054,6 +1072,9 @@ def create_stream_tracker(
     provider_api_key_id: Optional[str] = None,
     # API 格式（用于选择正确的响应解析器）
     api_format: Optional[str] = None,
+    # 格式转换信息
+    endpoint_api_format: Optional[str] = None,
+    has_format_conversion: bool = False,
 ) -> StreamUsageTracker:
     """
     创建流式用量跟踪器
@@ -1074,6 +1095,8 @@ def create_stream_tracker(
         provider_endpoint_id: Endpoint ID（用于记录真实成本）
         provider_api_key_id: API Key ID（用于记录真实成本）
         api_format: API 格式（CLAUDE, CLAUDE_CLI, OPENAI, OPENAI_CLI）
+        endpoint_api_format: 端点原生 API 格式
+        has_format_conversion: 是否发生了格式转换
 
     Returns:
         流式用量跟踪器实例
@@ -1094,6 +1117,8 @@ def create_stream_tracker(
             provider_endpoint_id,
             provider_api_key_id,
             api_format,
+            endpoint_api_format,
+            has_format_conversion,
         )
     else:
         return StreamUsageTracker(
@@ -1111,4 +1136,6 @@ def create_stream_tracker(
             provider_endpoint_id,
             provider_api_key_id,
             api_format,
+            endpoint_api_format,
+            has_format_conversion,
         )

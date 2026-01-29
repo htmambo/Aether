@@ -245,9 +245,27 @@
       <header class="hidden lg:flex h-16 px-8 items-center justify-between shrink-0 border-b border-[#3d3929]/5 dark:border-white/5 sticky top-0 z-40 backdrop-blur-md bg-[#faf9f5]/90 dark:bg-[#191714]/90">
         <div class="flex flex-col gap-0.5">
           <div class="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>{{ currentSectionName }}</span>
-            <ChevronRight class="w-3 h-3 opacity-50" />
-            <span class="text-foreground font-medium">{{ currentPageName }}</span>
+            <template
+              v-for="(crumb, index) in breadcrumbs"
+              :key="index"
+            >
+              <template v-if="index > 0">
+                <ChevronRight class="w-3 h-3 opacity-50" />
+              </template>
+              <RouterLink
+                v-if="crumb.href && index < breadcrumbs.length - 1"
+                :to="crumb.href"
+                class="hover:text-foreground transition-colors"
+              >
+                {{ crumb.label }}
+              </RouterLink>
+              <span
+                v-else
+                :class="index === breadcrumbs.length - 1 ? 'text-foreground font-medium' : ''"
+              >
+                {{ crumb.label }}
+              </span>
+            </template>
           </div>
         </div>
 
@@ -313,6 +331,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useModuleStore } from '@/stores/modules'
 import { useDarkMode } from '@/composables/useDarkMode'
 import { isDemoMode } from '@/config/demo'
 import { adminApi, type CheckUpdateResponse } from '@/api/admin'
@@ -345,12 +364,16 @@ import {
   Menu,
   X,
   Mail,
+  Puzzle,
+  type LucideIcon,
 } from 'lucide-vue-next'
+
 import GithubIcon from '@/components/icons/GithubIcon.vue'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const moduleStore = useModuleStore()
 const { themeMode, toggleDarkMode } = useDarkMode()
 const isDemo = computed(() => isDemoMode())
 
@@ -415,6 +438,11 @@ onMounted(() => {
     }
   }, 5000)
 
+  // 管理员预加载模块状态（路由守卫会按需加载，这里提前加载以避免菜单闪烁）
+  if (authStore.user?.role === 'admin' && !moduleStore.loaded && !moduleStore.loading) {
+    moduleStore.fetchModules()
+  }
+
   // 延迟检查更新，避免影响页面加载
   setTimeout(() => {
     checkForUpdate()
@@ -473,6 +501,19 @@ const navigation = computed(() => {
     }
   ]
 
+  // 系统菜单项（静态部分）
+  const systemItems: { name: string; href: string; icon: LucideIcon }[] = [
+    { name: '公告管理', href: '/admin/announcements', icon: Megaphone },
+    { name: '缓存监控', href: '/admin/cache-monitoring', icon: Gauge },
+    { name: 'IP 安全', href: '/admin/ip-security', icon: Shield },
+    { name: '审计日志', href: '/admin/audit-logs', icon: AlertTriangle },
+    { name: '邮件配置', href: '/admin/email', icon: Mail },
+  ]
+
+  // 模块管理和系统设置放在最后
+  systemItems.push({ name: '模块管理', href: '/admin/modules', icon: Puzzle })
+  systemItems.push({ name: '系统设置', href: '/admin/system', icon: Cog })
+
   const adminNavigation = [
      {
       title: '概览',
@@ -494,46 +535,52 @@ const navigation = computed(() => {
     },
     {
       title: '系统',
-      items: [
-        { name: '公告管理', href: '/admin/announcements', icon: Megaphone },
-        { name: '缓存监控', href: '/admin/cache-monitoring', icon: Gauge },
-        { name: 'IP 安全', href: '/admin/ip-security', icon: Shield },
-        { name: '审计日志', href: '/admin/audit-logs', icon: AlertTriangle },
-        { name: '邮件配置', href: '/admin/email', icon: Mail },
-        { name: 'LDAP 配置', href: '/admin/ldap', icon: Shield },
-        { name: '系统设置', href: '/admin/system', icon: Cog },
-      ]
+      items: systemItems
     }
   ]
 
   return authStore.user?.role === 'admin' ? adminNavigation : baseNavigation
 })
 
-// Dynamic Header Title
-const currentSectionName = computed(() => {
-    // Special case: personal settings page accessed by admin
-    if (route.path === '/dashboard/settings') {
-      return '账户'
-    }
-    // Find the group that contains the active item
-    for (const group of navigation.value) {
-      const hasActiveItem = group.items.some(item => isNavActive(item.href))
-      if (hasActiveItem) {
-        return group.title || ''
-      }
-    }
-    return ''
-})
+// Breadcrumbs
+interface BreadcrumbItem {
+  label: string
+  href?: string
+}
 
-const currentPageName = computed(() => {
-    // Special case: personal settings page accessed by admin
-    if (route.path === '/dashboard/settings') {
-      return '个人设置'
+const breadcrumbs = computed((): BreadcrumbItem[] => {
+  // Special case: personal settings page accessed by admin
+  if (route.path === '/dashboard/settings') {
+    return [
+      { label: '账户' },
+      { label: '个人设置' }
+    ]
+  }
+
+  // Special case: module config pages (e.g., /admin/ldap)
+  if (route.meta?.module) {
+    const moduleName = route.meta.module as string
+    const moduleStatus = moduleStore.modules[moduleName]
+    const displayName = moduleStatus?.display_name || moduleName
+    return [
+      { label: '系统' },
+      { label: '模块管理', href: '/admin/modules' },
+      { label: displayName }
+    ]
+  }
+
+  // Find section and page from navigation
+  for (const group of navigation.value) {
+    const activeItem = group.items.find(item => isNavActive(item.href))
+    if (activeItem) {
+      return [
+        { label: group.title || '' },
+        { label: activeItem.name }
+      ]
     }
-    // Flatten navigation to find matching item name
-    const allItems = navigation.value.flatMap(group => group.items)
-    const active = allItems.find(item => isNavActive(item.href))
-    return active ? active.name : route.name?.toString() || '仪表盘'
+  }
+
+  return [{ label: '仪表盘' }]
 })
 
 // Styling Classes (Editorial)

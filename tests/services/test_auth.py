@@ -19,6 +19,8 @@ from src.services.auth.service import (
     JWT_ALGORITHM,
     JWT_EXPIRATION_HOURS,
 )
+from src.core.enums import AuthSource
+from src.models.database import UserRole
 
 
 class TestJWTTokenCreation:
@@ -167,7 +169,10 @@ class TestUserAuthentication:
         mock_user = MagicMock()
         mock_user.id = "user-123"
         mock_user.email = "test@example.com"
+        mock_user.is_deleted = False
         mock_user.is_active = True
+        mock_user.auth_source = AuthSource.LOCAL
+        mock_user.role = UserRole.USER
         mock_user.verify_password.return_value = True
 
         mock_db = MagicMock()
@@ -198,6 +203,10 @@ class TestUserAuthentication:
         """测试密码错误"""
         mock_user = MagicMock()
         mock_user.email = "test@example.com"
+        mock_user.is_deleted = False
+        mock_user.is_active = True
+        mock_user.auth_source = AuthSource.LOCAL
+        mock_user.role = UserRole.USER
         mock_user.verify_password.return_value = False
 
         mock_db = MagicMock()
@@ -212,7 +221,10 @@ class TestUserAuthentication:
         """测试用户已禁用"""
         mock_user = MagicMock()
         mock_user.email = "test@example.com"
+        mock_user.is_deleted = False
         mock_user.is_active = False
+        mock_user.auth_source = AuthSource.LOCAL
+        mock_user.role = UserRole.USER
         mock_user.verify_password.return_value = True
 
         mock_db = MagicMock()
@@ -232,9 +244,11 @@ class TestAPIKeyAuthentication:
         mock_user.id = "user-123"
         mock_user.email = "test@example.com"
         mock_user.is_active = True
+        mock_user.is_deleted = False
 
         mock_api_key = MagicMock()
         mock_api_key.is_active = True
+        mock_api_key.is_locked = False
         mock_api_key.expires_at = None
         mock_api_key.user = mock_user
         mock_api_key.balance_used_usd = 0.0
@@ -271,6 +285,7 @@ class TestAPIKeyAuthentication:
         """测试 API Key 已禁用"""
         mock_api_key = MagicMock()
         mock_api_key.is_active = False
+        mock_api_key.is_locked = False
 
         mock_db = MagicMock()
         mock_db.query.return_value.options.return_value.filter.return_value.first.return_value = (
@@ -286,6 +301,7 @@ class TestAPIKeyAuthentication:
         """测试 API Key 已过期"""
         mock_api_key = MagicMock()
         mock_api_key.is_active = True
+        mock_api_key.is_locked = False
         mock_api_key.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
 
         mock_db = MagicMock()

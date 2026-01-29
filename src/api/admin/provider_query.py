@@ -3,7 +3,6 @@ Provider Query API 端点
 用于查询提供商的模型列表等信息
 """
 
-import asyncio
 from typing import Optional
 
 import httpx
@@ -14,10 +13,14 @@ from sqlalchemy.orm import Session, joinedload
 from src.config.constants import TimeoutDefaults
 from src.core.adapter_resolver import get_adapter_class_for_format
 from src.core.crypto import crypto_service
+from src.core.api_format import get_extra_headers_from_endpoint
 from src.core.logger import logger
 from src.database.database import get_db
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, User
+from src.models.database import Provider, ProviderEndpoint, User
+from src.services.model.upstream_fetcher import build_all_format_configs, fetch_models_from_endpoints
 from src.utils.auth_utils import get_current_user
+from src.utils.ssl_utils import get_ssl_context
+
 
 router = APIRouter(prefix="/api/admin/provider-query", tags=["Provider Query"])
 
@@ -30,6 +33,7 @@ class ModelsQueryRequest(BaseModel):
 
     provider_id: str
     api_key_id: Optional[str] = None
+    force_refresh: bool = False  # 强制刷新，跳过缓存
 
 
 class TestModelRequest(BaseModel):
@@ -38,6 +42,7 @@ class TestModelRequest(BaseModel):
     provider_id: str
     model_name: str
     api_key_id: Optional[str] = None
+    endpoint_id: Optional[str] = None  # 指定使用的端点ID
     stream: bool = False
     message: Optional[str] = "你好"
     api_format: Optional[str] = None  # 指定使用的API格式，如果不指定则使用端点的默认格式
@@ -55,10 +60,8 @@ async def query_available_models(
     """
     查询提供商可用模型
 
-    遍历所有活跃端点，根据端点的 API 格式选择正确的 Adapter 进行请求：
-    - OPENAI/OPENAI_CLI: 使用 OpenAIChatAdapter.fetch_models
-    - CLAUDE/CLAUDE_CLI: 使用 ClaudeChatAdapter.fetch_models
-    - GEMINI/GEMINI_CLI: 使用 GeminiChatAdapter.fetch_models
+    优先从缓存获取（缓存由定时任务刷新），缓存未命中时实时调用上游 API。
+    从所有 API 格式尝试获取模型，然后聚合去重。
 
     Args:
         request: 查询请求
@@ -66,7 +69,12 @@ async def query_available_models(
     Returns:
         所有端点的模型列表（合并）
     """
-    # 获取提供商及其端点和 API Keys
+    from src.services.model.fetch_scheduler import (
+        get_upstream_models_from_cache,
+        set_upstream_models_to_cache,
+    )
+
+    # 获取提供商基本信息
     provider = (
         db.query(Provider)
         .options(
@@ -80,8 +88,22 @@ async def query_available_models(
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    # 收集所有活跃端点的配置
-    endpoint_configs: list[dict] = []
+    # 如果指定了 api_key_id 且不是强制刷新，优先从缓存获取
+    if request.api_key_id and not request.force_refresh:
+        cached_models = await get_upstream_models_from_cache(
+            request.provider_id, request.api_key_id
+        )
+        if cached_models is not None:
+            return {
+                "success": True,
+                "data": {"models": cached_models, "error": None, "from_cache": True},
+                "provider": {
+                    "id": provider.id,
+                    "name": provider.name,
+                },
+            }
+
+    # 缓存未命中或强制刷新，实时获取
 
     # 构建 api_format -> endpoint 映射
     format_to_endpoint: dict[str, ProviderEndpoint] = {}
@@ -89,118 +111,36 @@ async def query_available_models(
         if endpoint.is_active:
             format_to_endpoint[endpoint.api_format] = endpoint
 
+    if not format_to_endpoint:
+        raise HTTPException(status_code=400, detail="No active endpoints found for this provider")
+
+    # 获取 API Key
     if request.api_key_id:
-        # 指定了特定的 API Key（从 provider.api_keys 查找）
+        # 指定了特定的 API Key
         api_key = next(
             (key for key in provider.api_keys if key.id == request.api_key_id),
             None
         )
-
         if not api_key:
             raise HTTPException(status_code=404, detail="API Key not found")
-
-        try:
-            api_key_value = crypto_service.decrypt(api_key.api_key)
-        except Exception as e:
-            logger.error(f"Failed to decrypt API key: {e}")
-            raise HTTPException(status_code=500, detail="Failed to decrypt API key")
-
-        # 根据 Key 的 api_formats 找对应的 Endpoint
-        key_formats = api_key.api_formats or []
-        for fmt in key_formats:
-            endpoint = format_to_endpoint.get(fmt)
-            if endpoint:
-                endpoint_configs.append({
-                    "api_key": api_key_value,
-                    "base_url": endpoint.base_url,
-                    "api_format": fmt,
-                    "extra_headers": endpoint.headers,
-                })
-
-        if not endpoint_configs:
-            raise HTTPException(
-                status_code=400,
-                detail="No matching endpoint found for this API Key's formats"
-            )
     else:
-        # 遍历所有活跃端点，为每个端点找一个支持该格式的 Key
-        for endpoint in provider.endpoints:
-            if not endpoint.is_active:
-                continue
-
-            # 找第一个支持该格式的可用 Key
-            for api_key in provider.api_keys:
-                if not api_key.is_active:
-                    continue
-                key_formats = api_key.api_formats or []
-                if endpoint.api_format not in key_formats:
-                    continue
-                try:
-                    api_key_value = crypto_service.decrypt(api_key.api_key)
-                except Exception as e:
-                    logger.error(f"Failed to decrypt API key: {e}")
-                    continue
-                endpoint_configs.append({
-                    "api_key": api_key_value,
-                    "base_url": endpoint.base_url,
-                    "api_format": endpoint.api_format,
-                    "extra_headers": endpoint.headers,
-                })
-                break  # 只取第一个可用的 Key
-
-        if not endpoint_configs:
+        # 使用第一个可用的 Key
+        api_key = next(
+            (key for key in provider.api_keys if key.is_active),
+            None
+        )
+        if not api_key:
             raise HTTPException(status_code=400, detail="No active API Key found for this provider")
 
-    # 并发请求所有端点的模型列表
-    all_models: list = []
-    errors: list[str] = []
+    try:
+        api_key_value = crypto_service.decrypt(api_key.api_key)
+    except Exception as e:
+        logger.error(f"Failed to decrypt API key: {e}")
+        raise HTTPException(status_code=500, detail="Failed to decrypt API key")
 
-    async def fetch_endpoint_models(
-        client: httpx.AsyncClient, config: dict
-    ) -> tuple[list, Optional[str]]:
-        base_url = config["base_url"]
-        if not base_url:
-            return [], None
-        base_url = base_url.rstrip("/")
-        api_format = config["api_format"]
-        api_key_value = config["api_key"]
-        extra_headers = config.get("extra_headers")
-
-        try:
-            # 获取对应的 Adapter 类并调用 fetch_models
-            adapter_class = get_adapter_class_for_format(api_format)
-            if not adapter_class:
-                return [], f"Unknown API format: {api_format}"
-            models, error = await adapter_class.fetch_models(
-                client, base_url, api_key_value, extra_headers
-            )
-            # 确保所有模型都有 api_format 字段
-            for m in models:
-                if "api_format" not in m:
-                    m["api_format"] = api_format
-            return models, error
-        except Exception as e:
-            logger.error(f"Error fetching models from {api_format} endpoint: {e}")
-            return [], f"{api_format}: {str(e)}"
-
-    # 限制并发请求数量，避免触发上游速率限制
-    MAX_CONCURRENT_REQUESTS = 5
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
-    async def fetch_with_semaphore(
-        client: httpx.AsyncClient, config: dict
-    ) -> tuple[list, Optional[str]]:
-        async with semaphore:
-            return await fetch_endpoint_models(client, config)
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        results = await asyncio.gather(
-            *[fetch_with_semaphore(client, c) for c in endpoint_configs]
-        )
-        for models, error in results:
-            all_models.extend(models)
-            if error:
-                errors.append(error)
+    # 使用公共函数构建所有格式的端点配置并获取模型
+    endpoint_configs = build_all_format_configs(api_key_value, format_to_endpoint)  # type: ignore[arg-type]
+    all_models, errors, has_success = await fetch_models_from_endpoints(endpoint_configs)
 
     # 按 model id + api_format 去重（保留第一个）
     seen_keys: set[str] = set()
@@ -217,9 +157,15 @@ async def query_available_models(
     if not unique_models and not error:
         error = "No models returned from any endpoint"
 
+    # 如果指定了 api_key_id 且获取成功，写入缓存
+    if request.api_key_id and unique_models:
+        await set_upstream_models_to_cache(
+            request.provider_id, request.api_key_id, unique_models
+        )
+
     return {
         "success": len(unique_models) > 0,
-        "data": {"models": unique_models, "error": error},
+        "data": {"models": unique_models, "error": error, "from_cache": False},
         "provider": {
             "id": provider.id,
             "name": provider.name,
@@ -252,17 +198,73 @@ async def test_model(
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    # 构建 api_format -> endpoint 映射
+    # 构建 api_format -> endpoint 映射 和 id -> endpoint 映射
     format_to_endpoint: dict[str, ProviderEndpoint] = {}
+    id_to_endpoint: dict[str, ProviderEndpoint] = {}
     for ep in provider.endpoints:
         if ep.is_active:
             format_to_endpoint[ep.api_format] = ep
+            id_to_endpoint[ep.id] = ep
 
     # 找到合适的端点和 API Key
     endpoint = None
     api_key = None
 
-    if request.api_key_id:
+    # 优先级: api_format > endpoint_id > api_key_id > 自动选择
+    # 如果指定了 api_format，优先使用该格式对应的 endpoint
+    if request.api_format:
+        endpoint = format_to_endpoint.get(request.api_format)
+        if not endpoint:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No active endpoint found for API format: {request.api_format}"
+            )
+
+        if request.api_key_id:
+            # 使用指定的 Key，但需要校验是否支持该格式
+            api_key = next(
+                (key for key in provider.api_keys if key.id == request.api_key_id and key.is_active),
+                None
+            )
+            if api_key and request.api_format not in (api_key.api_formats or []):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"API Key does not support format: {request.api_format}"
+                )
+        else:
+            # 找支持该格式的第一个可用 Key
+            for key in provider.api_keys:
+                if not key.is_active:
+                    continue
+                if request.api_format in (key.api_formats or []):
+                    api_key = key
+                    break
+    elif request.endpoint_id:
+        # 使用指定的端点
+        endpoint = id_to_endpoint.get(request.endpoint_id)
+        if not endpoint:
+            raise HTTPException(status_code=404, detail="Endpoint not found or not active")
+
+        if request.api_key_id:
+            # 同时指定了 Key，需要校验是否支持该端点格式
+            api_key = next(
+                (key for key in provider.api_keys if key.id == request.api_key_id and key.is_active),
+                None
+            )
+            if api_key and endpoint.api_format not in (api_key.api_formats or []):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"API Key does not support endpoint format: {endpoint.api_format}"
+                )
+        else:
+            # 找支持该端点格式的第一个可用 Key
+            for key in provider.api_keys:
+                if not key.is_active:
+                    continue
+                if endpoint.api_format in (key.api_formats or []):
+                    api_key = key
+                    break
+    elif request.api_key_id:
         # 使用指定的 API Key
         api_key = next(
             (key for key in provider.api_keys if key.id == request.api_key_id and key.is_active),
@@ -299,14 +301,14 @@ async def test_model(
         logger.error(f"[test-model] Failed to decrypt API key: {e}")
         raise HTTPException(status_code=500, detail="Failed to decrypt API key")
 
-    # 构建请求配置（timeout 从 Provider 读取）
+    # 构建请求配置
     endpoint_config = {
         "api_key": api_key_value,
         "api_key_id": api_key.id,  # 添加API Key ID用于用量记录
         "base_url": endpoint.base_url,
         "api_format": endpoint.api_format,
-        "extra_headers": endpoint.headers,
-        "timeout": provider.timeout or TimeoutDefaults.HTTP_REQUEST,
+        "extra_headers": get_extra_headers_from_endpoint(endpoint),
+        "timeout": TimeoutDefaults.HTTP_REQUEST,
     }
 
     try:
@@ -327,7 +329,6 @@ async def test_model(
         logger.debug(f"[test-model] 端点 API Format: {endpoint.api_format}")
 
         # 如果请求指定了 api_format，优先使用它
-        target_api_format = request.api_format or endpoint.api_format
         if request.api_format and request.api_format != endpoint.api_format:
             logger.debug(f"[test-model] 请求指定 API Format: {request.api_format}")
             # 重新获取适配器
@@ -343,7 +344,6 @@ async def test_model(
                     "model": request.model_name,
                 }
             logger.debug(f"[test-model] 重新选择 Adapter: {adapter_class.__name__}")
-
         # 准备测试请求数据
         check_request = {
             "model": request.model_name,
@@ -355,7 +355,7 @@ async def test_model(
         }
 
         # 发送测试请求
-        async with httpx.AsyncClient(timeout=endpoint_config["timeout"]) as client:
+        async with httpx.AsyncClient(timeout=endpoint_config["timeout"], verify=get_ssl_context()) as client:
             # 非流式测试
             logger.debug(f"[test-model] 开始非流式测试...")
 

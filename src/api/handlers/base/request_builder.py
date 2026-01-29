@@ -16,28 +16,79 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
-from src.core.crypto import crypto_service
+from src.core.api_format import UPSTREAM_DROP_HEADERS
 
 # ==============================================================================
 # 统一的头部配置常量
 # ==============================================================================
 
-# 敏感头部 - 透传时需要清理（黑名单）
-# 这些头部要么包含认证信息，要么由代理层重新生成
-SENSITIVE_HEADERS: FrozenSet[str] = frozenset(
-    {
-        "authorization",
-        "x-api-key",
-        "x-goog-api-key",  # Gemini API 认证头
-        "host",
-        "content-length",
-        "transfer-encoding",
-        "connection",
-        # 不透传 accept-encoding，让 httpx 自己协商压缩格式
-        # 避免客户端请求 brotli/zstd 但 httpx 不支持解压的问题
-        "accept-encoding",
-    }
-)
+# 兼容别名：历史代码使用 SENSITIVE_HEADERS 命名
+SENSITIVE_HEADERS: FrozenSet[str] = UPSTREAM_DROP_HEADERS
+
+
+# ==============================================================================
+# 测试请求常量与辅助函数
+# ==============================================================================
+
+# 标准测试请求体（OpenAI 格式）
+# 用于 check_endpoint 等测试场景，使用简单安全的消息内容避免触发安全过滤
+DEFAULT_TEST_REQUEST: Dict[str, Any] = {
+    "messages": [{"role": "user", "content": "Hi"}],
+    "max_tokens": 5,
+    "temperature": 0,
+}
+
+
+def get_test_request_data(request_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """获取测试请求数据
+
+    如果传入 request_data，则合并到默认测试请求中；
+    否则使用默认测试请求。
+
+    Args:
+        request_data: 用户提供的请求数据（会覆盖默认值）
+
+    Returns:
+        合并后的测试请求数据（OpenAI 格式）
+    """
+    if request_data:
+        merged = DEFAULT_TEST_REQUEST.copy()
+        merged.update(request_data)
+        return merged
+    return DEFAULT_TEST_REQUEST.copy()
+
+
+def build_test_request_body(
+    format_id: str,
+    request_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """构建测试请求体，自动处理格式转换
+
+    使用格式转换注册表将 OpenAI 格式的测试请求转换为目标格式。
+
+    Args:
+        format_id: 目标 API 格式 ID（如 "CLAUDE", "GEMINI", "OPENAI_CLI"）
+        request_data: 可选的请求数据，会与默认测试请求合并
+
+    Returns:
+        转换为目标 API 格式的请求体
+    """
+    from src.core.api_format.conversion import (
+        format_conversion_registry,
+        register_default_normalizers,
+    )
+    from src.core.api_format.utils import get_base_format
+
+    register_default_normalizers()
+
+    # 获取测试请求数据（OpenAI 格式）
+    source_data = get_test_request_data(request_data)
+
+    # CLI 格式使用基础格式进行转换（CLAUDE_CLI -> CLAUDE）
+    target_format = get_base_format(format_id) or format_id
+
+    # 使用注册表进行格式转换 (OPENAI -> 目标基础格式)
+    return format_conversion_registry.convert_request(source_data, "OPENAI", target_format)
 
 
 # ==============================================================================
@@ -84,6 +135,15 @@ class RequestBuilder(ABC):
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
         """
         构建完整的请求（请求体 + 请求头）
+
+        Args:
+            original_body: 原始请求体
+            original_headers: 原始请求头
+            endpoint: 端点配置
+            key: Provider API Key
+            mapped_model: 映射后的模型名
+            is_stream: 是否为流式请求
+            extra_headers: 额外请求头
 
         Returns:
             Tuple[payload, headers]
@@ -148,7 +208,6 @@ class PassthroughRequestBuilder(RequestBuilder):
             original_headers=original_headers,
             extra_headers=extra_headers,
         )
-
 
 # ==============================================================================
 # 便捷函数

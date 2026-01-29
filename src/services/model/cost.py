@@ -206,16 +206,56 @@ class ModelCostService:
         return result
 
     def get_tiered_pricing(self, provider: ProviderRef, model: str) -> Optional[dict]:
-        """同步获取模型的阶梯计费配置。"""
-        import asyncio
+        """同步获取模型的阶梯计费配置（直接查缓存和数据库，避免事件循环开销）。
 
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        Returns:
+            阶梯计费配置字典，如果未找到配置则返回 None。
+            注意：与 get_tiered_pricing_async 不同，此方法仅返回 pricing 部分，不含 source 字段。
+        """
+        provider_name = self._provider_name(provider)
+        cache_key = f"{provider_name}:{model}:tiered_with_source"
 
-        return loop.run_until_complete(self.get_tiered_pricing_async(provider, model))
+        # 优先从缓存获取
+        if cache_key in self._tiered_pricing_cache:
+            result = self._tiered_pricing_cache[cache_key]
+            return result.get("pricing") if result else None
+
+        # 缓存未命中，同步查询数据库
+        provider_obj = self._resolve_provider(provider)
+        result = None
+
+        if provider_obj:
+            global_model = (
+                self.db.query(GlobalModel)
+                .filter(
+                    GlobalModel.name == model,
+                    GlobalModel.is_active == True,
+                )
+                .first()
+            )
+
+            if global_model:
+                model_obj = (
+                    self.db.query(Model)
+                    .filter(
+                        Model.provider_id == provider_obj.id,
+                        Model.global_model_id == global_model.id,
+                        Model.is_active == True,
+                    )
+                    .first()
+                )
+
+                if model_obj:
+                    if model_obj.tiered_pricing is not None:
+                        result = {"pricing": model_obj.tiered_pricing, "source": "provider"}
+                    elif global_model.default_tiered_pricing is not None:
+                        result = {"pricing": global_model.default_tiered_pricing, "source": "global"}
+                else:
+                    if global_model.default_tiered_pricing is not None:
+                        result = {"pricing": global_model.default_tiered_pricing, "source": "global"}
+
+        self._tiered_pricing_cache[cache_key] = result
+        return result.get("pricing") if result else None
 
     # ------------------------------------------------------------------
     # 公共方法
@@ -315,11 +355,7 @@ class ModelCostService:
     def get_model_price(self, provider: ProviderRef, model: str) -> Tuple[float, float]:
         """
         返回给定 provider/model 的 (input_price, output_price)。
-
-        逻辑:
-        1. 直接通过 GlobalModel.name 匹配
-        2. 查找该 Provider 的 Model 实现
-        3. 获取价格配置
+        直接查缓存和数据库，避免事件循环开销。
 
         Args:
             provider: Provider 对象或提供商名称
@@ -328,16 +364,74 @@ class ModelCostService:
         Returns:
             (input_price, output_price) 元组
         """
-        import asyncio
+        provider_name = self._provider_name(provider)
+        cache_key = f"{provider_name}:{model}"
 
-        # 在同步上下文中调用异步方法
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # 优先从缓存获取
+        if cache_key in self._price_cache:
+            prices = self._price_cache[cache_key]
+            return prices["input"], prices["output"]
 
-        return loop.run_until_complete(self.get_model_price_async(provider, model))
+        # 缓存未命中，同步查询数据库
+        provider_obj = self._resolve_provider(provider)
+        input_price = None
+        output_price = None
+
+        if provider_obj:
+            global_model = (
+                self.db.query(GlobalModel)
+                .filter(
+                    GlobalModel.name == model,
+                    GlobalModel.is_active == True,
+                )
+                .first()
+            )
+            if global_model:
+                model_obj = (
+                    self.db.query(Model)
+                    .filter(
+                        Model.provider_id == provider_obj.id,
+                        Model.global_model_id == global_model.id,
+                        Model.is_active == True,
+                    )
+                    .first()
+                )
+                if model_obj:
+                    tiered = model_obj.get_effective_tiered_pricing()
+                    if tiered and tiered.get("tiers"):
+                        first_tier = tiered["tiers"][0]
+                        input_price = first_tier.get("input_price_per_1m", 0)
+                        output_price = first_tier.get("output_price_per_1m", 0)
+                    else:
+                        input_price = model_obj.get_effective_input_price()
+                        output_price = model_obj.get_effective_output_price()
+                else:
+                    tiered = global_model.default_tiered_pricing
+                    if tiered and tiered.get("tiers"):
+                        first_tier = tiered["tiers"][0]
+                        input_price = first_tier.get("input_price_per_1m", 0)
+                        output_price = first_tier.get("output_price_per_1m", 0)
+                    else:
+                        input_price = 0.0
+                        output_price = 0.0
+
+        if input_price is None:
+            input_price = 0.0
+        if output_price is None:
+            output_price = 0.0
+
+        # 与异步版本保持一致：当 token 价格为 0 时，仅在没有按次计费配置时告警
+        if input_price == 0.0 and output_price == 0.0:
+            price_per_request = self.get_request_price(provider, model)
+            if price_per_request is None or price_per_request == 0.0:
+                logger.warning(
+                    "未找到模型价格配置: %s/%s，请在 GlobalModel 中配置价格",
+                    provider_name,
+                    model,
+                )
+
+        self._price_cache[cache_key] = {"input": input_price, "output": output_price}
+        return input_price, output_price
 
     async def get_cache_prices_async(
         self, provider: ProviderRef, model: str, input_price: float
@@ -472,54 +566,122 @@ class ModelCostService:
     def get_request_price(self, provider: ProviderRef, model: str) -> Optional[float]:
         """
         返回按次计费价格（每次请求的固定费用）。
+        直接查数据库，避免事件循环开销。
 
         Args:
             provider: Provider 对象或提供商名称
-            model: 用户请求的模型名（可能是 GlobalModel.name 或映射名）
+            model: 用户请求的模型名
 
         Returns:
             按次计费价格，如果没有配置则返回 None
         """
-        import asyncio
+        provider_obj = self._resolve_provider(provider)
+        price_per_request = None
 
-        # 在同步上下文中调用异步方法
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        if provider_obj:
+            global_model = (
+                self.db.query(GlobalModel)
+                .filter(
+                    GlobalModel.name == model,
+                    GlobalModel.is_active == True,
+                )
+                .first()
+            )
 
-        return loop.run_until_complete(self.get_request_price_async(provider, model))
+            if global_model:
+                model_obj = (
+                    self.db.query(Model)
+                    .filter(
+                        Model.provider_id == provider_obj.id,
+                        Model.global_model_id == global_model.id,
+                        Model.is_active == True,
+                    )
+                    .first()
+                )
+
+                if model_obj:
+                    price_per_request = model_obj.get_effective_price_per_request()
+                else:
+                    price_per_request = global_model.default_price_per_request
+
+        return price_per_request
 
     def get_cache_prices(
         self, provider: ProviderRef, model: str, input_price: float
     ) -> Tuple[Optional[float], Optional[float]]:
         """
         返回缓存创建/读取价格（每 1M tokens）。
-
-        逻辑:
-        1. 直接通过 GlobalModel.name 匹配
-        2. 查找该 Provider 的 Model 实现
-        3. 获取缓存价格配置
+        直接查缓存和数据库，避免事件循环开销。
 
         Args:
             provider: Provider 对象或提供商名称
             model: 用户请求的模型名（必须是 GlobalModel.name）
-            input_price: 基础输入价格（用于 Claude 模型的默认估算）
+            input_price: 基础输入价格（用于默认估算）
 
         Returns:
             (cache_creation_price, cache_read_price) 元组
         """
-        import asyncio
+        provider_name = self._provider_name(provider)
+        cache_key = f"{provider_name}:{model}"
 
-        # 在同步上下文中调用异步方法
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # 优先从缓存获取
+        if cache_key in self._cache_price_cache:
+            prices = self._cache_price_cache[cache_key]
+            return prices["creation"], prices["read"]
 
-        return loop.run_until_complete(self.get_cache_prices_async(provider, model, input_price))
+        # 缓存未命中，同步查询数据库
+        provider_obj = self._resolve_provider(provider)
+        cache_creation_price = None
+        cache_read_price = None
+
+        if provider_obj:
+            global_model = (
+                self.db.query(GlobalModel)
+                .filter(
+                    GlobalModel.name == model,
+                    GlobalModel.is_active == True,
+                )
+                .first()
+            )
+
+            if global_model:
+                model_obj = (
+                    self.db.query(Model)
+                    .filter(
+                        Model.provider_id == provider_obj.id,
+                        Model.global_model_id == global_model.id,
+                        Model.is_active == True,
+                    )
+                    .first()
+                )
+
+                if model_obj:
+                    tiered = model_obj.get_effective_tiered_pricing()
+                    if tiered and tiered.get("tiers"):
+                        first_tier = tiered["tiers"][0]
+                        cache_creation_price = first_tier.get("cache_creation_price_per_1m")
+                        cache_read_price = first_tier.get("cache_read_price_per_1m")
+                    else:
+                        cache_creation_price = model_obj.get_effective_cache_creation_price()
+                        cache_read_price = model_obj.get_effective_cache_read_price()
+                else:
+                    tiered = global_model.default_tiered_pricing
+                    if tiered and tiered.get("tiers"):
+                        first_tier = tiered["tiers"][0]
+                        cache_creation_price = first_tier.get("cache_creation_price_per_1m")
+                        cache_read_price = first_tier.get("cache_read_price_per_1m")
+
+        # 默认缓存价格估算
+        if cache_creation_price is None:
+            cache_creation_price = input_price * 1.25
+        if cache_read_price is None:
+            cache_read_price = input_price * 0.1
+
+        self._cache_price_cache[cache_key] = {
+            "creation": cache_creation_price,
+            "read": cache_read_price,
+        }
+        return cache_creation_price, cache_read_price
 
     def calculate_cost(
         self,

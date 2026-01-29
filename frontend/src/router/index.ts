@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useModuleStore } from '@/stores/modules'
 import { importWithRetry } from '@/utils/importRetry'
 import { log } from '@/utils/logger'
 
@@ -13,9 +14,21 @@ const routes: RouteRecordRaw[] = [
   },
 
   {
+    path: '/guide',
+    name: 'Guide',
+    component: () => importWithRetry(() => import('@/views/public/Guide.vue')),
+    meta: { requiresAuth: false }
+  },
+  {
     path: '/logo-demo',
     name: 'LogoColorDemo',
     component: () => importWithRetry(() => import('@/views/public/LogoColorDemo.vue')),
+    meta: { requiresAuth: false }
+  },
+  {
+    path: '/auth/callback',
+    name: 'AuthCallback',
+    component: () => importWithRetry(() => import('@/views/public/AuthCallback.vue')),
     meta: { requiresAuth: false }
   },
 
@@ -117,6 +130,11 @@ const routes: RouteRecordRaw[] = [
         component: () => importWithRetry(() => import('@/views/admin/SystemSettings.vue'))
       },
       {
+        path: 'modules',
+        name: 'ModuleManagement',
+        component: () => importWithRetry(() => import('@/views/admin/ModuleManagement.vue'))
+      },
+      {
         path: 'email',
         name: 'EmailSettings',
         component: () => importWithRetry(() => import('@/views/admin/EmailSettings.vue'))
@@ -124,7 +142,14 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'ldap',
         name: 'LdapSettings',
-        component: () => importWithRetry(() => import('@/views/admin/LdapSettings.vue'))
+        component: () => importWithRetry(() => import('@/views/admin/LdapSettings.vue')),
+        meta: { module: 'ldap' }
+      },
+      {
+        path: 'oauth',
+        name: 'OAuthSettings',
+        component: () => importWithRetry(() => import('@/views/admin/OAuthSettings.vue')),
+        meta: { module: 'oauth' }
       },
       {
         path: 'audit-logs',
@@ -164,6 +189,7 @@ function isNetworkError(error: any): boolean {
 
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+  const moduleStore = useModuleStore()
 
   try {
     // 如果有token但没有用户信息,尝试获取用户信息
@@ -186,6 +212,7 @@ router.beforeEach(async (to, from, next) => {
     // 检查整个路由匹配记录链中的 meta
     const requiresAuth = to.matched.some(record => record.meta.requiresAuth !== false)
     const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
+    const moduleName = to.matched.find(record => record.meta.module)?.meta.module as string | undefined
 
     // 如果需要认证但没有token,跳转到首页
     if (requiresAuth && !authStore.token) {
@@ -212,6 +239,27 @@ router.beforeEach(async (to, from, next) => {
         log.warn('Non-admin user attempted to access admin page, redirecting to user dashboard')
         next('/dashboard')
       } else {
+        // 检查模块可用性
+        if (moduleName) {
+          // 确保模块状态已加载
+          if (!moduleStore.loaded) {
+            try {
+              await moduleStore.fetchModules()
+            } catch (error) {
+              // fail-close: 获取模块状态失败时拒绝访问
+              log.warn('Failed to fetch modules status, denying access', { error })
+              next('/admin/dashboard')
+              return
+            }
+          }
+          // 如果模块不可用（未部署），重定向到管理员首页
+          // 注意：只检查 available，不检查 enabled/active，允许管理员配置未启用的模块
+          if (!moduleStore.isAvailable(moduleName)) {
+            log.warn(`Module ${moduleName} is not available, redirecting to admin dashboard`)
+            next('/admin/dashboard')
+            return
+          }
+        }
         next()
       }
     } else {

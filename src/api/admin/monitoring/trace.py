@@ -60,7 +60,7 @@ class RequestTraceResponse(BaseModel):
 
     request_id: str
     total_candidates: int
-    final_status: str  # 'success', 'failed', 'streaming', 'pending'
+    final_status: str  # 'success', 'failed', 'cancelled', 'streaming', 'pending'
     total_latency_ms: int
     candidates: List[CandidateResponse]
 
@@ -164,12 +164,12 @@ class AdminGetRequestTraceAdapter(AdminApiAdapter):
         if not candidates:
             raise HTTPException(status_code=404, detail="Request not found")
 
-        # 计算总延迟（只统计已完成的候选：success 或 failed）
+        # 计算总延迟（只统计已完成的候选：success, failed, cancelled）
         # 使用显式的 is not None 检查，避免过滤掉 0ms 的快速响应
         total_latency = sum(
             c.latency_ms
             for c in candidates
-            if c.status in ("success", "failed") and c.latency_ms is not None
+            if c.status in ("success", "failed", "cancelled") and c.latency_ms is not None
         )
 
         # 判断最终状态：
@@ -179,6 +179,7 @@ class AdminGetRequestTraceAdapter(AdminApiAdapter):
         #    - 用于兼容非流式请求或未正确设置 status 的旧数据
         # 3. status="streaming" 表示流式请求正在进行中
         # 4. status="pending" 表示请求尚未开始执行
+        # 5. status="cancelled" 表示客户端主动断开连接（不算失败）
         has_success = any(
             c.status == "success"
             or (c.status_code is not None and 200 <= c.status_code < 300)
@@ -186,6 +187,8 @@ class AdminGetRequestTraceAdapter(AdminApiAdapter):
         )
         has_streaming = any(c.status == "streaming" for c in candidates)
         has_pending = any(c.status == "pending" for c in candidates)
+        has_cancelled = any(c.status == "cancelled" for c in candidates)
+        has_failed = any(c.status == "failed" for c in candidates)
 
         if has_success:
             final_status = "success"
@@ -195,6 +198,9 @@ class AdminGetRequestTraceAdapter(AdminApiAdapter):
         elif has_pending:
             # 有候选正在等待执行
             final_status = "pending"
+        elif has_cancelled and not has_failed:
+            # 只有取消没有失败，算作取消
+            final_status = "cancelled"
         else:
             final_status = "failed"
 

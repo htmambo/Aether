@@ -301,6 +301,7 @@
         :current="currentPage"
         :total="totalTokens"
         :page-size="pageSize"
+        cache-key="management-tokens-page-size"
         @update:current="currentPage = $event"
         @update:page-size="handlePageSizeChange"
       />

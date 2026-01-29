@@ -7,21 +7,27 @@
 - 扫描所有启用了 auto_fetch_models 的 ProviderAPIKey
 - 调用 Adapter.fetch_models() 获取模型列表
 - 更新 Key 的 allowed_models（保留 locked_models 中的模型）
+- 支持包含/排除规则过滤模型
 - 记录获取结果和错误信息
 """
 
 import asyncio
+import fnmatch
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional, Set
 
-import httpx
 from sqlalchemy.orm import Session, joinedload
 
+from src.core.cache_service import CacheService
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.database import create_session
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
+from src.models.database import Provider, ProviderAPIKey
+from src.services.model.upstream_fetcher import (
+    build_all_format_configs,
+    fetch_models_from_endpoints,
+)
 from src.services.system.scheduler import get_scheduler
 
 # 从环境变量读取间隔，默认 1440 分钟（1 天），限制在 60-10080 分钟之间
@@ -34,20 +40,96 @@ MAX_CONCURRENT_REQUESTS = 5
 # 单个 Key 处理的超时时间（秒）
 KEY_FETCH_TIMEOUT_SECONDS = 120
 
+# 上游模型缓存 TTL（与定时任务间隔保持一致）
+UPSTREAM_MODELS_CACHE_TTL_SECONDS = MODEL_FETCH_INTERVAL_MINUTES * 60
 
-def _get_adapter_for_format(api_format: str) -> Optional[type]:
-    """根据 API 格式获取对应的 Adapter 类"""
-    # 延迟导入避免循环依赖
-    from src.api.handlers.base.chat_adapter_base import get_adapter_class
-    from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
 
-    adapter_class = get_adapter_class(api_format)
-    if adapter_class:
-        return adapter_class
-    cli_adapter_class = get_cli_adapter_class(api_format)
-    if cli_adapter_class:
-        return cli_adapter_class
+def _match_pattern(model_id: str, pattern: str) -> bool:
+    """
+    检查模型 ID 是否匹配模式
+
+    支持的通配符:
+    - * 匹配任意字符（包括空）
+    - ? 匹配单个字符
+
+    Args:
+        model_id: 模型 ID
+        pattern: 匹配模式
+
+    Returns:
+        是否匹配
+    """
+    return fnmatch.fnmatch(model_id.lower(), pattern.lower())
+
+
+def _filter_models_by_patterns(
+    model_ids: Set[str],
+    include_patterns: Optional[List[str]],
+    exclude_patterns: Optional[List[str]],
+) -> Set[str]:
+    """
+    根据包含/排除规则过滤模型列表
+
+    规则优先级:
+    1. 如果 include_patterns 为空或 None，则包含所有模型
+    2. 如果 include_patterns 不为空，则只包含匹配的模型
+    3. exclude_patterns 总是会排除匹配的模型（优先级高于 include）
+
+    Args:
+        model_ids: 原始模型 ID 集合
+        include_patterns: 包含规则列表（支持 * 和 ? 通配符）
+        exclude_patterns: 排除规则列表（支持 * 和 ? 通配符）
+
+    Returns:
+        过滤后的模型 ID 集合
+    """
+    result = set()
+
+    for model_id in model_ids:
+        # 步骤1: 检查是否应该包含
+        should_include = True
+        if include_patterns:
+            # 有包含规则时，必须匹配至少一个规则
+            should_include = any(_match_pattern(model_id, p) for p in include_patterns)
+
+        if not should_include:
+            continue
+
+        # 步骤2: 检查是否应该排除
+        should_exclude = False
+        if exclude_patterns:
+            should_exclude = any(_match_pattern(model_id, p) for p in exclude_patterns)
+
+        if not should_exclude:
+            result.add(model_id)
+
+    return result
+
+
+def _get_upstream_models_cache_key(provider_id: str, api_key_id: str) -> str:
+    """生成上游模型缓存的 key"""
+    return f"upstream_models:{provider_id}:{api_key_id}"
+
+
+async def get_upstream_models_from_cache(
+    provider_id: str, api_key_id: str
+) -> Optional[list[dict]]:
+    """从缓存获取上游模型列表"""
+    cache_key = _get_upstream_models_cache_key(provider_id, api_key_id)
+    cached = await CacheService.get(cache_key)
+    if cached is not None:
+        logger.debug(f"上游模型缓存命中: {cache_key}")
+        return cached  # type: ignore[no-any-return]
     return None
+
+
+async def set_upstream_models_to_cache(
+    provider_id: str, api_key_id: str, models: list[dict]
+) -> None:
+    """将上游模型列表写入缓存"""
+    cache_key = _get_upstream_models_cache_key(provider_id, api_key_id)
+    await CacheService.set(cache_key, models, UPSTREAM_MODELS_CACHE_TTL_SECONDS)
+    logger.debug(f"上游模型已缓存: {cache_key}, 数量={len(models)}")
 
 
 class ModelFetchScheduler:
@@ -246,7 +328,7 @@ class ModelFetchScheduler:
             return "error"
 
         # 构建 api_format -> endpoint 映射
-        format_to_endpoint: dict[str, ProviderEndpoint] = {}
+        format_to_endpoint: dict[str, object] = {}
         for endpoint in provider.endpoints:  # type: ignore[attr-defined]
             if endpoint.is_active:
                 format_to_endpoint[endpoint.api_format] = endpoint
@@ -257,43 +339,27 @@ class ModelFetchScheduler:
             key.last_models_fetch_at = now
             return "error"
 
-        # 收集端点配置
-        endpoint_configs: list[dict] = []
-        key_formats = key.api_formats or []
-        for fmt in key_formats:
-            endpoint = format_to_endpoint.get(fmt)
-            if endpoint:
-                endpoint_configs.append(
-                    {
-                        "api_key": api_key_value,
-                        "base_url": endpoint.base_url,
-                        "api_format": fmt,
-                        "extra_headers": endpoint.headers,
-                    }
-                )
-
-        if not endpoint_configs:
-            logger.warning(f"Provider {provider.name} 没有匹配 Key {key.id} 格式的端点配置")
-            key.last_models_fetch_error = "No matching endpoints for key formats"
-            key.last_models_fetch_at = now
-            return "error"
+        # 使用公共函数构建所有格式的端点配置
+        endpoint_configs = build_all_format_configs(api_key_value, format_to_endpoint)  # type: ignore[arg-type]
 
         # 并发获取模型
-        all_models, errors, has_success = await self._fetch_models_from_endpoints(endpoint_configs)
+        all_models, errors, has_success = await fetch_models_from_endpoints(endpoint_configs)
 
-        # 记录获取结果
-        error_msg = "; ".join(errors) if errors else None
+        # 记录获取时间
         key.last_models_fetch_at = now
-        key.last_models_fetch_error = error_msg
 
         # 如果没有任何成功的响应，不更新 allowed_models（保留旧数据）
         if not has_success:
+            # 所有端点都失败时，记录错误
+            error_msg = "; ".join(errors) if errors else "All endpoints failed"
+            key.last_models_fetch_error = error_msg
             logger.warning(
                 f"Provider {provider.name} Key {key.id} 所有端点获取失败，保留现有模型列表"
             )
-            if not error_msg:
-                key.last_models_fetch_error = "All endpoints failed"
             return "error"
+
+        # 有成功的响应，清除错误状态（部分失败不算失败）
+        key.last_models_fetch_error = None
 
         # 去重获取模型 ID 列表
         fetched_model_ids: set[str] = set()
@@ -306,6 +372,22 @@ class ModelFetchScheduler:
             f"Provider {provider.name} Key {key.id} 获取到 {len(fetched_model_ids)} 个唯一模型"
         )
 
+        # 写入上游模型缓存（按 model id + api_format 去重后的完整模型信息）
+        seen_keys: set[str] = set()
+        unique_models: list[dict] = []
+        for model in all_models:
+            model_id = model.get("id")
+            api_format = model.get("api_format", "")
+            unique_key = f"{model_id}:{api_format}"
+            if model_id and unique_key not in seen_keys:
+                seen_keys.add(unique_key)
+                unique_models.append(model)
+        await set_upstream_models_to_cache(
+            provider_id,  # type: ignore[arg-type]
+            key.id,  # type: ignore[arg-type]
+            unique_models,
+        )
+
         # 更新 allowed_models（保留 locked_models）
         has_changed = self._update_key_allowed_models(key, fetched_model_ids)
 
@@ -313,7 +395,7 @@ class ModelFetchScheduler:
         if has_changed and provider_id:
             from src.services.model.global_model import on_key_allowed_models_changed
 
-            on_key_allowed_models_changed(
+            await on_key_allowed_models_changed(
                 db=db,
                 provider_id=provider_id,
                 allowed_models=list(key.allowed_models or []),
@@ -323,7 +405,7 @@ class ModelFetchScheduler:
 
     def _update_key_allowed_models(self, key: ProviderAPIKey, fetched_model_ids: set[str]) -> bool:
         """
-        更新 Key 的 allowed_models，保留 locked_models
+        更新 Key 的 allowed_models，保留 locked_models，应用过滤规则
 
         Returns:
             bool: 是否有变化
@@ -331,9 +413,26 @@ class ModelFetchScheduler:
         # 获取当前锁定的模型
         locked_models = set(key.locked_models or [])
 
-        # 新的 allowed_models = 获取到的模型 + 锁定的模型
+        # 应用包含/排除过滤规则
+        include_patterns = key.model_include_patterns
+        exclude_patterns = key.model_exclude_patterns
+
+        filtered_model_ids = _filter_models_by_patterns(
+            fetched_model_ids, include_patterns, exclude_patterns
+        )
+
+        # 记录过滤结果
+        if include_patterns or exclude_patterns:
+            filtered_count = len(fetched_model_ids) - len(filtered_model_ids)
+            if filtered_count > 0:
+                logger.info(
+                    f"Key {key.id} 过滤规则生效: 原始 {len(fetched_model_ids)} 个模型, "
+                    f"过滤后 {len(filtered_model_ids)} 个 (排除 {filtered_count} 个)"
+                )
+
+        # 新的 allowed_models = 过滤后的模型 + 锁定的模型
         # 锁定模型无论上游是否返回都会保留
-        new_allowed_models = list(fetched_model_ids | locked_models)
+        new_allowed_models = list(filtered_model_ids | locked_models)
         new_allowed_models.sort()  # 保持顺序稳定
 
         # 检查是否有变化
@@ -353,62 +452,6 @@ class ModelFetchScheduler:
         else:
             logger.debug(f"Key {key.id} 模型列表无变化")
             return False
-
-    async def _fetch_models_from_endpoints(
-        self, endpoint_configs: list[dict]
-    ) -> tuple[list[dict], list[str], bool]:
-        """从多个端点并发获取模型，返回 (模型列表, 错误列表, 是否有成功)"""
-        all_models: list[dict] = []
-        errors: list[str] = []
-        has_success = False
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
-        async def fetch_one(
-            client: httpx.AsyncClient, config: dict
-        ) -> tuple[list, Optional[str], bool]:
-            base_url = config["base_url"]
-            if not base_url:
-                return [], None, False
-            base_url = base_url.rstrip("/")
-            api_format = config["api_format"]
-            api_key_value = config["api_key"]
-            extra_headers = config.get("extra_headers")
-
-            try:
-                adapter_class = _get_adapter_for_format(api_format)
-                if not adapter_class:
-                    return [], f"Unknown API format: {api_format}", False
-
-                async with semaphore:
-                    models, error = await adapter_class.fetch_models(  # type: ignore[attr-defined]
-                        client, base_url, api_key_value, extra_headers
-                    )
-
-                for m in models:
-                    if "api_format" not in m:
-                        m["api_format"] = api_format
-
-                # 即使返回空列表，只要没有错误也算成功
-                success = error is None
-                return models, error, success
-            except httpx.TimeoutException:
-                logger.warning(f"获取 {api_format} 模型超时")
-                return [], f"{api_format}: timeout", False
-            except Exception as e:
-                # 只记录异常类型，避免泄露敏感信息
-                logger.exception(f"获取 {api_format} 模型出错")
-                return [], f"{api_format}: {type(e).__name__}", False
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            results = await asyncio.gather(*[fetch_one(client, c) for c in endpoint_configs])
-            for models, error, success in results:
-                all_models.extend(models)
-                if error:
-                    errors.append(error)
-                if success:
-                    has_success = True
-
-        return all_models, errors, has_success
 
 
 # 单例模式

@@ -10,7 +10,10 @@
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from src.core.api_format.conversion.stream_state import StreamState
 
 
 @dataclass
@@ -73,14 +76,21 @@ class StreamContext:
 
     # 格式转换信息（CLI handler 需要）
     client_api_format: str = ""
+    needs_conversion: bool = False  # 是否需要跨格式转换（由 handler 层设置）
 
     # Provider 响应元数据（CLI handler 需要）
     response_metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # 整流标记（Thinking Rectifier）
+    rectified: bool = False  # 请求是否经过整流（移除 thinking 块后重试）
 
     # 流式处理统计
     data_count: int = 0
     chunk_count: int = 0
     parsed_chunks: List[Dict[str, Any]] = field(default_factory=list)
+
+    # 流式格式转换状态（跨 chunk 追踪）
+    stream_conversion_state: Optional["StreamState"] = None
 
     def reset_for_retry(self) -> None:
         """
@@ -109,6 +119,8 @@ class StreamContext:
         self.response_id = None
         self.final_usage = None
         self.final_response = None
+        self.stream_conversion_state = None
+        self.needs_conversion = False
 
     @property
     def collected_text(self) -> str:
@@ -213,6 +225,10 @@ class StreamContext:
     def is_success(self) -> bool:
         """检查请求是否成功"""
         return self.status_code < 400
+
+    def is_client_disconnected(self) -> bool:
+        """检查是否因客户端断开连接而结束"""
+        return self.status_code == 499
 
     def build_response_body(self, response_time_ms: int) -> Dict[str, Any]:
         """

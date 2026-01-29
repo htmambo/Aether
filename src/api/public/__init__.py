@@ -7,6 +7,7 @@ from .catalog import router as catalog_router
 from .claude import router as claude_router
 from .gemini import router as gemini_router
 from .models import router as models_router
+from .modules import router as modules_router
 from .openai import router as openai_router
 from .system_catalog import router as system_catalog_router
 
@@ -19,5 +20,6 @@ router.include_router(gemini_router, tags=["Gemini API"])
 router.include_router(system_catalog_router, tags=["System Catalog"])
 router.include_router(catalog_router)
 router.include_router(capabilities_router)
+router.include_router(modules_router)
 
 __all__ = ["router"]

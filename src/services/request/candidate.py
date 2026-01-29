@@ -165,6 +165,9 @@ class RequestCandidateService:
             candidate.latency_ms = latency_ms
             candidate.concurrent_requests = concurrent_requests
             candidate.finished_at = datetime.now(timezone.utc)
+            # 成功时清空错误字段（可能是整流重试后成功，之前记录过错误）
+            candidate.error_type = None
+            candidate.error_message = None
             if extra_data:
                 candidate.extra_data = {**(candidate.extra_data or {}), **extra_data}
             # 关键状态更新：立即提交，不使用批量提交
@@ -208,6 +211,39 @@ class RequestCandidateService:
                 candidate.extra_data = {**(candidate.extra_data or {}), **extra_data}
             # 关键状态更新：立即提交，不使用批量提交
             # 原因：前端需要实时看到请求成功/失败状态
+            db.commit()
+
+    @staticmethod
+    def mark_candidate_cancelled(
+        db: Session,
+        candidate_id: str,
+        status_code: int = 499,
+        latency_ms: Optional[int] = None,
+        concurrent_requests: Optional[int] = None,
+        extra_data: Optional[dict] = None,
+    ) -> None:
+        """
+        标记候选被客户端取消
+
+        客户端主动断开连接不算系统失败，使用 cancelled 状态。
+
+        Args:
+            db: 数据库会话
+            candidate_id: 候选ID
+            status_code: HTTP 状态码（通常是 499）
+            latency_ms: 延迟（毫秒）
+            concurrent_requests: 并发请求数
+            extra_data: 额外数据
+        """
+        candidate = db.query(RequestCandidate).filter(RequestCandidate.id == candidate_id).first()
+        if candidate:
+            candidate.status = "cancelled"
+            candidate.status_code = status_code
+            candidate.latency_ms = latency_ms
+            candidate.concurrent_requests = concurrent_requests
+            candidate.finished_at = datetime.now(timezone.utc)
+            if extra_data:
+                candidate.extra_data = {**(candidate.extra_data or {}), **extra_data}
             db.commit()
 
     @staticmethod
@@ -273,11 +309,12 @@ class RequestCandidateService:
         total_candidates = len(candidates)
         success_count = sum(1 for c in candidates if c.status == "success")
         failed_count = sum(1 for c in candidates if c.status == "failed")
+        cancelled_count = sum(1 for c in candidates if c.status == "cancelled")
         skipped_count = sum(1 for c in candidates if c.status == "skipped")
         pending_count = sum(1 for c in candidates if c.status == "pending")
         available_count = sum(1 for c in candidates if c.status == "available")
 
-        # 计算失败率（只统计已完成的候选，即成功或失败的）
+        # 计算失败率（只统计已完成的候选，即成功或失败的，cancelled 不算失败）
         completed_count = success_count + failed_count
         failure_rate = (failed_count / completed_count * 100) if completed_count > 0 else 0
 
@@ -285,9 +322,10 @@ class RequestCandidateService:
             "total_attempts": total_candidates,  # 前端使用 total_attempts 字段
             "success_count": success_count,
             "failed_count": failed_count,
+            "cancelled_count": cancelled_count,  # 客户端取消数
             "skipped_count": skipped_count,
             "pending_count": pending_count,
-            "available_count": available_count,  # 新增：尚未被调度的候选数
+            "available_count": available_count,  # 尚未被调度的候选数
             "failure_rate": round(failure_rate, 2),
         }
 

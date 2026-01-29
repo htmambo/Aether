@@ -4,7 +4,7 @@ Gemini CLI Adapter - 基于通用 CLI Adapter 基类的实现
 继承 CliAdapterBase，处理 Gemini CLI 格式的请求。
 """
 
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, Union
+from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
 from fastapi import Request
@@ -13,6 +13,7 @@ from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
 from src.api.handlers.gemini.adapter import GeminiChatAdapter
 from src.config.settings import config
+from src.core.api_format import extract_client_api_key_with_query
 
 
 @register_cli_adapter
@@ -38,8 +39,18 @@ class GeminiCliAdapter(CliAdapterBase):
         super().__init__(allowed_api_formats or ["GEMINI_CLI"])
 
     def extract_api_key(self, request: Request) -> Optional[str]:
-        """从请求中提取 API 密钥 (x-goog-api-key)"""
-        return request.headers.get("x-goog-api-key")
+        """
+        从请求中提取 API 密钥 - Gemini CLI 支持 header 和 query 两种方式
+
+        优先级（与 Google SDK 行为一致）：
+        1. URL 参数 ?key=
+        2. x-goog-api-key 请求头
+        """
+        return extract_client_api_key_with_query(
+            dict(request.headers),
+            dict(request.query_params),
+            self._get_api_format(),
+        )
 
     def _merge_path_params(
         self, original_request_body: Dict[str, Any], path_params: Dict[str, Any]  # noqa: ARG002
@@ -147,32 +158,7 @@ class GeminiCliAdapter(CliAdapterBase):
             prefix = f"{base_url}/v1beta"
         return f"{prefix}/models/{effective_model_name}:generateContent"
 
-    @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建Gemini CLI API认证头"""
-        return {
-            "x-goog-api-key": api_key,
-            "Content-Type": "application/json",
-        }
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """返回Gemini CLI API的保护头部key"""
-        return ("x-goog-api-key", "content-type")
-
-    @classmethod
-    def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:
-        """构建Gemini CLI API请求体"""
-        return {
-            "contents": request_data.get("messages", []),
-            "generationConfig": {
-                "maxOutputTokens": request_data.get("max_tokens", 100),
-                "temperature": request_data.get("temperature", 0.7),
-            },
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}
-            ],
-        }
+    # build_request_body 使用基类实现，通过 format_conversion_registry 自动转换 OPENAI -> GEMINI_CLI
 
     @classmethod
     def get_cli_user_agent(cls) -> Optional[str]:

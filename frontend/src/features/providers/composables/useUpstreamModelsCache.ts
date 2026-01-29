@@ -1,25 +1,16 @@
 /**
- * 上游模型缓存 - 共享缓存，避免重复请求
+ * 上游模型获取服务
+ *
+ * 缓存已移至后端（Redis），前端只保留并发请求去重，避免同时发多个相同请求。
  */
 import { ref } from 'vue'
 import { adminApi } from '@/api/admin'
 import { parseUpstreamModelError } from '@/utils/errorParser'
 import type { UpstreamModel } from '@/api/endpoints/types'
 
-// 扩展类型，包含可能的额外字段
 export type { UpstreamModel }
 
-interface CacheEntry {
-  models: UpstreamModel[]
-  timestamp: number
-}
-
-type FetchResult = { models: UpstreamModel[]; error?: string }
-
-// 全局缓存（模块级别，所有组件共享）
-// 支持两种 key: providerId 或 providerId:apiKeyId
-const cache = new Map<string, CacheEntry>()
-const CACHE_TTL = 5 * 60 * 1000 // 5分钟
+type FetchResult = { models: UpstreamModel[]; error?: string; fromCache?: boolean }
 
 // 进行中的请求（用于去重并发请求）
 const pendingRequests = new Map<string, Promise<FetchResult>>()
@@ -28,9 +19,9 @@ const pendingRequests = new Map<string, Promise<FetchResult>>()
 const loadingMap = ref<Map<string, boolean>>(new Map())
 
 /**
- * 生成缓存 key
+ * 生成请求 key
  */
-function getCacheKey(providerId: string, apiKeyId?: string): string {
+function getRequestKey(providerId: string, apiKeyId?: string): string {
   return apiKeyId ? `${providerId}:${apiKeyId}` : providerId
 }
 
@@ -39,93 +30,59 @@ export function useUpstreamModelsCache() {
    * 获取上游模型列表
    * @param providerId 提供商ID
    * @param apiKeyId 可选的 API Key ID（用于获取特定 Key 支持的模型）
-   * @param forceRefresh 是否强制刷新
-   * @returns 模型列表或 null（如果请求失败）
+   * @param forceRefresh 是否强制刷新（跳过后端缓存）
+   * @returns 模型列表或错误信息
    */
   async function fetchModels(
     providerId: string,
     apiKeyId?: string,
     forceRefresh = false
   ): Promise<FetchResult> {
-    const cacheKey = getCacheKey(providerId, apiKeyId)
+    const requestKey = getRequestKey(providerId, apiKeyId)
 
-    // 检查缓存
-    if (!forceRefresh) {
-      const cached = cache.get(cacheKey)
-      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return { models: cached.models }
-      }
-    }
-
-    // 检查是否有进行中的请求（非强制刷新时复用）
-    if (!forceRefresh && pendingRequests.has(cacheKey)) {
-      return pendingRequests.get(cacheKey)!
+    // 强制刷新时不复用进行中的请求
+    if (!forceRefresh && pendingRequests.has(requestKey)) {
+      return pendingRequests.get(requestKey)!
     }
 
     // 创建新请求
     const requestPromise = (async (): Promise<FetchResult> => {
       try {
-        loadingMap.value.set(cacheKey, true)
-        const response = await adminApi.queryProviderModels(providerId, apiKeyId)
+        loadingMap.value.set(requestKey, true)
+        const response = await adminApi.queryProviderModels(providerId, apiKeyId, forceRefresh)
 
         if (response.success && response.data?.models) {
-          // 存入缓存
-          cache.set(cacheKey, {
+          return {
             models: response.data.models,
-            timestamp: Date.now()
-          })
-          return { models: response.data.models }
+            fromCache: response.data.from_cache
+          }
         } else {
-          // 使用友好的错误解析
           const rawError = response.data?.error || '获取上游模型失败'
           return { models: [], error: parseUpstreamModelError(rawError) }
         }
       } catch (err: any) {
-        // 使用友好的错误解析
         const rawError = err.response?.data?.detail || err.message || '获取上游模型失败'
         return { models: [], error: parseUpstreamModelError(rawError) }
       } finally {
-        loadingMap.value.set(cacheKey, false)
-        pendingRequests.delete(cacheKey)
+        loadingMap.value.set(requestKey, false)
+        pendingRequests.delete(requestKey)
       }
     })()
 
-    pendingRequests.set(cacheKey, requestPromise)
+    pendingRequests.set(requestKey, requestPromise)
     return requestPromise
-  }
-
-  /**
-   * 获取缓存的模型（不发起请求）
-   */
-  function getCachedModels(providerId: string, apiKeyId?: string): UpstreamModel[] | null {
-    const cacheKey = getCacheKey(providerId, apiKeyId)
-    const cached = cache.get(cacheKey)
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return cached.models
-    }
-    return null
-  }
-
-  /**
-   * 清除指定提供商/Key的缓存
-   */
-  function clearCache(providerId: string, apiKeyId?: string) {
-    const cacheKey = getCacheKey(providerId, apiKeyId)
-    cache.delete(cacheKey)
   }
 
   /**
    * 检查是否正在加载
    */
   function isLoading(providerId: string, apiKeyId?: string): boolean {
-    const cacheKey = getCacheKey(providerId, apiKeyId)
-    return loadingMap.value.get(cacheKey) || false
+    const requestKey = getRequestKey(providerId, apiKeyId)
+    return loadingMap.value.get(requestKey) || false
   }
 
   return {
     fetchModels,
-    getCachedModels,
-    clearCache,
     isLoading,
     loadingMap
   }

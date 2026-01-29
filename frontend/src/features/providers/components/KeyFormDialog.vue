@@ -38,19 +38,9 @@
             :id="apiKeyInputId"
             v-model="form.api_key"
             :name="apiKeyFieldName"
-            :type="apiKeyInputType"
+            masked
             :required="!editingKey"
             :placeholder="editingKey ? editingKey.api_key_masked : 'sk-...'"
-            :class="getApiKeyInputClass()"
-            autocomplete="new-password"
-            autocapitalize="none"
-            autocorrect="off"
-            spellcheck="false"
-            data-form-type="other"
-            data-lpignore="true"
-            data-1p-ignore="true"
-            @focus="apiKeyFocused = true"
-            @blur="apiKeyFocused = form.api_key.trim().length > 0"
           />
           <p
             v-if="apiKeyError"
@@ -221,20 +211,48 @@
       </div>
 
       <!-- 自动获取模型 -->
-      <div class="flex items-center justify-between py-2 px-3 rounded-md border border-border/60 bg-muted/30">
-        <div class="space-y-0.5">
-          <Label class="text-sm font-medium">自动获取模型</Label>
+      <div class="space-y-3 py-2 px-3 rounded-md border border-border/60 bg-muted/30">
+        <div class="flex items-center justify-between">
+          <div class="space-y-0.5">
+            <Label class="text-sm font-medium">自动获取上游可用模型</Label>
+            <p class="text-xs text-muted-foreground">
+              定时更新上游模型, 配合模型映射使用
+            </p>
+            <p
+              v-if="showAutoFetchWarning"
+              class="text-xs text-amber-600 dark:text-amber-400"
+            >
+              已配置的模型权限将在下次获取时被覆盖
+            </p>
+          </div>
+          <Switch v-model="form.auto_fetch_models" />
+        </div>
+
+        <!-- 模型过滤规则（仅当开启自动获取时显示） -->
+        <div
+          v-if="form.auto_fetch_models"
+          class="space-y-2 pt-2 border-t border-border/40"
+        >
+          <div>
+            <Label class="text-xs">包含规则</Label>
+            <Input
+              v-model="form.model_include_patterns_text"
+              placeholder="gpt-*, claude-*, 留空包含全部"
+              class="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label class="text-xs">排除规则</Label>
+            <Input
+              v-model="form.model_exclude_patterns_text"
+              placeholder="*-preview, *-beta"
+              class="h-8 text-sm"
+            />
+          </div>
           <p class="text-xs text-muted-foreground">
-            系统将定时从上游获取可用模型, 但无法默认接受提供商模型
-          </p>
-          <p
-            v-if="showAutoFetchWarning"
-            class="text-xs text-amber-600 dark:text-amber-400"
-          >
-            已配置的模型权限将在下次获取时被覆盖
+            逗号分隔，支持 * ? 通配符，不区分大小写
           </p>
         </div>
-        <Switch v-model="form.auto_fetch_models" />
       </div>
     </form>
 
@@ -246,7 +264,7 @@
         取消
       </Button>
       <Button
-        :disabled="saving"
+        :disabled="saving || !canSave"
         @click="handleSave"
       >
         {{ saving ? (isEditMode ? '保存中...' : '添加中...') : (isEditMode ? '保存' : '添加') }}
@@ -256,7 +274,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Dialog, Button, Input, Label, Switch } from '@/components/ui'
 import { Key, SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
@@ -309,6 +327,19 @@ const showAutoFetchWarning = computed(() => {
   return true
 })
 
+// 表单是否可以保存
+const canSave = computed(() => {
+  // 必须填写密钥名称
+  if (!form.value.name.trim()) return false
+  // 新增模式下必须填写 API 密钥
+  if (!props.editingKey && !form.value.api_key.trim()) return false
+  // 必须至少选择一个 API 格式
+  if (form.value.api_formats.length === 0) return false
+  // API 密钥格式验证（如果有输入）
+  if (form.value.api_key.trim() && form.value.api_key.trim().length < 3) return false
+  return true
+})
+
 const isOpen = computed(() => props.open)
 const saving = ref(false)
 const formNonce = ref(createFieldNonce())
@@ -316,10 +347,6 @@ const keyNameInputId = computed(() => `key-name-${formNonce.value}`)
 const apiKeyInputId = computed(() => `api-key-${formNonce.value}`)
 const keyNameFieldName = computed(() => `key-name-field-${formNonce.value}`)
 const apiKeyFieldName = computed(() => `api-key-field-${formNonce.value}`)
-const apiKeyFocused = ref(false)
-const apiKeyInputType = computed(() =>
-  apiKeyFocused.value || form.value.api_key.trim().length > 0 ? 'password' : 'text'
-)
 
 // 可用的能力列表
 const availableCapabilities = ref<CapabilityDefinition[]>([])
@@ -336,7 +363,9 @@ const form = ref({
   note: '',
   is_active: true,
   capabilities: {} as Record<string, boolean>,
-  auto_fetch_models: false
+  auto_fetch_models: false,
+  model_include_patterns_text: '',  // 包含规则文本（逗号分隔）
+  model_exclude_patterns_text: ''   // 排除规则文本（逗号分隔）
 })
 
 // 加载能力列表
@@ -359,11 +388,6 @@ function toggleApiFormat(format: string) {
     // 添加格式
     form.value.api_formats.push(format)
   } else {
-    // 移除格式前检查：至少保留一个格式
-    if (form.value.api_formats.length <= 1) {
-      showError('至少需要选择一个 API 格式', '验证失败')
-      return
-    }
     // 移除格式，但保留倍率配置（用户可能只是临时取消）
     form.value.api_formats.splice(index, 1)
   }
@@ -387,18 +411,6 @@ function updateRateMultiplier(format: string, value: string | number) {
 
   // 替换整个对象以触发响应式更新
   form.value.rate_multipliers = newMultipliers
-}
-
-// API 密钥输入框样式计算
-function getApiKeyInputClass(): string {
-  const classes = []
-  if (apiKeyError.value) {
-    classes.push('border-destructive')
-  }
-  if (!apiKeyFocused.value && !form.value.api_key) {
-    classes.push('text-transparent caret-transparent selection:bg-transparent selection:text-transparent')
-  }
-  return classes.join(' ')
 }
 
 
@@ -425,7 +437,6 @@ const apiKeyError = computed(() => {
 // 重置表单
 function resetForm() {
   formNonce.value = createFieldNonce()
-  apiKeyFocused.value = false
   form.value = {
     name: '',
     api_key: '',
@@ -438,14 +449,15 @@ function resetForm() {
     note: '',
     is_active: true,
     capabilities: {},
-    auto_fetch_models: false
+    auto_fetch_models: false,
+    model_include_patterns_text: '',
+    model_exclude_patterns_text: ''
   }
 }
 
 // 添加成功后清除部分字段以便继续添加
 function clearForNextAdd() {
   formNonce.value = createFieldNonce()
-  apiKeyFocused.value = false
   form.value.name = ''
   form.value.api_key = ''
 }
@@ -454,7 +466,6 @@ function clearForNextAdd() {
 function loadKeyData() {
   if (!props.editingKey) return
   formNonce.value = createFieldNonce()
-  apiKeyFocused.value = false
   form.value = {
     name: props.editingKey.name,
     api_key: '',
@@ -470,7 +481,9 @@ function loadKeyData() {
     note: props.editingKey.note || '',
     is_active: props.editingKey.is_active,
     capabilities: { ...(props.editingKey.capabilities || {}) },
-    auto_fetch_models: props.editingKey.auto_fetch_models ?? false
+    auto_fetch_models: props.editingKey.auto_fetch_models ?? false,
+    model_include_patterns_text: (props.editingKey.model_include_patterns || []).join(', '),
+    model_exclude_patterns_text: (props.editingKey.model_exclude_patterns || []).join(', ')
   }
 }
 
@@ -486,6 +499,17 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
 
 function createFieldNonce(): string {
   return Math.random().toString(36).slice(2, 10)
+}
+
+// 将逗号分隔的文本解析为数组（去空、去重）
+// 返回空数组而非 undefined，以便后端能正确清除已有规则
+function parsePatternText(text: string): string[] {
+  if (!text.trim()) return []
+  const patterns = text
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+  return [...new Set(patterns)]
 }
 
 async function handleSave() {
@@ -550,7 +574,9 @@ async function handleSave() {
         note: form.value.note,
         is_active: form.value.is_active,
         capabilities: capabilitiesData,
-        auto_fetch_models: form.value.auto_fetch_models
+        auto_fetch_models: form.value.auto_fetch_models,
+        model_include_patterns: parsePatternText(form.value.model_include_patterns_text),
+        model_exclude_patterns: parsePatternText(form.value.model_exclude_patterns_text)
       }
 
       if (form.value.api_key.trim()) {
@@ -572,7 +598,9 @@ async function handleSave() {
         max_probe_interval_minutes: form.value.max_probe_interval_minutes,
         note: form.value.note,
         capabilities: capabilitiesData || undefined,
-        auto_fetch_models: form.value.auto_fetch_models
+        auto_fetch_models: form.value.auto_fetch_models,
+        model_include_patterns: parsePatternText(form.value.model_include_patterns_text),
+        model_exclude_patterns: parsePatternText(form.value.model_exclude_patterns_text)
       })
       success('密钥已添加', '成功')
       // 添加模式：不关闭对话框，只清除名称和密钥以便继续添加

@@ -42,9 +42,13 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    email = Column(String(255), unique=True, index=True, nullable=False)
+    # OAuth 用户可能没有邮箱；Postgres unique 允许多个 NULL
+    email = Column(String(255), unique=True, index=True, nullable=True)
+    # 注意：所有创建用户的入口必须显式写入 true/false，禁止依赖默认值
+    email_verified = Column(Boolean, nullable=False)
     username = Column(String(100), unique=True, index=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)
+    # OAuth 用户可能没有本地密码（v1 仅做字段兼容）
+    password_hash = Column(String(255), nullable=True)
     role = Column(
         Enum(
             UserRole,
@@ -176,6 +180,7 @@ class ApiKey(Base):
 
     # 状态
     is_active = Column(Boolean, default=True, nullable=False)
+    is_locked = Column(Boolean, default=False, nullable=False)  # 管理员锁定，用户无法使用/操作
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)  # 过期时间
     auto_delete_on_expiry = Column(Boolean, default=False, nullable=False)  # 过期后是否自动删除
@@ -273,7 +278,9 @@ class Usage(Base):
     request_id = Column(String(100), unique=True, index=True, nullable=False)
     provider_name = Column(String(100), nullable=False)  # Provider 名称（非外键）
     model = Column(String(100), nullable=False)
-    target_model = Column(String(100), nullable=True, comment="映射后的目标模型名（若无映射则为空）")
+    target_model = Column(
+        String(100), nullable=True, comment="映射后的目标模型名（若无映射则为空）"
+    )
 
     # Provider 侧追踪信息（记录最终成功的 Provider/Endpoint/Key）
     provider_id = Column(String(36), ForeignKey("providers.id", ondelete="SET NULL"), nullable=True)
@@ -320,7 +327,9 @@ class Usage(Base):
 
     # 请求详情
     request_type = Column(String(50))  # chat, completion, embedding等
-    api_format = Column(String(50), nullable=True)  # API 格式: CLAUDE, OPENAI 等
+    api_format = Column(String(50), nullable=True)  # API 格式: CLAUDE, OPENAI 等（用户请求格式）
+    endpoint_api_format = Column(String(50), nullable=True)  # 端点原生 API 格式
+    has_format_conversion = Column(Boolean, nullable=True, default=False)  # 是否发生了格式转换
     is_stream = Column(Boolean, default=False)  # 是否为流式请求
     status_code = Column(Integer)
     error_message = Column(Text, nullable=True)
@@ -332,6 +341,7 @@ class Usage(Base):
     # streaming: 流式响应进行中
     # completed: 请求成功完成
     # failed: 请求失败
+    # cancelled: 客户端主动断开连接
     status = Column(String(20), default="completed", nullable=False, index=True)
 
     # 完整请求和响应记录
@@ -459,7 +469,9 @@ class LDAPConfig(Base):
     user_search_filter = Column(
         String(500), default="(uid={username})", nullable=False
     )  # 用户搜索过滤器
-    username_attr = Column(String(50), default="uid", nullable=False)  # 用户名属性 (uid/sAMAccountName)
+    username_attr = Column(
+        String(50), default="uid", nullable=False
+    )  # 用户名属性 (uid/sAMAccountName)
     email_attr = Column(String(50), default="mail", nullable=False)  # 邮箱属性
     display_name_attr = Column(String(50), default="cn", nullable=False)  # 显示名称属性
     is_enabled = Column(Boolean, default=False, nullable=False)  # 是否启用 LDAP 认证
@@ -508,6 +520,95 @@ class LDAPConfig(Base):
         return crypto_service.decrypt(self.bind_password_encrypted)
 
 
+class OAuthProvider(Base):
+    """OAuth Provider 配置表（按 provider_type 唯一）"""
+
+    __tablename__ = "oauth_providers"
+
+    # 使用 provider_type 作为主键，便于通过 URL 参数直接定位配置
+    provider_type = Column(String(50), primary_key=True)
+    display_name = Column(String(100), nullable=False)
+
+    client_id = Column(String(255), nullable=False)
+    client_secret_encrypted = Column(Text, nullable=True)  # 允许 NULL 表示尚未配置/已清除
+
+    # 可选覆盖端点（需在业务层做白名单校验）
+    authorization_url_override = Column(String(500), nullable=True)
+    token_url_override = Column(String(500), nullable=True)
+    userinfo_url_override = Column(String(500), nullable=True)
+
+    # 可选覆盖 scopes（JSON 列表）
+    scopes = Column(JSON, nullable=True)
+
+    # 服务端控制 redirect_uri 与前端回调 URL
+    redirect_uri = Column(String(500), nullable=False)
+    frontend_callback_url = Column(String(500), nullable=False)
+
+    # Provider 特定配置/映射
+    attribute_mapping = Column(JSON, nullable=True)
+    extra_config = Column(JSON, nullable=True)
+
+    is_enabled = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def set_client_secret(self, secret: str) -> None:
+        """设置并加密 client_secret"""
+        from src.core.crypto import crypto_service
+
+        self.client_secret_encrypted = crypto_service.encrypt(secret)
+
+    def get_client_secret(self) -> str:
+        """获取解密后的 client_secret（未配置时返回空串）"""
+        from src.core.crypto import crypto_service
+
+        if not self.client_secret_encrypted:
+            return ""
+        return crypto_service.decrypt(self.client_secret_encrypted)
+
+
+class UserOAuthLink(Base):
+    """用户与 OAuth Provider 的绑定关系"""
+
+    __tablename__ = "user_oauth_links"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider_type = Column(
+        String(50),
+        ForeignKey("oauth_providers.provider_type", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider_user_id = Column(String(255), nullable=False)
+    provider_username = Column(String(255), nullable=True)
+    provider_email = Column(String(255), nullable=True)
+    extra_data = Column(JSON, nullable=True)
+
+    linked_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("provider_type", "provider_user_id", name="uq_oauth_provider_user"),
+        UniqueConstraint("user_id", "provider_type", name="uq_user_oauth_provider"),
+    )
+
+
 class Provider(Base):
     """提供商配置表"""
 
@@ -544,20 +645,25 @@ class Provider(Base):
     # 101+: 备用(高成本或限制严格的)
     provider_priority = Column(Integer, default=100)
 
+    # 格式转换时是否保持优先级（默认 False）
+    # - False: 需要格式转换时，该提供商的候选会被降级到不需要转换的候选之后
+    # - True: 即使需要格式转换，也保持原优先级排名
+    # 注意：如果全局配置 KEEP_PRIORITY_ON_CONVERSION=true，此字段被忽略（所有提供商都保持优先级）
+    keep_priority_on_conversion = Column(Boolean, default=False, nullable=False)
+
     # 状态
     is_active = Column(Boolean, default=True, nullable=False)
 
     # 限制
     concurrent_limit = Column(Integer, nullable=True)  # 并发请求限制
 
-    # 请求配置（从 Endpoint 迁移，作为全局默认值）
-    # 超时 300 秒对于 LLM API 是合理的默认值：
-    # - 大多数请求在 30 秒内完成
-    # - 复杂推理（如 Claude thinking）可能需要 60-120 秒
-    # - 300 秒足够覆盖极端场景（如超长上下文、复杂工具调用）
-    timeout = Column(Integer, default=300, nullable=True)  # 请求超时（秒）
+    # 请求配置
     max_retries = Column(Integer, default=2, nullable=True)  # 最大重试次数
     proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password, enabled}
+
+    # 超时配置（秒），为 None 时使用全局配置
+    stream_first_byte_timeout = Column(Float, nullable=True)  # 流式请求首字节超时
+    request_timeout = Column(Float, nullable=True)  # 非流式请求整体超时
 
     # 配置
     config = Column(JSON, nullable=True)  # 额外配置（如Azure deployment name等）
@@ -602,8 +708,7 @@ class ProviderEndpoint(Base):
     base_url = Column(String(500), nullable=False)
 
     # 请求配置
-    headers = Column(JSON, nullable=True)  # 额外请求头
-    timeout = Column(Integer, default=300)  # 超时（秒）
+    header_rules = Column(JSON, nullable=True)  # 请求头规则 [{action, key, value, from, to}]
     max_retries = Column(Integer, default=2)  # 最大重试次数
 
     # 状态
@@ -616,6 +721,14 @@ class ProviderEndpoint(Base):
 
     # 额外配置
     config = Column(JSON, nullable=True)  # 端点特定配置（不推荐使用，优先使用专用字段）
+
+    # 格式转换配置
+    format_acceptance_config = Column(
+        JSON,
+        nullable=True,
+        default=None,
+        comment="格式接受策略配置（跨格式转换开关/白黑名单等）",
+    )
 
     # 代理配置
     proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password}
@@ -952,8 +1065,7 @@ class Model(Base):
 
         # 获取所有最高优先级的映射
         top_priority_mappings = [
-            mapping for mapping in sorted_mappings
-            if mapping["priority"] == highest_priority
+            mapping for mapping in sorted_mappings if mapping["priority"] == highest_priority
         ]
 
         # 如果有多个相同优先级的映射，通过哈希分散选择
@@ -996,7 +1108,8 @@ class ProviderAPIKey(Base):
     )
 
     # API 格式支持列表（核心字段）
-    api_formats = Column(JSON, nullable=False, default=list)  # ["CLAUDE", "CLAUDE_CLI"]
+    # None 表示支持所有格式（兼容历史数据），空列表 [] 表示不支持任何格式
+    api_formats = Column(JSON, nullable=True, default=list)  # ["CLAUDE", "CLAUDE_CLI"]
 
     # API密钥信息
     api_key = Column(String(500), nullable=False)  # API密钥（加密存储）
@@ -1004,11 +1117,6 @@ class ProviderAPIKey(Base):
     note = Column(String(500), nullable=True)  # 备注说明（可选）
 
     # 成本计算
-    # [DEPRECATED] rate_multiplier 已废弃，请使用 rate_multipliers
-    # 将在未来版本中移除，目前仅作为 rate_multipliers 未配置时的回退值
-    rate_multiplier = Column(
-        Float, default=1.0, nullable=False
-    )  # [DEPRECATED] 默认成本倍率，请使用 rate_multipliers
     rate_multipliers = Column(
         JSON, nullable=True
     )  # 按 API 格式的成本倍率 {"CLAUDE_CLI": 1.0, "OPENAI_CLI": 0.8}
@@ -1017,9 +1125,9 @@ class ProviderAPIKey(Base):
     internal_priority = Column(
         Integer, default=50
     )  # Endpoint 内部优先级（用于提供商优先模式，同 Endpoint 内 Keys 的排序，同优先级参与负载均衡）
-    global_priority = Column(
-        Integer, nullable=True
-    )  # 全局 Key 优先级（用于全局 Key 优先模式，跨 Provider 的 Key 排序，NULL=未配置使用默认排序）
+    global_priority_by_format = Column(
+        JSON, nullable=True
+    )  # 按 API 格式的全局优先级 {"CLAUDE": 1, "CLAUDE_CLI": 2}
 
     # RPM 限制配置（自适应学习）
     # rpm_limit 决定 RPM 控制模式：
@@ -1035,9 +1143,7 @@ class ProviderAPIKey(Base):
     # 示例: {"cache_1h": true, "context_1m": true}
 
     # 自适应 RPM 调整（仅当 rpm_limit = NULL 时生效）
-    learned_rpm_limit = Column(
-        Integer, nullable=True
-    )  # 学习到的 RPM 限制（自适应模式下的有效值）
+    learned_rpm_limit = Column(Integer, nullable=True)  # 学习到的 RPM 限制（自适应模式下的有效值）
     concurrent_429_count = Column(Integer, default=0, nullable=False)  # 因并发导致的429次数
     rpm_429_count = Column(Integer, default=0, nullable=False)  # 因RPM导致的429次数
     last_429_at = Column(DateTime(timezone=True), nullable=True)  # 最后429时间
@@ -1048,9 +1154,7 @@ class ProviderAPIKey(Base):
     utilization_samples = Column(
         JSON, nullable=True
     )  # 利用率采样窗口 [{"ts": timestamp, "util": 0.8}, ...]
-    last_probe_increase_at = Column(
-        DateTime(timezone=True), nullable=True
-    )  # 上次探测性扩容时间
+    last_probe_increase_at = Column(DateTime(timezone=True), nullable=True)  # 上次探测性扩容时间
 
     # 健康度追踪（按 API 格式存储）
     # 结构: {"CLAUDE": {"health_score": 1.0, "consecutive_failures": 0, "last_failure_at": null, "request_results_window": []}, ...}
@@ -1086,6 +1190,9 @@ class ProviderAPIKey(Base):
     last_models_fetch_at = Column(DateTime(timezone=True), nullable=True)  # 最后获取时间
     last_models_fetch_error = Column(Text, nullable=True)  # 最后获取错误信息
     locked_models = Column(JSON, nullable=True)  # 被锁定的模型列表（刷新时不会被删除）
+    # 模型过滤规则（支持 * 和 ? 通配符，如 "gpt-*", "claude-?-sonnet"）
+    model_include_patterns = Column(JSON, nullable=True)  # 包含规则列表，空表示不过滤（包含所有）
+    model_exclude_patterns = Column(JSON, nullable=True)  # 排除规则列表，空表示不排除
 
     # 时间戳
     created_at = Column(
@@ -1484,7 +1591,9 @@ class RequestCandidate(Base):
     )
 
     # 状态信息
-    status = Column(String(20), nullable=False)  # 'pending', 'success', 'failed', 'skipped'
+    status = Column(
+        String(20), nullable=False
+    )  # 'pending', 'streaming', 'success', 'failed', 'cancelled', 'skipped'
     skip_reason = Column(Text, nullable=True)  # 跳过/失败原因
     is_cached = Column(Boolean, default=False)  # 是否为缓存亲和性候选
 
@@ -1620,6 +1729,50 @@ class StatsDailyModel(Base):
         UniqueConstraint("date", "model", name="uq_stats_daily_model"),
         Index("idx_stats_daily_model_date", "date"),
         Index("idx_stats_daily_model_date_model", "date", "model"),
+    )
+
+
+class StatsDailyProvider(Base):
+    """每日供应商统计快照 - 用于快速查询每日供应商维度数据"""
+
+    __tablename__ = "stats_daily_provider"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # 统计日期 (UTC)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # 供应商名称
+    provider_name = Column(String(100), nullable=False)
+
+    # 请求统计
+    total_requests = Column(Integer, default=0, nullable=False)
+
+    # Token 统计
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_creation_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_read_tokens = Column(BigInteger, default=0, nullable=False)
+
+    # 成本统计 (USD)
+    total_cost = Column(Float, default=0.0, nullable=False)
+
+    # 时间戳
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 唯一约束：每个供应商每天只有一条记录
+    __table_args__ = (
+        UniqueConstraint("date", "provider_name", name="uq_stats_daily_provider"),
+        Index("idx_stats_daily_provider_date", "date"),
+        Index("idx_stats_daily_provider_date_provider", "date", "provider_name"),
     )
 
 

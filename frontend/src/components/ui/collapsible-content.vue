@@ -8,7 +8,7 @@ const props = defineProps<CollapsibleContentProps & { class?: string }>()
 <template>
   <CollapsibleContent
     v-bind="props"
-    :class="cn('overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down', props.class)"
+    :class="cn('data-[state=closed]:overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down', props.class)"
   >
     <slot />
   </CollapsibleContent>

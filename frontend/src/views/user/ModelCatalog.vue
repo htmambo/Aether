@@ -312,6 +312,7 @@
         :current="currentPage"
         :total="filteredModels.length"
         :page-size="pageSize"
+        cache-key="model-catalog-page-size"
         @update:current="currentPage = $event"
         @update:page-size="pageSize = $event"
       />
@@ -356,10 +357,7 @@ import {
   Pagination,
   RefreshButton,
 } from '@/components/ui'
-import {
-  getPublicGlobalModels,
-  type PublicGlobalModel,
-} from '@/api/public-models'
+import { type PublicGlobalModel } from '@/api/public-models'
 import { meApi } from '@/api/me'
 import {
   getUserConfigurableCapabilities,
@@ -370,7 +368,7 @@ import UserModelDetailDrawer from './components/UserModelDetailDrawer.vue'
 import { useRowClick } from '@/composables/useRowClick'
 import { log } from '@/utils/logger'
 
-const { success, error: showError } = useToast()
+const { error: showError } = useToast()
 const { copyToClipboard } = useClipboard()
 
 // 状态
@@ -514,8 +512,9 @@ watch([searchQuery, capabilityFilters], () => {
 async function loadModels() {
   loading.value = true
   try {
-    const response = await getPublicGlobalModels({ limit: 1000 })
-    models.value = response.models || []
+    // 使用用户认证端点，只获取用户有权限使用的模型
+    const response = await meApi.getAvailableModels({ limit: 1000 })
+    models.value = (response.models || []) as PublicGlobalModel[]
   } catch (err: any) {
     log.error('加载模型失败:', err)
     showError(err.response?.data?.detail || err.message, '加载模型失败')

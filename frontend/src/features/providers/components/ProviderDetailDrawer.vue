@@ -95,10 +95,21 @@
                   >{{ API_FORMAT_LABELS[endpoint.api_format] || endpoint.api_format }}</span>
                 </template>
                 <span
+                  v-if="endpoints.length > 0"
                   class="text-xs px-2 py-0.5 rounded-md border border-dashed border-border hover:bg-accent hover:border-accent-foreground/20 cursor-pointer transition-colors text-muted-foreground"
                   title="编辑端点"
                   @click="showAddEndpointDialog"
                 >编辑</span>
+                <Button
+                  v-else
+                  variant="outline"
+                  size="sm"
+                  class="h-7 text-xs"
+                  @click="showAddEndpointDialog"
+                >
+                  <Plus class="w-3 h-3 mr-1" />
+                  添加 API 端点
+                </Button>
               </div>
             </div>
 
@@ -323,7 +334,11 @@
                       <!-- RPM 限制信息（第二位） -->
                       <template v-if="key.rpm_limit || key.is_adaptive">
                         <span class="text-muted-foreground/40">|</span>
-                        <span>{{ key.is_adaptive ? '自适应' : key.rpm_limit }} RPM</span>
+                        <span v-if="key.is_adaptive">
+                          {{ key.learned_rpm_limit != null ? `${key.learned_rpm_limit}` : '探测中' }} RPM
+                          <span class="text-muted-foreground/60">(自适应)</span>
+                        </span>
+                        <span v-else>{{ key.rpm_limit }} RPM</span>
                       </template>
                       <span class="text-muted-foreground/40">|</span>
                       <!-- API 格式：展开显示每个格式、倍率、熔断状态 -->
@@ -383,11 +398,11 @@
               <!-- 模型查看 -->
               <ModelsTab
                 v-if="provider"
+                ref="modelsTabRef"
                 :key="`models-${provider.id}`"
                 :provider="provider"
                 :endpoints="endpoints"
                 @edit-model="handleEditModel"
-                @delete-model="handleDeleteModel"
                 @batch-assign="handleBatchAssign"
               />
 
@@ -397,6 +412,7 @@
                 ref="modelMappingTabRef"
                 :key="`mapping-${provider.id}`"
                 :provider="provider"
+                :provider-keys="providerKeys"
                 @refresh="handleModelMappingChanged"
               />
             </div>
@@ -414,20 +430,6 @@
     :endpoints="endpoints"
     @endpoint-created="handleEndpointChanged"
     @endpoint-updated="handleEndpointChanged"
-  />
-
-  <!-- 删除端点确认对话框 -->
-  <AlertDialog
-    v-if="open"
-    :model-value="deleteEndpointConfirmOpen"
-    title="删除端点"
-    :description="`确定要删除端点 ${endpointToDelete?.api_format} 吗？这将同时删除其所有密钥。`"
-    confirm-text="删除"
-    cancel-text="取消"
-    type="danger"
-    @update:model-value="deleteEndpointConfirmOpen = $event"
-    @confirm="confirmDeleteEndpoint"
-    @cancel="deleteEndpointConfirmOpen = false"
   />
 
   <!-- 密钥编辑对话框 -->
@@ -477,20 +479,6 @@
     @saved="handleModelSaved"
   />
 
-  <!-- 删除模型确认对话框 -->
-  <AlertDialog
-    v-if="open"
-    :model-value="deleteModelConfirmOpen"
-    title="移除模型支持"
-    :description="`确定要移除提供商 ${provider?.name} 对模型 ${modelToDelete?.global_model_display_name || modelToDelete?.provider_model_name} 的支持吗？这不会删除全局模型，只是该提供商将不再支持此模型。`"
-    confirm-text="移除"
-    cancel-text="取消"
-    type="danger"
-    @update:model-value="deleteModelConfirmOpen = $event"
-    @confirm="confirmDeleteModel"
-    @cancel="deleteModelConfirmOpen = false"
-  />
-
   <!-- 批量关联模型对话框 -->
   <BatchAssignModelsDialog
     v-if="open && provider"
@@ -535,11 +523,9 @@ import EndpointFormDialog from '@/features/providers/components/EndpointFormDial
 import ProviderModelFormDialog from '@/features/providers/components/ProviderModelFormDialog.vue'
 import AlertDialog from '@/components/common/AlertDialog.vue'
 import {
-  deleteEndpoint as deleteEndpointAPI,
   deleteEndpointKey,
   recoverKeyHealth,
   getProviderKeys,
-  updateEndpoint,
   updateProviderKey,
   revealEndpointKey,
   type ProviderEndpoint,
@@ -550,7 +536,6 @@ import {
   API_FORMAT_SHORT,
   sortApiFormats,
 } from '@/api/endpoints'
-import { deleteModel as deleteModelAPI } from '@/api/endpoints/models'
 
 // 扩展端点类型,包含密钥列表
 interface ProviderEndpointWithKeys extends ProviderEndpoint {
@@ -579,12 +564,9 @@ const loading = ref(false)
 const provider = ref<any>(null)
 const endpoints = ref<ProviderEndpointWithKeys[]>([])
 const providerKeys = ref<EndpointAPIKey[]>([])  // Provider 级别的 keys
-const expandedEndpoints = ref<Set<string>>(new Set())
 
 // 端点相关状态
 const endpointDialogOpen = ref(false)
-const deleteEndpointConfirmOpen = ref(false)
-const endpointToDelete = ref<ProviderEndpoint | null>(null)
 
 // 密钥相关状态
 const keyFormDialogOpen = ref(false)
@@ -593,29 +575,17 @@ const currentEndpoint = ref<ProviderEndpoint | null>(null)
 const editingKey = ref<EndpointAPIKey | null>(null)
 const deleteKeyConfirmOpen = ref(false)
 const keyToDelete = ref<EndpointAPIKey | null>(null)
-const recoveringEndpointId = ref<string | null>(null)
-const togglingEndpointId = ref<string | null>(null)
 const togglingKeyId = ref<string | null>(null)
 
 // 密钥显示状态：key_id -> 完整密钥
 const revealedKeys = ref<Map<string, string>>(new Map())
-const revealingKeyId = ref<string | null>(null)
 
 // 模型相关状态
 const modelFormDialogOpen = ref(false)
 const editingModel = ref<Model | null>(null)
-const deleteModelConfirmOpen = ref(false)
-const modelToDelete = ref<Model | null>(null)
 const batchAssignDialogOpen = ref(false)
+const modelsTabRef = ref<InstanceType<typeof ModelsTab> | null>(null)
 const modelMappingTabRef = ref<InstanceType<typeof ModelMappingTab> | null>(null)
-
-// 拖动排序相关状态（旧的端点级别拖拽，保留以兼容）
-const dragState = ref({
-  isDragging: false,
-  draggedKeyId: null as string | null,
-  targetKeyId: null as string | null,
-  dragEndpointId: null as string | null
-})
 
 // 密钥列表拖拽排序状态
 const keyDragState = ref({
@@ -640,12 +610,10 @@ const multiplierSaving = ref(false)
 // 任意模态窗口打开时,阻止抽屉被误关闭
 const hasBlockingDialogOpen = computed(() =>
   endpointDialogOpen.value ||
-  deleteEndpointConfirmOpen.value ||
   keyFormDialogOpen.value ||
   keyPermissionsDialogOpen.value ||
   deleteKeyConfirmOpen.value ||
   modelFormDialogOpen.value ||
-  deleteModelConfirmOpen.value ||
   batchAssignDialogOpen.value ||
   modelMappingTabRef.value?.dialogOpen
 )
@@ -702,18 +670,15 @@ watch(() => props.open, (newOpen) => {
     provider.value = null
     endpoints.value = []
     providerKeys.value = []  // 清空 Provider 级别的 keys
-    expandedEndpoints.value.clear()
 
     // 重置所有对话框状态
     endpointDialogOpen.value = false
-    deleteEndpointConfirmOpen.value = false
     keyFormDialogOpen.value = false
     keyPermissionsDialogOpen.value = false
     deleteKeyConfirmOpen.value = false
     batchAssignDialogOpen.value = false
 
     // 重置临时数据
-    endpointToDelete.value = null
     currentEndpoint.value = null
     editingKey.value = null
     keyToDelete.value = null
@@ -737,15 +702,6 @@ function handleClose() {
   }
 }
 
-// 切换端点展开/收起
-function toggleEndpoint(endpointId: string) {
-  if (expandedEndpoints.value.has(endpointId)) {
-    expandedEndpoints.value.delete(endpointId)
-  } else {
-    expandedEndpoints.value.add(endpointId)
-  }
-}
-
 // 显示端点管理对话框
 function showAddEndpointDialog() {
   endpointDialogOpen.value = true
@@ -755,27 +711,6 @@ function showAddEndpointDialog() {
 function handleEditEndpoint(_endpoint: ProviderEndpoint) {
   // 点击任何端点都打开管理对话框
   endpointDialogOpen.value = true
-}
-
-function handleDeleteEndpoint(endpoint: ProviderEndpoint) {
-  endpointToDelete.value = endpoint
-  deleteEndpointConfirmOpen.value = true
-}
-
-async function confirmDeleteEndpoint() {
-  if (!endpointToDelete.value) return
-
-  try {
-    await deleteEndpointAPI(endpointToDelete.value.id)
-    showSuccess('端点已删除')
-    await loadEndpoints()
-    emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除失败', '错误')
-  } finally {
-    deleteEndpointConfirmOpen.value = false
-    endpointToDelete.value = null
-  }
 }
 
 async function handleEndpointChanged() {
@@ -808,37 +743,18 @@ function handleKeyPermissions(key: EndpointAPIKey) {
   keyPermissionsDialogOpen.value = true
 }
 
-// 切换密钥显示/隐藏
-async function toggleKeyReveal(key: EndpointAPIKey) {
-  if (revealedKeys.value.has(key.id)) {
-    // 已显示，隐藏它
-    revealedKeys.value.delete(key.id)
-    return
-  }
-
-  // 未显示，调用 API 获取完整密钥
-  revealingKeyId.value = key.id
-  try {
-    const result = await revealEndpointKey(key.id)
-    revealedKeys.value.set(key.id, result.api_key)
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '获取密钥失败', '错误')
-  } finally {
-    revealingKeyId.value = null
-  }
-}
-
 // 复制完整密钥
 async function copyFullKey(key: EndpointAPIKey) {
-  // 如果已经显示了，直接复制
-  if (revealedKeys.value.has(key.id)) {
-    copyToClipboard(revealedKeys.value.get(key.id)!)
+  const cached = revealedKeys.value.get(key.id)
+  if (cached) {
+    copyToClipboard(cached)
     return
   }
 
   // 否则先获取再复制
   try {
     const result = await revealEndpointKey(key.id)
+    revealedKeys.value.set(key.id, result.api_key)
     copyToClipboard(result.api_key)
   } catch (err: any) {
     showError(err.response?.data?.detail || '获取密钥失败', '错误')
@@ -860,7 +776,12 @@ async function confirmDeleteKey() {
   try {
     await deleteEndpointKey(keyId)
     showSuccess('密钥已删除')
-    await loadEndpoints()
+    // 并行刷新：端点列表、模型列表、模型映射（删除 Key 触发自动解除模型关联）
+    await Promise.all([
+      loadEndpoints(),
+      modelsTabRef.value?.reload(),
+      modelMappingTabRef.value?.reload()
+    ])
     emit('refresh')
   } catch (err: any) {
     showError(err.response?.data?.detail || '删除密钥失败', '错误')
@@ -878,77 +799,14 @@ async function handleRecoverKey(key: EndpointAPIKey) {
   }
 }
 
-// 检查端点是否有不健康的密钥
-function hasUnhealthyKeys(endpoint: ProviderEndpointWithKeys): boolean {
-  if (!endpoint.keys || endpoint.keys.length === 0) return false
-  return endpoint.keys.some(key =>
-    key.circuit_breaker_open ||
-    (key.health_score !== undefined && key.health_score < 1)
-  )
-}
-
-// 批量恢复端点下所有密钥的健康状态
-async function handleRecoverAllKeys(endpoint: ProviderEndpointWithKeys) {
-  if (!endpoint.keys || endpoint.keys.length === 0) return
-
-  const keysToRecover = endpoint.keys.filter(key =>
-    key.circuit_breaker_open ||
-    (key.health_score !== undefined && key.health_score < 1)
-  )
-
-  if (keysToRecover.length === 0) {
-    showSuccess('所有密钥已处于健康状态')
-    return
-  }
-
-  recoveringEndpointId.value = endpoint.id
-  let successCount = 0
-  let failCount = 0
-
-  try {
-    for (const key of keysToRecover) {
-      try {
-        await recoverKeyHealth(key.id)
-        successCount++
-      } catch {
-        failCount++
-      }
-    }
-
-    if (failCount === 0) {
-      showSuccess(`已恢复 ${successCount} 个密钥的健康状态`)
-    } else {
-      showSuccess(`恢复完成: ${successCount} 成功, ${failCount} 失败`)
-    }
-
-    await loadEndpoints()
-    emit('refresh')
-  } finally {
-    recoveringEndpointId.value = null
-  }
-}
-
 async function handleKeyChanged() {
   await loadEndpoints()
+  // 并行刷新模型列表和模型映射（因为模型权限会影响正则映射预览）
+  await Promise.all([
+    modelsTabRef.value?.reload(),
+    modelMappingTabRef.value?.reload()
+  ])
   emit('refresh')
-}
-
-// 切换端点启用状态
-async function toggleEndpointActive(endpoint: ProviderEndpointWithKeys) {
-  if (togglingEndpointId.value) return
-
-  togglingEndpointId.value = endpoint.id
-  try {
-    const newStatus = !endpoint.is_active
-    await updateEndpoint(endpoint.id, { is_active: newStatus })
-    endpoint.is_active = newStatus
-    showSuccess(newStatus ? '端点已启用' : '端点已停用')
-    emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '操作失败', '错误')
-  } finally {
-    togglingEndpointId.value = null
-  }
 }
 
 // 切换密钥启用状态
@@ -997,146 +855,6 @@ async function handleModelSaved() {
   editingModel.value = null
   await loadProvider()
   emit('refresh')
-}
-
-// 处理删除模型 - 打开确认对话框
-function handleDeleteModel(model: Model) {
-  modelToDelete.value = model
-  deleteModelConfirmOpen.value = true
-}
-
-// 确认删除模型
-async function confirmDeleteModel() {
-  if (!provider.value || !modelToDelete.value) return
-
-  try {
-    await deleteModelAPI(provider.value.id, modelToDelete.value.id)
-    showSuccess('已移除该提供商对此模型的支持')
-    deleteModelConfirmOpen.value = false
-    modelToDelete.value = null
-    // 重新加载 Provider 数据以刷新模型列表
-    await loadProvider()
-    emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '删除失败', '错误')
-  }
-}
-
-// ===== 拖动排序处理 =====
-function handleDragStart(event: DragEvent, key: EndpointAPIKey, endpoint: ProviderEndpointWithKeys) {
-  dragState.value.isDragging = true
-  dragState.value.draggedKeyId = key.id
-  dragState.value.dragEndpointId = endpoint.id
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move'
-  }
-}
-
-function handleDragEnd() {
-  dragState.value.isDragging = false
-  dragState.value.draggedKeyId = null
-  dragState.value.targetKeyId = null
-  dragState.value.dragEndpointId = null
-}
-
-function handleDragOver(event: DragEvent, targetKey: EndpointAPIKey) {
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move'
-  }
-  if (dragState.value.draggedKeyId !== targetKey.id) {
-    dragState.value.targetKeyId = targetKey.id
-  }
-}
-
-function handleDragLeave() {
-  dragState.value.targetKeyId = null
-}
-
-async function handleDrop(event: DragEvent, targetKey: EndpointAPIKey, endpoint: ProviderEndpointWithKeys) {
-  event.preventDefault()
-
-  const draggedKeyId = dragState.value.draggedKeyId
-  if (!draggedKeyId || !endpoint.keys || draggedKeyId === targetKey.id) {
-    handleDragEnd()
-    return
-  }
-
-  // 只允许在同一端点内拖动
-  if (dragState.value.dragEndpointId !== endpoint.id) {
-    showError('不能跨端点拖动密钥')
-    handleDragEnd()
-    return
-  }
-
-  const keys = [...endpoint.keys]
-  const draggedIndex = keys.findIndex(k => k.id === draggedKeyId)
-  const targetIndex = keys.findIndex(k => k.id === targetKey.id)
-
-  if (draggedIndex === -1 || targetIndex === -1) {
-    handleDragEnd()
-    return
-  }
-
-  // 记录原始优先级分组（排除被拖动的密钥）
-  // key: 原始优先级值, value: 密钥ID数组
-  const originalGroups = new Map<number, string[]>()
-  for (const key of keys) {
-    if (key.id === draggedKeyId) continue // 被拖动的密钥离开原组
-    const priority = key.internal_priority ?? 0
-    if (!originalGroups.has(priority)) {
-      originalGroups.set(priority, [])
-    }
-    originalGroups.get(priority)!.push(key.id)
-  }
-
-  // 重排数组
-  const [removed] = keys.splice(draggedIndex, 1)
-  keys.splice(targetIndex, 0, removed)
-  endpoint.keys = keys
-
-  // 按新顺序为每个组分配新的优先级
-  // 同组的密钥保持相同的优先级
-  const priorities: { key_id: string; internal_priority: number }[] = []
-  const groupNewPriority = new Map<number, number>() // 原优先级 -> 新优先级
-  let currentPriority = 0
-
-  for (const key of keys) {
-    if (key.id === draggedKeyId) {
-      // 被拖动的密钥是独立的新组，获得当前优先级
-      priorities.push({ key_id: key.id, internal_priority: currentPriority })
-      currentPriority++
-    } else {
-      const originalPriority = key.internal_priority ?? 0
-      
-      if (groupNewPriority.has(originalPriority)) {
-        // 这个组已经分配过优先级，使用相同的值
-        priorities.push({ key_id: key.id, internal_priority: groupNewPriority.get(originalPriority)! })
-      } else {
-        // 这个组第一次出现，分配新优先级
-        groupNewPriority.set(originalPriority, currentPriority)
-        priorities.push({ key_id: key.id, internal_priority: currentPriority })
-        currentPriority++
-      }
-    }
-  }
-
-  handleDragEnd()
-
-  // 调用 API 批量更新（使用循环调用 updateProviderKey 替代已废弃的 batchUpdateKeyPriority）
-  try {
-    await Promise.all(
-      priorities.map(p => updateProviderKey(p.key_id, { internal_priority: p.internal_priority }))
-    )
-    showSuccess('优先级已更新')
-    // 重新加载以获取更新后的数据
-    await loadEndpoints()
-    emit('refresh')
-  } catch (err: any) {
-    showError(err.response?.data?.detail || '更新优先级失败', '错误')
-    // 回滚 - 重新加载
-    await loadEndpoints()
-  }
 }
 
 // ===== 点击编辑优先级 =====
@@ -1356,27 +1074,56 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
     return
   }
 
-  // 检查目标 key 是否属于一个"组"（除了被拖拽的 key，还有其他 key 与目标同优先级）
-  // 组的定义：2 个及以上同优先级的 key
-  const keysAtTargetPriority = keys.filter(k =>
-    k.id !== draggedKey.id && (k.internal_priority ?? 0) === targetPriority
-  )
-  // 如果有 2 个及以上 key 在目标优先级（不含被拖拽的），说明目标在组内
-  const targetIsInGroup = keysAtTargetPriority.length >= 2
-
   handleKeyDragEnd()
 
   try {
-    if (targetIsInGroup) {
-      // 目标在组内，被拖拽的 key 加入该组
-      await updateProviderKey(draggedKey.id, { internal_priority: targetPriority })
-    } else {
-      // 目标是单独的（或只有目标自己），交换优先级
-      await Promise.all([
-        updateProviderKey(draggedKey.id, { internal_priority: targetPriority }),
-        updateProviderKey(targetKey.id, { internal_priority: draggedPriority })
-      ])
-    }
+    // 记录每个 key 的原始优先级
+    const originalPriorityMap = new Map<string, number>()
+    keys.forEach(k => {
+      originalPriorityMap.set(k.id, k.internal_priority ?? 0)
+    })
+
+    // 重排数组：将被拖动项移到目标位置
+    const items = [...keys]
+    items.splice(draggedIndex, 1)
+    items.splice(targetIndex, 0, draggedKey)
+
+    // 按新顺序分配优先级：被拖动项单独成组，其他同组项保持在一起
+    const groupNewPriority = new Map<number, number>()
+    let currentPriority = 1
+    const newPriorityMap = new Map<string, number>()
+
+    items.forEach(key => {
+      const originalPriority = originalPriorityMap.get(key.id)!
+
+      if (key === draggedKey) {
+        // 被拖动的项单独成组
+        newPriorityMap.set(key.id, currentPriority)
+        currentPriority++
+      } else {
+        if (groupNewPriority.has(originalPriority)) {
+          // 同组的其他项使用相同的新优先级
+          newPriorityMap.set(key.id, groupNewPriority.get(originalPriority)!)
+        } else {
+          // 新组，分配新优先级
+          groupNewPriority.set(originalPriority, currentPriority)
+          newPriorityMap.set(key.id, currentPriority)
+          currentPriority++
+        }
+      }
+    })
+
+    // 更新所有优先级发生变化的 key
+    const updatePromises = keys.map(key => {
+      const oldPriority = key.internal_priority ?? 0
+      const newPriority = newPriorityMap.get(key.id)
+      if (newPriority !== undefined && oldPriority !== newPriority) {
+        return updateProviderKey(key.id, { internal_priority: newPriority })
+      }
+      return Promise.resolve()
+    })
+
+    await Promise.all(updatePromises)
     showSuccess('优先级已更新')
     await loadEndpoints()
     emit('refresh')
@@ -1384,25 +1131,6 @@ async function handleKeyDrop(event: DragEvent, targetIndex: number) {
     showError(err.response?.data?.detail || '更新优先级失败', '错误')
     await loadEndpoints()
   }
-}
-
-// 格式化探测时间
-function formatProbeTime(probeTime: string): string {
-  if (!probeTime) return '-'
-  const now = new Date()
-  const probe = new Date(probeTime)
-  const diffMs = probe.getTime() - now.getTime()
-
-  if (diffMs < 0) return '待探测'
-
-  const diffMinutes = Math.floor(diffMs / 60000)
-  const diffHours = Math.floor(diffMinutes / 60)
-  const diffDays = Math.floor(diffHours / 24)
-
-  if (diffDays > 0) return `${diffDays}天后`
-  if (diffHours > 0) return `${diffHours}小时后`
-  if (diffMinutes > 0) return `${diffMinutes}分钟后`
-  return '即将探测'
 }
 
 // 获取密钥的 API 格式列表（按指定顺序排序）
@@ -1419,17 +1147,10 @@ function getKeyApiFormats(key: EndpointAPIKey, endpoint?: ProviderEndpointWithKe
 
 // 获取密钥在指定 API 格式下的成本倍率
 function getKeyRateMultiplier(key: EndpointAPIKey, format: string): number {
-  // 优先使用 rate_multipliers 中指定格式的倍率
   if (key.rate_multipliers && key.rate_multipliers[format] !== undefined) {
     return key.rate_multipliers[format]
   }
-  // 如果 rate_multipliers 存在但该格式未配置，说明用户期望使用默认值 1.0
-  // 只有当 rate_multipliers 完全不存在时，才回退到 rate_multiplier
-  if (key.rate_multipliers && Object.keys(key.rate_multipliers).length > 0) {
-    return 1.0
-  }
-  // 回退到默认倍率
-  return key.rate_multiplier || 1.0
+  return 1.0
 }
 
 // 健康度颜色
@@ -1491,7 +1212,7 @@ function getFormatProbeCountdown(key: EndpointAPIKey, format: string): string {
     const now = new Date()
     const diffMs = nextProbe.getTime() - now.getTime()
     if (diffMs > 0) {
-      return ' ' + formatCountdown(diffMs)
+      return ` ${formatCountdown(diffMs)}`
     } else {
       return ' 探测中'
     }

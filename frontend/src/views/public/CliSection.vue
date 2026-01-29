@@ -1,9 +1,9 @@
 <template>
   <section
     ref="sectionRef"
-    class="min-h-screen snap-start flex items-center px-16 lg:px-20 py-20"
+    class="min-h-screen snap-start flex items-center justify-center px-4 sm:px-8 md:px-16 lg:px-20 py-20"
   >
-    <div class="max-w-7xl mx-auto grid md:grid-cols-2 gap-12 items-center">
+    <div class="max-w-7xl mx-auto grid md:grid-cols-2 gap-12 items-center w-full">
       <!-- Content column -->
       <div :class="contentOrder">
         <!-- Badge -->
@@ -29,7 +29,7 @@
 
         <!-- Description -->
         <p
-          class="text-lg text-[#666663] dark:text-gray-300 mb-4 transition-all duration-700"
+          class="text-lg text-[#666663] dark:text-[#c9c3b4] mb-4 transition-all duration-700"
           :style="descStyle"
         >
           {{ description }}
@@ -81,7 +81,7 @@
           >
             <div :class="panelClasses.panelHeader">
               <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-[#666663] dark:text-muted-foreground">
+                <span class="text-xs font-medium text-[#666663] dark:text-[#c9c3b4]">
                   {{ config.path }}
                 </span>
                 <button
@@ -105,10 +105,10 @@
         </div>
       </div>
 
-      <!-- Logo placeholder column -->
+      <!-- Logo placeholder column - hidden on mobile since logo is fixed positioned -->
       <div
         :class="logoOrder"
-        class="flex items-center justify-center h-full min-h-[300px] relative"
+        class="hidden md:flex items-center justify-center h-full min-h-[300px] relative"
       >
         <slot name="logo" />
       </div>

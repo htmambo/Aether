@@ -28,13 +28,8 @@ import httpx
 
 from src.core.header_rules import apply_header_rules
 from src.core.logger import logger
-
-
-_SENSITIVE_HEADER_KEYS = {
-    "authorization",
-    "x-api-key",
-    "x-goog-api-key",
-}
+from src.core.api_format import CORE_REDACT_HEADERS, merge_headers_with_protection, redact_headers_for_log
+from src.utils.ssl_utils import get_ssl_context
 
 # 安全规则：这些头部不允许被 endpoint.headers / extra_headers 注入或覆盖。
 # 级别最高，必须始终生效。
@@ -52,13 +47,7 @@ _GLOBAL_PROTECTED_HEADER_KEYS = {
 
 
 def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
-    redacted: Dict[str, str] = {}
-    for key, value in headers.items():
-        if key.lower() in _SENSITIVE_HEADER_KEYS:
-            redacted[key] = "***"
-        else:
-            redacted[key] = value
-    return redacted
+    return redact_headers_for_log(headers, CORE_REDACT_HEADERS)
 
 
 def _truncate_repr(value: Any, limit: int = 1200) -> str:
@@ -109,6 +98,7 @@ def build_safe_headers(
         safe_headers = {k: v for k, v in extra_headers.items() if k.lower() not in protected}
         headers.update(safe_headers)
         return headers
+    return merge_headers_with_protection(base_headers, extra_headers, set(protected))
 
 
 async def run_endpoint_check(
@@ -605,7 +595,7 @@ class HttpRequestExecutor:
         try:
             # 使用httpx进行异步请求
             effective_timeout = request.timeout if request.timeout is not None else self.timeout
-            async with httpx.AsyncClient(timeout=effective_timeout) as client:
+            async with httpx.AsyncClient(timeout=effective_timeout, verify=get_ssl_context()) as client:
                 response = await client.post(
                     url=request.url,
                     json=request.json_body,

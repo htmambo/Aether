@@ -14,6 +14,7 @@ from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.chat_adapter_base import ChatAdapterBase, register_adapter
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
+from src.core.api_format import get_header_value
 from src.core.logger import logger
 from src.core.optimization_utils import TokenCounter
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
@@ -39,17 +40,10 @@ class ClaudeCapabilityDetector:
         """
         requirements: Dict[str, bool] = {}
 
-        # 检查 anthropic-beta 请求头（大小写不敏感）
-        beta_header = None
-        for key, value in headers.items():
-            if key.lower() == "anthropic-beta":
-                beta_header = value
-                break
-
-        if beta_header:
-            # 检查是否包含 context-1m 标识
-            if "context-1m" in beta_header.lower():
-                requirements["context_1m"] = True
+        # 使用统一的大小写不敏感获取
+        beta_header = get_header_value(headers, "anthropic-beta")
+        if beta_header and "context-1m" in beta_header.lower():
+            requirements["context_1m"] = True
 
         return requirements
 
@@ -76,10 +70,6 @@ class ClaudeChatAdapter(ChatAdapterBase):
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         super().__init__(allowed_api_formats or ["CLAUDE"])
         logger.info(f"[{self.name}] 初始化Chat模式适配器 | API格式: {self.allowed_api_formats}")
-
-    def extract_api_key(self, request: Request) -> Optional[str]:
-        """从请求中提取 API 密钥 (x-api-key)"""
-        return request.headers.get("x-api-key")
 
     def detect_capability_requirements(
         self,
@@ -219,28 +209,7 @@ class ClaudeChatAdapter(ChatAdapterBase):
         else:
             return f"{base_url}/v1/messages"
 
-    @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建Claude API认证头"""
-        return {
-            "x-api-key": api_key,
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-        }
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """返回Claude API的保护头部key"""
-        return ("x-api-key", "content-type", "anthropic-version")
-
-    @classmethod
-    def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:
-        """构建Claude API请求体"""
-        return {
-            "model": request_data.get("model"),
-            "max_tokens": request_data.get("max_tokens", 100),
-            "messages": request_data.get("messages", []),
-        }
+    # build_request_body 使用基类实现，通过 format_conversion_registry 自动转换 OPENAI -> CLAUDE
 
 
 def build_claude_adapter(x_app_header: Optional[str]):

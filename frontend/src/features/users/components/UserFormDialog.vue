@@ -53,7 +53,20 @@
               data-form-type="other"
               required
               class="h-10"
+              :class="usernameError ? 'border-destructive' : ''"
             />
+            <p
+              v-if="usernameError"
+              class="text-xs text-destructive"
+            >
+              {{ usernameError }}
+            </p>
+            <p
+              v-else
+              class="text-xs text-muted-foreground"
+            >
+              3-30个字符，允许字母、数字、下划线、连字符和点号
+            </p>
           </div>
 
           <div class="space-y-2">
@@ -118,14 +131,13 @@
             <Label
               for="form-email"
               class="text-sm font-medium"
-            >邮箱 <span class="text-muted-foreground">*</span></Label>
+            >邮箱</Label>
             <Input
               id="form-email"
               v-model="form.email"
               type="email"
               autocomplete="off"
               data-form-type="other"
-              required
               class="h-10"
             />
           </div>
@@ -143,7 +155,8 @@
                 step="0.01"
                 min="0"
                 max="10000"
-                placeholder="10"
+                :placeholder="isEditMode ? '10' : '使用系统默认'"
+                :disabled="form.unlimited"
                 :class="form.unlimited ? 'flex-1 h-10 opacity-50' : 'flex-1 h-10'"
               />
               <div class="flex items-center justify-center gap-2 border rounded-lg px-3 py-2 bg-muted/50 w-24">
@@ -409,7 +422,7 @@ const form = ref({
   password: '',
   confirmPassword: '',
   email: '',
-  quota: 10,
+  quota: null as number | null,
   role: 'user' as 'admin' | 'user',
   unlimited: false,
   is_active: true,
@@ -430,7 +443,7 @@ function resetForm() {
     password: '',
     confirmPassword: '',
     email: '',
-    quota: 10,
+    quota: null,
     role: 'user',
     unlimited: false,
     is_active: true,
@@ -444,6 +457,7 @@ function loadUserData() {
   if (!props.user) return
   formNonce.value = createFieldNonce()
   passwordFocused.value = false
+  // 创建数组副本，避免与 props 数据共享引用
   form.value = {
     username: props.user.username,
     password: '',
@@ -453,9 +467,9 @@ function loadUserData() {
     role: props.user.role,
     unlimited: props.user.quota_usd == null,
     is_active: props.user.is_active ?? true,
-    allowed_providers: props.user.allowed_providers || [],
-    allowed_api_formats: props.user.allowed_api_formats || [],
-    allowed_models: props.user.allowed_models || []
+    allowed_providers: [...(props.user.allowed_providers || [])],
+    allowed_api_formats: [...(props.user.allowed_api_formats || [])],
+    allowed_models: [...(props.user.allowed_models || [])]
   }
 }
 
@@ -468,18 +482,29 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   resetForm,
 })
 
+// 用户名验证
+const usernameRegex = /^[a-zA-Z0-9_.\-]+$/
+const usernameError = computed(() => {
+  const username = form.value.username.trim()
+  if (!username) return ''
+  if (username.length < 3) return '用户名长度至少为3个字符'
+  if (username.length > 30) return '用户名长度不能超过30个字符'
+  if (!usernameRegex.test(username)) return '用户名只能包含字母、数字、下划线、连字符和点号'
+  return ''
+})
+
 // 表单验证
 const isFormValid = computed(() => {
   const hasUsername = form.value.username.trim().length > 0
-  const hasEmail = form.value.email.trim().length > 0
+  const usernameValid = !usernameError.value
   const hasPassword = isEditMode.value || form.value.password.length >= 6
   // 编辑模式下如果填写了密码，必须确认密码一致
   const passwordConfirmed = !isEditMode.value || form.value.password.length === 0 || form.value.password === form.value.confirmPassword
-  return hasUsername && hasEmail && hasPassword && passwordConfirmed
+  return hasUsername && usernameValid && hasPassword && passwordConfirmed
 })
 
 // 加载访问控制选项
-async function loadAccessControlOptions() {
+async function loadAccessControlOptions(): Promise<void> {
   try {
     const [providersData, modelsData, formatsData] = await Promise.all([
       getProvidersSummary(),
@@ -507,21 +532,21 @@ function toggleSelection(field: 'allowed_providers' | 'allowed_api_formats' | 'a
 
 // 提交表单
 async function handleSubmit() {
-  // 验证邮箱必填
-  if (!form.value.email || !form.value.email.trim()) {
-    return
-  }
-
   saving.value = true
   try {
-    const data: UserFormData & { password?: string } = {
+    const data: UserFormData & { password?: string; unlimited?: boolean } = {
       username: form.value.username,
-      email: form.value.email.trim(),
+      email: form.value.email.trim() || '',
       quota_usd: form.value.unlimited ? null : form.value.quota,
       role: form.value.role,
       allowed_providers: form.value.allowed_providers.length > 0 ? form.value.allowed_providers : null,
       allowed_api_formats: form.value.allowed_api_formats.length > 0 ? form.value.allowed_api_formats : null,
       allowed_models: form.value.allowed_models.length > 0 ? form.value.allowed_models : null
+    }
+
+    // 创建模式下传递 unlimited 字段
+    if (!isEditMode.value) {
+      data.unlimited = form.value.unlimited
     }
 
     if (isEditMode.value && props.user?.id) {

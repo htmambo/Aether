@@ -14,7 +14,7 @@ from src.api.base.pipeline import ApiRequestPipeline
 from src.config.constants import CacheTTL
 from src.core.enums import UserRole
 from src.database import get_db
-from src.models.database import ApiKey, Provider, RequestCandidate, StatsDaily, StatsDailyModel, Usage
+from src.models.database import ApiKey, Provider, RequestCandidate, StatsDaily, StatsDailyModel, StatsDailyProvider, Usage
 from src.models.database import User as DBUser
 from src.services.system.stats_aggregator import StatsAggregatorService
 from src.utils.cache_decorator import cache_result
@@ -957,27 +957,33 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
             date_str = current_date.isoformat()
             stat = stats_map.get(date_str)
             if stat:
-                formatted.append({
+                item = {
                     "date": date_str,
                     "requests": stat["requests"],
                     "tokens": stat["tokens"],
                     "cost": stat["cost"],
                     "avg_response_time": stat["avg_response_time"],
                     "unique_models": stat.get("unique_models", 0),
-                    "unique_providers": stat.get("unique_providers", 0),
                     "fallback_count": stat.get("fallback_count", 0),
-                })
+                }
+                # 仅管理员返回 unique_providers
+                if is_admin:
+                    item["unique_providers"] = stat.get("unique_providers", 0)
+                formatted.append(item)
             else:
-                formatted.append({
+                item = {
                     "date": date_str,
                     "requests": 0,
                     "tokens": 0,
                     "cost": 0.0,
                     "avg_response_time": 0.0,
                     "unique_models": 0,
-                    "unique_providers": 0,
                     "fallback_count": 0,
-                })
+                }
+                # 仅管理员返回 unique_providers
+                if is_admin:
+                    item["unique_providers"] = 0
+                formatted.append(item)
             current_date += timedelta(days=1)
 
         # ==================== 模型统计 ====================
@@ -1147,7 +1153,68 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
             for item in formatted:
                 item["model_breakdown"] = breakdown.get(item["date"], [])
 
-        return {
+            # 普通用户不返回 provider_summary
+            provider_summary = None
+
+        # ==================== 供应商统计（仅管理员）====================
+        if is_admin:
+            # 管理员：使用预聚合数据 + 今日实时数据
+
+            # 历史数据从 stats_daily_provider 获取
+            historical_provider_stats = (
+                db.query(StatsDailyProvider)
+                .filter(and_(StatsDailyProvider.date >= start_date, StatsDailyProvider.date < today))
+                .all()
+            )
+
+            # 按供应商汇总历史数据
+            provider_agg: dict[str, dict[str, int | float]] = {}
+            for stat in historical_provider_stats:
+                provider = stat.provider_name or "Unknown"
+                if provider not in provider_agg:
+                    provider_agg[provider] = {"requests": 0, "tokens": 0, "cost": 0.0}
+                provider_agg[provider]["requests"] += stat.total_requests
+                tokens = (stat.input_tokens + stat.output_tokens +
+                          stat.cache_creation_tokens + stat.cache_read_tokens)
+                provider_agg[provider]["tokens"] += tokens
+                provider_agg[provider]["cost"] += stat.total_cost
+
+            # 今日实时供应商统计
+            today_provider_stats = (
+                db.query(
+                    Usage.provider_name,
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("tokens"),
+                    func.sum(Usage.total_cost_usd).label("cost"),
+                )
+                .filter(Usage.created_at >= today)
+                .group_by(Usage.provider_name)
+                .all()
+            )
+
+            for stat in today_provider_stats:
+                provider = stat.provider_name or "Unknown"
+                if provider not in provider_agg:
+                    provider_agg[provider] = {"requests": 0, "tokens": 0, "cost": 0.0}
+                provider_agg[provider]["requests"] += stat.requests or 0
+                provider_agg[provider]["tokens"] += int(stat.tokens or 0)
+                provider_agg[provider]["cost"] += float(stat.cost or 0)
+
+            # 构建 provider_summary（排除 unknown）
+            provider_summary = [
+                {
+                    "provider": provider,
+                    "requests": agg["requests"],
+                    "tokens": agg["tokens"],
+                    "cost": agg["cost"],
+                }
+                for provider, agg in provider_agg.items()
+                if provider.lower() != "unknown"
+            ]
+            provider_summary.sort(key=lambda x: x["cost"], reverse=True)
+
+        # 构建返回结果
+        result = {
             "daily_stats": formatted,
             "model_summary": model_summary,
             "period": {
@@ -1156,3 +1223,9 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
                 "days": self.days,
             },
         }
+
+        # 仅管理员返回 provider_summary
+        if is_admin and provider_summary:
+            result["provider_summary"] = provider_summary
+
+        return result

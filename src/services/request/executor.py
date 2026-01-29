@@ -8,13 +8,13 @@ from typing import Any, Callable, Optional, Union
 
 from sqlalchemy.orm import Session
 
-from src.core.enums import APIFormat
+from src.core.api_format import APIFormat
 from src.core.exceptions import ConcurrencyLimitError
 from src.core.logger import logger
 from src.services.health.monitor import health_monitor
+from src.services.provider.format import normalize_api_format
 from src.services.rate_limit.adaptive_reservation import get_adaptive_reservation_manager
 from src.services.request.candidate import RequestCandidateService
-
 
 
 @dataclass
@@ -102,10 +102,10 @@ class RequestExecutor:
 
             # 获取有效的 RPM 限制（自适应或固定）
             if key.rpm_limit is None:
-                # 自适应模式：优先使用学习值，否则使用默认初始限制，避免无限制打爆上游
-                from src.config.constants import RPMDefaults
-
-                effective_key_limit = int(key.learned_rpm_limit or RPMDefaults.INITIAL_LIMIT)
+                # 自适应模式：使用学习值，未学习时为 None（不限制，等待碰壁学习）
+                effective_key_limit = (
+                    int(key.learned_rpm_limit) if key.learned_rpm_limit is not None else None
+                )
             else:
                 effective_key_limit = int(key.rpm_limit)
 
@@ -116,9 +116,11 @@ class RequestExecutor:
             )
             dynamic_reservation_ratio = reservation_result.ratio
 
-            logger.debug(f"[Executor] 动态预留: key={key.id[:8]}..., "
+            logger.debug(
+                f"[Executor] 动态预留: key={key.id[:8]}..., "
                 f"ratio={dynamic_reservation_ratio:.0%}, phase={reservation_result.phase}, "
-                f"confidence={reservation_result.confidence:.0%}")
+                f"confidence={reservation_result.confidence:.0%}"
+            )
 
             async with self.concurrency_manager.rpm_guard(
                 key_id=key.id,
@@ -142,12 +144,21 @@ class RequestExecutor:
 
                 context.elapsed_ms = int((time.time() - context.start_time) * 1000)
 
+                provider_api_format = getattr(endpoint, "api_format", None)
+                provider_format_str = (
+                    provider_api_format.value
+                    if isinstance(provider_api_format, APIFormat)
+                    else str(provider_api_format or "")
+                )
+                client_format_str = (
+                    api_format.value if isinstance(api_format, APIFormat) else str(api_format)
+                )
+                health_format = normalize_api_format(provider_format_str or client_format_str).value
+
                 health_monitor.record_success(
                     db=self.db,
                     key_id=key.id,
-                    api_format=(
-                        api_format.value if isinstance(api_format, APIFormat) else api_format
-                    ),
+                    api_format=health_format,
                     response_time_ms=context.elapsed_ms,
                 )
 
@@ -182,7 +193,9 @@ class RequestExecutor:
                             "is_cached_user": is_cached_user,
                             "model_name": model_name,
                             "api_format": (
-                                api_format.value if isinstance(api_format, APIFormat) else api_format
+                                api_format.value
+                                if isinstance(api_format, APIFormat)
+                                else api_format
                             ),
                         },
                     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Optional
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.exceptions import InvalidRequestException, NotFoundException, translate_pydantic_error
+from src.core.logger import logger
 from src.database import get_db
 from src.models.api import SystemSettingsRequest, SystemSettingsResponse
 from src.models.database import ApiKey, Provider, Usage, User
@@ -651,7 +653,7 @@ class AdminTriggerCleanupAdapter(AdminApiAdapter):
 
         from sqlalchemy import func
 
-        from src.services.system.cleanup_scheduler import get_cleanup_scheduler
+        from src.services.system.maintenance_scheduler import get_maintenance_scheduler
 
         db = context.db
 
@@ -669,8 +671,8 @@ class AdminTriggerCleanupAdapter(AdminApiAdapter):
         )
 
         # 触发清理
-        cleanup_scheduler = get_cleanup_scheduler()
-        await cleanup_scheduler._perform_cleanup()
+        maintenance_scheduler = get_maintenance_scheduler()
+        await maintenance_scheduler._perform_cleanup()
 
         # 获取清理后的统计信息
         total_after = db.query(Usage).count()
@@ -711,8 +713,7 @@ class AdminTriggerCleanupAdapter(AdminApiAdapter):
 class AdminGetApiFormatsAdapter(AdminApiAdapter):
     async def handle(self, context):  # type: ignore[override]
         """获取所有可用的API格式"""
-        from src.core.api_format_metadata import API_FORMAT_DEFINITIONS
-        from src.core.enums import APIFormat
+        from src.core.api_format import API_FORMAT_DEFINITIONS, APIFormat
 
         _ = context  # 参数保留以符合接口规范
 
@@ -732,6 +733,38 @@ class AdminGetApiFormatsAdapter(AdminApiAdapter):
 
 
 class AdminExportConfigAdapter(AdminApiAdapter):
+    """导出提供商和模型配置"""
+
+    # Provider Ops 中需要解密的敏感字段
+    SENSITIVE_CREDENTIALS = {
+        "api_key", "password", "session_token", "session_cookie",
+        "token_cookie", "auth_cookie", "cookie_string", "cookie"
+    }
+
+    def _decrypt_provider_config(self, config: dict, crypto_service) -> dict:
+        """解密 Provider config 中的 provider_ops credentials"""
+        if not config:
+            return config
+
+        decrypted_config = copy.deepcopy(config)
+
+        # 解密 provider_ops.connector.credentials 中的敏感字段
+        provider_ops = decrypted_config.get("provider_ops")
+        if provider_ops and isinstance(provider_ops, dict):
+            connector = provider_ops.get("connector")
+            if connector and isinstance(connector, dict):
+                credentials = connector.get("credentials")
+                if credentials and isinstance(credentials, dict):
+                    for field in self.SENSITIVE_CREDENTIALS:
+                        if field in credentials and isinstance(credentials[field], str):
+                            try:
+                                credentials[field] = crypto_service.decrypt(credentials[field])
+                            except Exception as e:
+                                # 解密失败保持原值（可能本来就是明文）
+                                logger.debug(f"解密 provider_ops credential '{field}' 失败: {e}")
+
+        return decrypted_config
+
     async def handle(self, context):  # type: ignore[override]
         """导出提供商和模型配置（解密数据）"""
         from datetime import datetime, timezone
@@ -773,8 +806,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     {
                         "api_format": ep.api_format,
                         "base_url": ep.base_url,
-                        "headers": ep.headers,
-                        "timeout": ep.timeout,
+                        "header_rules": ep.header_rules,
                         "max_retries": ep.max_retries,
                         "is_active": ep.is_active,
                         "custom_path": ep.custom_path,
@@ -804,10 +836,9 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                         "name": key.name,
                         "note": key.note,
                         "api_formats": key.api_formats or [],
-                        "rate_multiplier": key.rate_multiplier,
                         "rate_multipliers": key.rate_multipliers,
                         "internal_priority": key.internal_priority,
-                        "global_priority": key.global_priority,
+                        "global_priority_by_format": key.global_priority_by_format,
                         "rpm_limit": key.rpm_limit,
                         "allowed_models": key.allowed_models,
                         "capabilities": key.capabilities,
@@ -844,6 +875,11 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     }
                 )
 
+            # 解密 Provider config 中的 credentials
+            decrypted_provider_config = self._decrypt_provider_config(
+                provider.config, crypto_service
+            )
+
             providers_data.append(
                 {
                     "name": provider.name,
@@ -855,21 +891,79 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     "provider_priority": provider.provider_priority,
                     "is_active": provider.is_active,
                     "concurrent_limit": provider.concurrent_limit,
-                    "timeout": provider.timeout,
                     "max_retries": provider.max_retries,
                     "proxy": provider.proxy,
-                    "config": provider.config,
+                    "config": decrypted_provider_config,
                     "endpoints": endpoints_data,
                     "api_keys": keys_data,
                     "models": models_data,
                 }
             )
 
+        # 导出 LDAP 配置
+        from src.models.database import LDAPConfig
+        ldap_config = db.query(LDAPConfig).first()
+        ldap_data = None
+        if ldap_config:
+            # 解密绑定密码
+            bind_password = ""
+            if ldap_config.bind_password_encrypted:
+                try:
+                    bind_password = crypto_service.decrypt(ldap_config.bind_password_encrypted)
+                except Exception as e:
+                    logger.debug(f"解密 LDAP bind_password 失败: {e}")
+
+            ldap_data = {
+                "server_url": ldap_config.server_url,
+                "bind_dn": ldap_config.bind_dn,
+                "bind_password": bind_password,
+                "base_dn": ldap_config.base_dn,
+                "user_search_filter": ldap_config.user_search_filter,
+                "username_attr": ldap_config.username_attr,
+                "email_attr": ldap_config.email_attr,
+                "display_name_attr": ldap_config.display_name_attr,
+                "is_enabled": ldap_config.is_enabled,
+                "is_exclusive": ldap_config.is_exclusive,
+                "use_starttls": ldap_config.use_starttls,
+                "connect_timeout": ldap_config.connect_timeout,
+            }
+
+        # 导出 OAuth Providers 配置
+        from src.models.database import OAuthProvider
+        oauth_providers = db.query(OAuthProvider).all()
+        oauth_data = []
+        for oauth in oauth_providers:
+            # 解密 client secret
+            client_secret = ""
+            if oauth.client_secret_encrypted:
+                try:
+                    client_secret = crypto_service.decrypt(oauth.client_secret_encrypted)
+                except Exception as e:
+                    logger.debug(f"解密 OAuth '{oauth.provider_type}' client_secret 失败: {e}")
+
+            oauth_data.append({
+                "provider_type": oauth.provider_type,
+                "display_name": oauth.display_name,
+                "client_id": oauth.client_id,
+                "client_secret": client_secret,
+                "authorization_url_override": oauth.authorization_url_override,
+                "token_url_override": oauth.token_url_override,
+                "userinfo_url_override": oauth.userinfo_url_override,
+                "scopes": oauth.scopes,
+                "redirect_uri": oauth.redirect_uri,
+                "frontend_callback_url": oauth.frontend_callback_url,
+                "attribute_mapping": oauth.attribute_mapping,
+                "extra_config": oauth.extra_config,
+                "is_enabled": oauth.is_enabled,
+            })
+
         return {
-            "version": "2.0",
+            "version": "2.1",
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "global_models": global_models_data,
             "providers": providers_data,
+            "ldap_config": ldap_data,
+            "oauth_providers": oauth_data,
         }
 
 
@@ -877,6 +971,36 @@ MAX_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 class AdminImportConfigAdapter(AdminApiAdapter):
+    """导入提供商和模型配置"""
+
+    # Provider Ops 中需要加密的敏感字段
+    SENSITIVE_CREDENTIALS = {
+        "api_key", "password", "session_token", "session_cookie",
+        "token_cookie", "auth_cookie", "cookie_string", "cookie"
+    }
+
+    def _encrypt_provider_config(self, config: dict, crypto_service) -> dict:
+        """加密 Provider config 中的 provider_ops credentials"""
+        if not config:
+            return config
+
+        encrypted_config = copy.deepcopy(config)
+
+        # 加密 provider_ops.connector.credentials 中的敏感字段
+        provider_ops = encrypted_config.get("provider_ops")
+        if provider_ops and isinstance(provider_ops, dict):
+            connector = provider_ops.get("connector")
+            if connector and isinstance(connector, dict):
+                credentials = connector.get("credentials")
+                if credentials and isinstance(credentials, dict):
+                    for field in self.SENSITIVE_CREDENTIALS:
+                        if field in credentials and isinstance(credentials[field], str):
+                            value = credentials[field]
+                            if value:  # 只加密非空值
+                                credentials[field] = crypto_service.encrypt(value)
+
+        return encrypted_config
+
     async def handle(self, context):  # type: ignore[override]
         """导入提供商和模型配置"""
         import uuid
@@ -893,15 +1017,17 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         db = context.db
         payload = context.ensure_json_body()
 
-        # 验证配置版本
+        # 验证配置版本（支持 2.0 和 2.1）
         version = payload.get("version")
-        if version != "2.0":
+        if version not in ("2.0", "2.1"):
             raise InvalidRequestException(f"不支持的配置版本: {version}")
 
         # 获取导入选项
         merge_mode = payload.get("merge_mode", "skip")  # skip, overwrite, error
         global_models_data = payload.get("global_models", [])
         providers_data = payload.get("providers", [])
+        ldap_data = payload.get("ldap_config")  # 2.1 新增
+        oauth_data = payload.get("oauth_providers", [])  # 2.1 新增
 
         stats = {
             "global_models": {"created": 0, "updated": 0, "skipped": 0},
@@ -909,6 +1035,8 @@ class AdminImportConfigAdapter(AdminApiAdapter):
             "endpoints": {"created": 0, "updated": 0, "skipped": 0},
             "keys": {"created": 0, "updated": 0, "skipped": 0},
             "models": {"created": 0, "updated": 0, "skipped": 0},
+            "ldap": {"created": 0, "updated": 0, "skipped": 0},
+            "oauth": {"created": 0, "updated": 0, "skipped": 0},
             "errors": [],
         }
 
@@ -1006,12 +1134,14 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         existing_provider.concurrent_limit = prov_data.get(
                             "concurrent_limit"
                         )
-                        existing_provider.timeout = prov_data.get("timeout", existing_provider.timeout)
                         existing_provider.max_retries = prov_data.get(
                             "max_retries", existing_provider.max_retries
                         )
                         existing_provider.proxy = prov_data.get("proxy", existing_provider.proxy)
-                        existing_provider.config = prov_data.get("config")
+                        # 加密 provider_ops credentials 后再保存
+                        existing_provider.config = self._encrypt_provider_config(
+                            prov_data.get("config"), crypto_service
+                        )
                         existing_provider.updated_at = datetime.now(timezone.utc)
                         stats["providers"]["updated"] += 1
                 else:
@@ -1019,6 +1149,11 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                     billing_type = ProviderBillingType.PAY_AS_YOU_GO
                     if prov_data.get("billing_type"):
                         billing_type = ProviderBillingType(prov_data["billing_type"])
+
+                    # 加密 provider_ops credentials 后再保存
+                    encrypted_config = self._encrypt_provider_config(
+                        prov_data.get("config"), crypto_service
+                    )
 
                     new_provider = Provider(
                         id=str(uuid.uuid4()),
@@ -1031,10 +1166,9 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         provider_priority=prov_data.get("provider_priority", 100),
                         is_active=prov_data.get("is_active", True),
                         concurrent_limit=prov_data.get("concurrent_limit"),
-                        timeout=prov_data.get("timeout"),
                         max_retries=prov_data.get("max_retries"),
                         proxy=prov_data.get("proxy"),
-                        config=prov_data.get("config"),
+                        config=encrypted_config,
                     )
                     db.add(new_provider)
                     db.flush()
@@ -1063,8 +1197,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             existing_ep.base_url = ep_data.get(
                                 "base_url", existing_ep.base_url
                             )
-                            existing_ep.headers = ep_data.get("headers")
-                            existing_ep.timeout = ep_data.get("timeout", 300)
+                            existing_ep.header_rules = ep_data.get("header_rules")
                             existing_ep.max_retries = ep_data.get("max_retries", 2)
                             existing_ep.is_active = ep_data.get("is_active", True)
                             existing_ep.custom_path = ep_data.get("custom_path")
@@ -1078,8 +1211,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             provider_id=provider_id,
                             api_format=ep_data["api_format"],
                             base_url=ep_data["base_url"],
-                            headers=ep_data.get("headers"),
-                            timeout=ep_data.get("timeout", 300),
+                            header_rules=ep_data.get("header_rules"),
                             max_retries=ep_data.get("max_retries", 2),
                             is_active=ep_data.get("is_active", True),
                             custom_path=ep_data.get("custom_path"),
@@ -1165,10 +1297,9 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         api_key=encrypted_key,
                         name=key_data.get("name") or "Imported Key",
                         note=key_data.get("note"),
-                        rate_multiplier=key_data.get("rate_multiplier", 1.0),
                         rate_multipliers=key_data.get("rate_multipliers"),
                         internal_priority=key_data.get("internal_priority", 50),
-                        global_priority=key_data.get("global_priority"),
+                        global_priority_by_format=key_data.get("global_priority_by_format"),
                         rpm_limit=key_data.get("rpm_limit"),
                         allowed_models=key_data.get("allowed_models"),
                         capabilities=key_data.get("capabilities"),
@@ -1288,6 +1419,162 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         )
                         db.add(new_model)
                         stats["models"]["created"] += 1
+
+            # 导入 LDAP 配置（2.1 新增）
+            if ldap_data:
+                from src.models.database import LDAPConfig
+
+                # 校验必填字段
+                required_ldap_fields = ["server_url", "bind_dn", "base_dn"]
+                missing = [f for f in required_ldap_fields if not ldap_data.get(f)]
+                if missing:
+                    raise InvalidRequestException(f"LDAP 配置缺少必填字段: {', '.join(missing)}")
+
+                existing_ldap = db.query(LDAPConfig).first()
+
+                if existing_ldap:
+                    if merge_mode == "skip":
+                        stats["ldap"]["skipped"] += 1
+                    elif merge_mode == "error":
+                        raise InvalidRequestException("LDAP 配置已存在")
+                    elif merge_mode == "overwrite":
+                        existing_ldap.server_url = ldap_data.get("server_url", existing_ldap.server_url)
+                        existing_ldap.bind_dn = ldap_data.get("bind_dn", existing_ldap.bind_dn)
+                        # 加密绑定密码
+                        if ldap_data.get("bind_password"):
+                            existing_ldap.bind_password_encrypted = crypto_service.encrypt(
+                                ldap_data["bind_password"]
+                            )
+                        existing_ldap.base_dn = ldap_data.get("base_dn", existing_ldap.base_dn)
+                        existing_ldap.user_search_filter = ldap_data.get(
+                            "user_search_filter", existing_ldap.user_search_filter
+                        )
+                        existing_ldap.username_attr = ldap_data.get(
+                            "username_attr", existing_ldap.username_attr
+                        )
+                        existing_ldap.email_attr = ldap_data.get("email_attr", existing_ldap.email_attr)
+                        existing_ldap.display_name_attr = ldap_data.get(
+                            "display_name_attr", existing_ldap.display_name_attr
+                        )
+                        existing_ldap.is_enabled = ldap_data.get("is_enabled", existing_ldap.is_enabled)
+                        existing_ldap.is_exclusive = ldap_data.get(
+                            "is_exclusive", existing_ldap.is_exclusive
+                        )
+                        existing_ldap.use_starttls = ldap_data.get(
+                            "use_starttls", existing_ldap.use_starttls
+                        )
+                        existing_ldap.connect_timeout = ldap_data.get(
+                            "connect_timeout", existing_ldap.connect_timeout
+                        )
+                        existing_ldap.updated_at = datetime.now(timezone.utc)
+                        stats["ldap"]["updated"] += 1
+                else:
+                    # 创建新的 LDAP 配置
+                    new_ldap = LDAPConfig(
+                        server_url=ldap_data["server_url"],
+                        bind_dn=ldap_data["bind_dn"],
+                        bind_password_encrypted=(
+                            crypto_service.encrypt(ldap_data["bind_password"])
+                            if ldap_data.get("bind_password") else None
+                        ),
+                        base_dn=ldap_data["base_dn"],
+                        user_search_filter=ldap_data.get("user_search_filter", "(uid={username})"),
+                        username_attr=ldap_data.get("username_attr", "uid"),
+                        email_attr=ldap_data.get("email_attr", "mail"),
+                        display_name_attr=ldap_data.get("display_name_attr", "cn"),
+                        is_enabled=ldap_data.get("is_enabled", False),
+                        is_exclusive=ldap_data.get("is_exclusive", False),
+                        use_starttls=ldap_data.get("use_starttls", False),
+                        connect_timeout=ldap_data.get("connect_timeout", 10),
+                    )
+                    db.add(new_ldap)
+                    stats["ldap"]["created"] += 1
+
+            # 导入 OAuth Providers（2.1 新增）
+            if oauth_data:
+                from src.models.database import OAuthProvider
+                for oauth_item in oauth_data:
+                    provider_type = oauth_item.get("provider_type")
+                    if not provider_type:
+                        stats["errors"].append("跳过无 provider_type 的 OAuth 配置")
+                        continue
+
+                    existing_oauth = (
+                        db.query(OAuthProvider)
+                        .filter(OAuthProvider.provider_type == provider_type)
+                        .first()
+                    )
+
+                    if existing_oauth:
+                        if merge_mode == "skip":
+                            stats["oauth"]["skipped"] += 1
+                        elif merge_mode == "error":
+                            raise InvalidRequestException(
+                                f"OAuth Provider '{provider_type}' 已存在"
+                            )
+                        elif merge_mode == "overwrite":
+                            existing_oauth.display_name = oauth_item.get(
+                                "display_name", existing_oauth.display_name
+                            )
+                            existing_oauth.client_id = oauth_item.get(
+                                "client_id", existing_oauth.client_id
+                            )
+                            # 加密 client_secret
+                            if oauth_item.get("client_secret"):
+                                existing_oauth.client_secret_encrypted = crypto_service.encrypt(
+                                    oauth_item["client_secret"]
+                                )
+                            existing_oauth.authorization_url_override = oauth_item.get(
+                                "authorization_url_override"
+                            )
+                            existing_oauth.token_url_override = oauth_item.get("token_url_override")
+                            existing_oauth.userinfo_url_override = oauth_item.get(
+                                "userinfo_url_override"
+                            )
+                            existing_oauth.scopes = oauth_item.get("scopes")
+                            existing_oauth.redirect_uri = oauth_item.get(
+                                "redirect_uri", existing_oauth.redirect_uri
+                            )
+                            existing_oauth.frontend_callback_url = oauth_item.get(
+                                "frontend_callback_url", existing_oauth.frontend_callback_url
+                            )
+                            existing_oauth.attribute_mapping = oauth_item.get("attribute_mapping")
+                            existing_oauth.extra_config = oauth_item.get("extra_config")
+                            existing_oauth.is_enabled = oauth_item.get(
+                                "is_enabled", existing_oauth.is_enabled
+                            )
+                            existing_oauth.updated_at = datetime.now(timezone.utc)
+                            stats["oauth"]["updated"] += 1
+                    else:
+                        # 创建新的 OAuth Provider - 校验必填字段
+                        required_oauth_fields = ["client_id", "redirect_uri", "frontend_callback_url"]
+                        missing = [f for f in required_oauth_fields if not oauth_item.get(f)]
+                        if missing:
+                            stats["errors"].append(
+                                f"OAuth Provider '{provider_type}' 缺少必填字段: {', '.join(missing)}"
+                            )
+                            continue
+
+                        new_oauth = OAuthProvider(
+                            provider_type=provider_type,
+                            display_name=oauth_item.get("display_name", provider_type),
+                            client_id=oauth_item["client_id"],
+                            client_secret_encrypted=(
+                                crypto_service.encrypt(oauth_item["client_secret"])
+                                if oauth_item.get("client_secret") else None
+                            ),
+                            authorization_url_override=oauth_item.get("authorization_url_override"),
+                            token_url_override=oauth_item.get("token_url_override"),
+                            userinfo_url_override=oauth_item.get("userinfo_url_override"),
+                            scopes=oauth_item.get("scopes"),
+                            redirect_uri=oauth_item["redirect_uri"],
+                            frontend_callback_url=oauth_item["frontend_callback_url"],
+                            attribute_mapping=oauth_item.get("attribute_mapping"),
+                            extra_config=oauth_item.get("extra_config"),
+                            is_enabled=oauth_item.get("is_enabled", False),
+                        )
+                        db.add(new_oauth)
+                        stats["oauth"]["created"] += 1
 
             db.commit()
 
@@ -1494,8 +1781,17 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     stats["users"]["skipped"] += 1
                     continue
 
+                # 导入必须有邮箱（email 是导入的主键）
+                import_email = user_data.get("email")
+                if not import_email:
+                    stats["errors"].append(
+                        f"跳过无邮箱用户: {user_data.get('username', '未知')}"
+                    )
+                    stats["users"]["skipped"] += 1
+                    continue
+
                 existing_user = (
-                    db.query(User).filter(User.email == user_data["email"]).first()
+                    db.query(User).filter(User.email == import_email).first()
                 )
 
                 if existing_user:
@@ -1504,7 +1800,7 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         stats["users"]["skipped"] += 1
                     elif merge_mode == "error":
                         raise InvalidRequestException(
-                            f"用户 '{user_data['email']}' 已存在"
+                            f"用户 '{import_email}' 已存在"
                         )
                     elif merge_mode == "overwrite":
                         # 更新现有用户
@@ -1535,8 +1831,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
 
                     new_user = User(
                         id=str(uuid.uuid4()),
-                        email=user_data["email"],
-                        username=user_data.get("username", user_data["email"].split("@")[0]),
+                        email=import_email,
+                        email_verified=user_data.get("email_verified", True),
+                        username=user_data.get("username") or import_email.split("@")[0],
                         password_hash=user_data.get("password_hash", ""),
                         role=role,
                         allowed_providers=user_data.get("allowed_providers"),

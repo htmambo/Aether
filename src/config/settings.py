@@ -141,9 +141,26 @@ class Config:
 
         # HTTP 请求超时配置（秒）
         self.http_connect_timeout = float(os.getenv("HTTP_CONNECT_TIMEOUT", "10.0"))
-        self.http_read_timeout = float(os.getenv("HTTP_READ_TIMEOUT", "60.0"))
-        self.http_write_timeout = float(os.getenv("HTTP_WRITE_TIMEOUT", "60.0"))
+        self.http_read_timeout = float(os.getenv("HTTP_READ_TIMEOUT", "3600.0"))
+        self.http_write_timeout = float(os.getenv("HTTP_WRITE_TIMEOUT", "3600.0"))
         self.http_pool_timeout = float(os.getenv("HTTP_POOL_TIMEOUT", "10.0"))
+        # HTTP_REQUEST_TIMEOUT: 非流式请求整体超时（秒），默认 300 秒
+        self.http_request_timeout = float(os.getenv("HTTP_REQUEST_TIMEOUT", "300.0"))
+
+        # 格式转换配置
+        # FORMAT_CONVERSION_ENABLED: 全局格式转换总开关，默认开启
+        # 注意：即使开启，也需要端点配置 format_acceptance_config.enabled=true 才能生效
+        self.format_conversion_enabled = os.getenv(
+            "FORMAT_CONVERSION_ENABLED", "true"
+        ).lower() == "true"
+
+        # KEEP_PRIORITY_ON_CONVERSION: 格式转换时是否保持提供商原优先级，默认关闭
+        # - false（默认）: 需要格式转换的候选整体降级到不需要转换的候选之后
+        # - true: 所有提供商保持原优先级，不因格式转换降级
+        # 注意：即使全局关闭，单个提供商也可以通过 keep_priority_on_conversion 字段保持自己的优先级
+        self.keep_priority_on_conversion = os.getenv(
+            "KEEP_PRIORITY_ON_CONVERSION", "false"
+        ).lower() == "true"
 
         # HTTP 连接池配置
         # HTTP_MAX_CONNECTIONS: 最大连接数，影响并发能力
@@ -167,10 +184,55 @@ class Config:
         # STREAM_PREFETCH_LINES: 预读行数，用于检测嵌套错误
         # STREAM_STATS_DELAY: 统计记录延迟（秒），等待流完全关闭
         # STREAM_FIRST_BYTE_TIMEOUT: 首字节超时（秒），等待首字节超过此时间触发故障转移
-        #   范围: 10-120 秒，默认 30 秒（必须小于 http_write_timeout 避免竞态）
         self.stream_prefetch_lines = int(os.getenv("STREAM_PREFETCH_LINES", "5"))
         self.stream_stats_delay = float(os.getenv("STREAM_STATS_DELAY", "0.1"))
-        self.stream_first_byte_timeout = self._parse_ttfb_timeout()
+        self.stream_first_byte_timeout = float(os.getenv("STREAM_FIRST_BYTE_TIMEOUT", "30.0"))
+
+        # Usage 队列配置（Redis Streams）
+        # 默认启用队列模式，通过 Redis Streams 异步写入 DB，提升响应性能
+        self.usage_queue_enabled = os.getenv("USAGE_QUEUE_ENABLED", "true").lower() == "true"
+        # 默认传输 headers/bodies，由系统设置（request_log_level）决定最终存储内容
+        self.usage_queue_include_headers = (
+            os.getenv("USAGE_QUEUE_INCLUDE_HEADERS", "true").lower() == "true"
+        )
+        self.usage_queue_include_bodies = (
+            os.getenv("USAGE_QUEUE_INCLUDE_BODIES", "true").lower() == "true"
+        )
+        # 0 表示不截断，由系统设置（max_request/response_body_size）统一控制
+        self.usage_queue_body_max_bytes = int(
+            os.getenv("USAGE_QUEUE_BODY_MAX_BYTES", "0")
+        )
+        self.usage_queue_stream_key = os.getenv("USAGE_QUEUE_STREAM_KEY", "usage:events")
+        self.usage_queue_stream_group = os.getenv(
+            "USAGE_QUEUE_STREAM_GROUP", "usage_consumers"
+        )
+        self.usage_queue_stream_maxlen = int(
+            os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "200000")
+        )
+        self.usage_queue_dlq_key = os.getenv("USAGE_QUEUE_DLQ_KEY", "usage:events:dlq")
+        self.usage_queue_dlq_maxlen = int(os.getenv("USAGE_QUEUE_DLQ_MAXLEN", "5000"))
+        self.usage_queue_consumer_batch = int(
+            os.getenv("USAGE_QUEUE_CONSUMER_BATCH", "200")
+        )
+        self.usage_queue_consumer_block_ms = int(
+            os.getenv("USAGE_QUEUE_CONSUMER_BLOCK_MS", "500")
+        )
+        self.usage_queue_claim_idle_ms = int(os.getenv("USAGE_QUEUE_CLAIM_IDLE_MS", "30000"))
+        self.usage_queue_claim_interval_seconds = float(
+            os.getenv("USAGE_QUEUE_CLAIM_INTERVAL_SECONDS", "5")
+        )
+        self.usage_queue_max_retries = int(os.getenv("USAGE_QUEUE_MAX_RETRIES", "2"))
+        self.usage_queue_metrics_interval_seconds = float(
+            os.getenv("USAGE_QUEUE_METRICS_INTERVAL_SECONDS", "30")
+        )
+
+        # Thinking 整流器配置
+        # THINKING_RECTIFIER_ENABLED: 是否启用 Thinking 整流器
+        #   当遇到跨 Provider 的 thinking 签名错误时，自动整流请求体后重试
+        #   默认启用，设为 false 可禁用此功能
+        self.thinking_rectifier_enabled = (
+            os.getenv("THINKING_RECTIFIER_ENABLED", "true").lower() == "true"
+        )
 
         # 请求体读取超时（秒）
         # REQUEST_BODY_TIMEOUT: 等待客户端发送完整请求体的超时时间
@@ -289,39 +351,6 @@ class Config:
         # 最小 10 个保活连接，最大不超过 max_connections
         return max(10, min(keepalive, self.http_max_connections))
 
-    def _parse_ttfb_timeout(self) -> float:
-        """
-        解析 TTFB 超时配置，带错误处理和范围限制
-
-        TTFB (Time To First Byte) 用于检测慢响应的 Provider，超时触发故障转移。
-        此值必须小于 http_write_timeout，避免竞态条件。
-
-        Returns:
-            超时时间（秒），范围 10-120，默认 30
-        """
-        default_timeout = 30.0
-        min_timeout = 10.0
-        max_timeout = 120.0  # 必须小于 http_write_timeout (默认 60s) 的 2 倍
-
-        raw_value = os.getenv("STREAM_FIRST_BYTE_TIMEOUT", str(default_timeout))
-        try:
-            timeout = float(raw_value)
-        except ValueError:
-            # 延迟导入，避免循环依赖（Config 初始化时 logger 可能未就绪）
-            self._ttfb_config_warning = (
-                f"无效的 STREAM_FIRST_BYTE_TIMEOUT 配置 '{raw_value}'，使用默认值 {default_timeout}秒"
-            )
-            return default_timeout
-
-        # 范围限制
-        clamped = max(min_timeout, min(max_timeout, timeout))
-        if clamped != timeout:
-            self._ttfb_config_warning = (
-                f"STREAM_FIRST_BYTE_TIMEOUT={timeout}秒超出范围 [{min_timeout}-{max_timeout}]，"
-                f"已调整为 {clamped}秒"
-            )
-        return clamped
-
     def _validate_pool_config(self) -> None:
         """验证连接池配置是否安全"""
         total_per_worker = self.db_pool_size + self.db_max_overflow
@@ -368,10 +397,6 @@ class Config:
         # 连接池配置警告
         if hasattr(self, "_pool_config_warning") and self._pool_config_warning:
             logger.warning(self._pool_config_warning)
-
-        # TTFB 超时配置警告
-        if hasattr(self, "_ttfb_config_warning") and self._ttfb_config_warning:
-            logger.warning(self._ttfb_config_warning)
 
         # 管理员密码检查（必须在环境变量中设置）
         if hasattr(self, "_missing_admin_password") and self._missing_admin_password:

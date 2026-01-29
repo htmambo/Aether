@@ -14,9 +14,9 @@
         />
 
         <!-- 抽屉内容 -->
-        <Card class="relative h-full w-[800px] max-w-[90vw] rounded-none shadow-2xl flex flex-col">
+        <Card class="relative h-full w-full sm:w-[800px] sm:max-w-[90vw] rounded-none shadow-2xl flex flex-col">
           <!-- 固定头部 - 整合基本信息 -->
-          <div class="sticky top-0 z-10 bg-background border-b px-6 py-4 flex-shrink-0">
+          <div class="sticky top-0 z-10 bg-background border-b px-3 sm:px-6 py-3 sm:py-4 flex-shrink-0">
             <!-- 第一行：标题、模型、状态、操作按钮 -->
             <div class="flex items-center justify-between gap-4 mb-3">
               <div class="flex items-center gap-3 flex-wrap">
@@ -107,7 +107,7 @@
           </div>
 
           <!-- 可滚动内容区域 -->
-          <div class="flex-1 min-h-0 overflow-y-auto px-6 py-4 scrollbar-stable">
+          <div class="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 scrollbar-stable">
             <!-- Loading State -->
             <div
               v-if="loading"
@@ -137,7 +137,7 @@
             >
               <!-- 费用与性能概览 -->
               <Card>
-                <div class="p-4">
+                <div class="p-3 sm:p-4">
                   <!-- 总费用和响应时间（独立显示） -->
                   <div class="flex items-center mb-4">
                     <div class="flex items-center">
@@ -187,7 +187,7 @@
                         : 'bg-muted/20 border border-border/50 opacity-60'"
                     >
                       <!-- 阶梯标题行 -->
-                      <div class="flex items-center justify-between text-xs">
+                      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2 text-xs">
                         <div class="flex items-center gap-2">
                           <span
                             class="font-medium"
@@ -207,7 +207,7 @@
                           </Badge>
                         </div>
                         <!-- 单价信息 -->
-                        <div class="text-muted-foreground flex items-center gap-2">
+                        <div class="text-muted-foreground flex items-center gap-2 flex-wrap">
                           <span>输入 ${{ formatPrice(tier.input_price_per_1m) }}/M</span>
                           <span>输出 ${{ formatPrice(tier.output_price_per_1m) }}/M</span>
                           <span v-if="tier.cache_creation_price_per_1m">
@@ -308,19 +308,19 @@
 
               <!-- Tabs 区域 -->
               <Card>
-                <div class="p-4">
+                <div class="p-3 sm:p-4">
                   <Tabs
                     v-model="activeTab"
                     :default-value="activeTab"
                   >
                     <!-- Tab + 图标工具栏同行 -->
-                    <div class="flex items-center justify-between border-b pb-2 mb-3">
+                    <div class="flex items-center justify-between border-b pb-2 mb-3 gap-2">
                       <!-- 左侧 Tab -->
-                      <div class="flex items-center">
+                      <div class="flex items-center min-w-0">
                         <button
                           v-for="tab in visibleTabs"
                           :key="tab.name"
-                          class="px-3 py-1.5 text-sm transition-colors border-b-2 -mb-[9px]"
+                          class="px-2 sm:px-3 py-1.5 text-sm transition-colors border-b-2 -mb-[9px] whitespace-nowrap"
                           :class="activeTab === tab.name
                             ? 'border-primary text-foreground font-medium'
                             : 'border-transparent text-muted-foreground hover:text-foreground'"
@@ -330,7 +330,7 @@
                         </button>
                       </div>
                       <!-- 右侧图标工具栏 -->
-                      <div class="flex items-center gap-0.5">
+                      <div class="flex items-center gap-0.5 shrink-0">
                         <!-- 请求头专用：对比/客户端/提供商 切换组 -->
                         <template v-if="activeTab === 'request-headers' && hasProviderHeaders">
                           <button
@@ -362,14 +362,41 @@
                             class="h-4 mx-1"
                           />
                         </template>
+
+                        <!-- 请求体/响应体专用：JSON/对话 视图切换（单按钮） -->
+                        <template v-if="supportsConversationView">
+                          <button
+                            :title="contentViewMode === 'json' ? '切换到对话视图' : '切换到 JSON 视图'"
+                            class="p-1.5 rounded transition-colors"
+                            :class="hasValidConversation || contentViewMode === 'conversation'
+                              ? 'text-muted-foreground hover:bg-muted'
+                              : 'text-muted-foreground/40 cursor-not-allowed'"
+                            :disabled="!hasValidConversation && contentViewMode === 'json'"
+                            @click="toggleContentView"
+                          >
+                            <Code2
+                              v-if="contentViewMode === 'conversation'"
+                              class="w-4 h-4"
+                            />
+                            <MessageSquareText
+                              v-else
+                              class="w-4 h-4"
+                            />
+                          </button>
+                          <Separator
+                            orientation="vertical"
+                            class="h-4 mx-1"
+                          />
+                        </template>
+
                         <!-- 展开/收缩 -->
                         <button
                           :title="currentExpandDepth === 0 ? '展开全部' : '收缩全部'"
                           class="p-1.5 rounded transition-colors"
-                          :class="viewMode === 'compare'
+                          :class="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')
                             ? 'text-muted-foreground/40 cursor-not-allowed'
                             : 'text-muted-foreground hover:bg-muted'"
-                          :disabled="viewMode === 'compare'"
+                          :disabled="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')"
                           @click="currentExpandDepth === 0 ? expandAll() : collapseAll()"
                         >
                           <Maximize2
@@ -389,7 +416,7 @@
                             ? 'text-muted-foreground/40 cursor-not-allowed'
                             : 'text-muted-foreground hover:bg-muted'"
                           :disabled="viewMode === 'compare'"
-                          @click="copyJsonToClipboard(activeTab)"
+                          @click="copyContent(activeTab)"
                         >
                           <Check
                             v-if="copiedStates[activeTab]"
@@ -420,7 +447,15 @@
                     </TabsContent>
 
                     <TabsContent value="request-body">
+                      <!-- 对话视图 -->
+                      <ConversationView
+                        v-if="contentViewMode === 'conversation'"
+                        :render-result="requestRenderResult"
+                        empty-message="无请求体信息"
+                      />
+                      <!-- JSON 视图 -->
                       <JsonContent
+                        v-else
                         :data="detail.request_body"
                         :view-mode="viewMode"
                         :expand-depth="currentExpandDepth"
@@ -440,7 +475,15 @@
                     </TabsContent>
 
                     <TabsContent value="response-body">
+                      <!-- 对话视图 -->
+                      <ConversationView
+                        v-if="contentViewMode === 'conversation'"
+                        :render-result="responseRenderResult"
+                        empty-message="无响应体信息"
+                      />
+                      <!-- JSON 视图 -->
                       <JsonContent
+                        v-else
                         :data="detail.response_body"
                         :view-mode="viewMode"
                         :expand-depth="currentExpandDepth"
@@ -480,14 +523,23 @@ import Separator from '@/components/ui/separator.vue'
 import Skeleton from '@/components/ui/skeleton.vue'
 import Tabs from '@/components/ui/tabs.vue'
 import TabsContent from '@/components/ui/tabs-content.vue'
-import { Copy, Check, Maximize2, Minimize2, Columns2, RefreshCw, X, Monitor, Server } from 'lucide-vue-next'
+import { Copy, Check, Maximize2, Minimize2, Columns2, RefreshCw, X, Monitor, Server, MessageSquareText, Code2 } from 'lucide-vue-next'
 import { dashboardApi, type RequestDetail } from '@/api/dashboard'
 import { log } from '@/utils/logger'
 
 // 子组件
 import RequestHeadersContent from './RequestDetailDrawer/RequestHeadersContent.vue'
 import JsonContent from './RequestDetailDrawer/JsonContent.vue'
+import ConversationView from './RequestDetailDrawer/ConversationView.vue'
 import HorizontalRequestTimeline from './HorizontalRequestTimeline.vue'
+
+// 对话解析器
+import {
+  renderRequest,
+  renderResponse,
+  type RenderResult,
+  type RenderBlock,
+} from '../conversation'
 
 const props = defineProps<{
   isOpen: boolean
@@ -503,9 +555,10 @@ const error = ref<string | null>(null)
 const detail = ref<RequestDetail | null>(null)
 const activeTab = ref('request-body')
 const copiedStates = ref<Record<string, boolean>>({})
-const viewMode = ref<'compare' | 'formatted' | 'raw'>('compare')
-const currentExpandDepth = ref(1)
-const dataSource = ref<'client' | 'provider'>('client')
+const viewMode = ref<'compare' | 'formatted' | 'raw'>('formatted')
+const currentExpandDepth = ref(0)
+const dataSource = ref<'client' | 'provider'>('provider')
+const contentViewMode = ref<'json' | 'conversation'>('json')
 const { copyToClipboard } = useClipboard()
 const historicalPricing = ref<{
   input_price: string
@@ -519,6 +572,10 @@ const historicalPricing = ref<{
 watch(activeTab, (newTab) => {
   if (newTab !== 'request-headers' && viewMode.value === 'compare') {
     viewMode.value = 'formatted'
+  }
+  // 切换到不支持对话视图的 Tab 时，重置为 JSON 视图
+  if (!['request-body', 'response-body'].includes(newTab)) {
+    contentViewMode.value = 'json'
   }
 })
 
@@ -539,6 +596,40 @@ const currentHeaderData = computed(() => {
   return dataSource.value === 'client'
     ? detail.value.request_headers
     : detail.value.provider_request_headers
+})
+
+// 请求体渲染结果
+const requestRenderResult = computed<RenderResult>(() => {
+  if (!detail.value?.request_body) {
+    return { blocks: [], isStream: false }
+  }
+  return renderRequest(detail.value.request_body, detail.value.response_body, detail.value.api_format)
+})
+
+// 响应体渲染结果
+const responseRenderResult = computed<RenderResult>(() => {
+  if (!detail.value?.response_body) {
+    return { blocks: [], isStream: false }
+  }
+  return renderResponse(detail.value.response_body, detail.value.request_body, detail.value.api_format)
+})
+
+// 当前 Tab 是否支持对话视图
+const supportsConversationView = computed(() => {
+  return ['request-body', 'response-body'].includes(activeTab.value)
+})
+
+// 当前对话数据是否有效（用于禁用按钮）
+const hasValidConversation = computed(() => {
+  if (activeTab.value === 'request-body') {
+    return !requestRenderResult.value.error &&
+      requestRenderResult.value.blocks.length > 0
+  }
+  if (activeTab.value === 'response-body') {
+    return !responseRenderResult.value.error &&
+      responseRenderResult.value.blocks.length > 0
+  }
+  return false
 })
 
 // 价格来源标签
@@ -777,39 +868,119 @@ function getTierRangeText(tier: { up_to?: number | null }, index: number, tiers:
   return `> ${formatNumber(start)} tokens`
 }
 
-function copyJsonToClipboard(tabName: string) {
-  if (!detail.value) return
-  // 对比模式下不允许复制
-  if (viewMode.value === 'compare') return
-
-  let data: any = null
-  switch (tabName) {
-    case 'request-headers':
-      // 根据当前数据源选择要复制的数据
-      data = dataSource.value === 'provider'
-        ? detail.value.provider_request_headers
-        : detail.value.request_headers
-      break
-    case 'request-body':
-      data = detail.value.request_body
-      break
-    case 'response-headers':
-      data = actualResponseHeaders.value
-      break
-    case 'response-body':
-      data = detail.value.response_body
-      break
-    case 'metadata':
-      data = detail.value.metadata
-      break
+/** 将 RenderResult 格式化为可复制的文本 */
+function formatRenderResultAsText(result: RenderResult): string {
+  if (result.error) {
+    return `[Error] ${result.error}`
   }
 
-  if (data) {
-    copyToClipboard(JSON.stringify(data, null, 2), false)
+  const parts: string[] = []
+
+  for (const block of result.blocks) {
+    const text = formatBlockAsText(block)
+    if (text) {
+      parts.push(text)
+    }
+  }
+
+  return parts.join('\n\n---\n\n')
+}
+
+/** 将单个 RenderBlock 格式化为文本 */
+function formatBlockAsText(block: RenderBlock): string {
+  switch (block.type) {
+    case 'text':
+      return block.content
+    case 'code':
+      return block.language
+        ? `\`\`\`${block.language}\n${block.code}\n\`\`\``
+        : `\`\`\`\n${block.code}\n\`\`\``
+    case 'collapsible':
+      return `[${block.title}]\n${block.content.map(formatBlockAsText).filter(Boolean).join('\n')}`
+    case 'error':
+      return `[Error${block.code ? `: ${block.code}` : ''}] ${block.message}`
+    case 'image':
+      return `[Image: ${block.mimeType || block.alt || 'unknown'}]`
+    case 'tool_use':
+      return `[Tool: ${block.toolName}]\n${block.input}`
+    case 'tool_result':
+      return `[Tool Result${block.isError ? ' (Error)' : ''}]\n${block.content}`
+    case 'message': {
+      const roleLabel = block.roleLabel || block.role
+      const contentText = block.content.map(formatBlockAsText).filter(Boolean).join('\n\n')
+      return `[${roleLabel}]\n${contentText}`
+    }
+    case 'container':
+      return block.children.map(formatBlockAsText).filter(Boolean).join('\n')
+    case 'label':
+      return `${block.label}: ${block.value}`
+    case 'divider':
+      return '---'
+    case 'badge':
+      return ''
+    default:
+      return ''
+  }
+}
+
+// 复制内容（支持 JSON 和对话两种模式）
+function copyContent(tabName: string) {
+  if (!detail.value) return
+  if (viewMode.value === 'compare') return
+
+  let textToCopy = ''
+
+  // 对话视图模式：复制格式化的对话文本
+  if (contentViewMode.value === 'conversation') {
+    if (tabName === 'request-body') {
+      textToCopy = formatRenderResultAsText(requestRenderResult.value)
+    } else if (tabName === 'response-body') {
+      textToCopy = formatRenderResultAsText(responseRenderResult.value)
+    }
+  } else {
+    // JSON 视图模式：复制原始 JSON
+    let data: any = null
+    switch (tabName) {
+      case 'request-headers':
+        data = dataSource.value === 'provider'
+          ? detail.value.provider_request_headers
+          : detail.value.request_headers
+        break
+      case 'request-body':
+        data = detail.value.request_body
+        break
+      case 'response-headers':
+        data = actualResponseHeaders.value
+        break
+      case 'response-body':
+        data = detail.value.response_body
+        break
+      case 'metadata':
+        data = detail.value.metadata
+        break
+    }
+    if (data) {
+      textToCopy = JSON.stringify(data, null, 2)
+    }
+  }
+
+  if (textToCopy) {
+    copyToClipboard(textToCopy, false)
     copiedStates.value[tabName] = true
     setTimeout(() => {
       copiedStates.value[tabName] = false
     }, 2000)
+  }
+}
+
+// 切换内容视图模式
+function toggleContentView() {
+  if (contentViewMode.value === 'json') {
+    if (hasValidConversation.value) {
+      contentViewMode.value = 'conversation'
+    }
+  } else {
+    contentViewMode.value = 'json'
   }
 }
 

@@ -9,44 +9,66 @@
   >
     <template #default>
       <div class="space-y-4">
-        <!-- 常驻选择面板 -->
-        <div class="border rounded-lg overflow-hidden">
-          <!-- 搜索 + 操作栏 -->
-          <div class="flex items-center gap-2 p-2 border-b bg-muted/30">
-            <div class="relative flex-1">
-              <Search class="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                v-model="searchQuery"
-                placeholder="搜索模型或添加自定义模型..."
-                class="pl-8 h-8 text-sm"
-              />
-            </div>
-            <!-- 已选数量徽章 -->
-            <span
-              v-if="selectedModels.length === 0 && !isAutoFetchMode"
-              class="h-6 px-2 text-xs rounded flex items-center bg-muted text-muted-foreground shrink-0"
-            >
-              全部模型
-            </span>
-            <span
-              v-else-if="selectedModels.length === 0 && isAutoFetchMode"
-              class="h-6 px-2 text-xs rounded flex items-center bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0"
-            >
-              未选择模型
-            </span>
-            <span
-              v-else
-              class="h-6 px-2 text-xs rounded flex items-center bg-primary/10 text-primary shrink-0"
-            >
-              已选 {{ selectedModels.length }} 个
-            </span>
-            <Loader2
-              v-if="fetchingUpstreamModels"
-              class="w-4 h-4 animate-spin text-muted-foreground shrink-0"
+        <!-- 搜索栏 -->
+        <div class="flex items-center gap-2">
+          <div class="flex-1 relative">
+            <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              v-model="searchQuery"
+              placeholder="搜索模型或添加自定义模型..."
+              class="pl-8 h-9"
             />
           </div>
+          <!-- 已选数量徽章 -->
+          <span
+            v-if="selectedModels.length === 0 && !isAutoFetchMode"
+            class="h-7 px-2.5 text-xs rounded-md flex items-center bg-muted text-muted-foreground shrink-0"
+          >
+            全部模型
+          </span>
+          <span
+            v-else-if="selectedModels.length === 0 && isAutoFetchMode"
+            class="h-7 px-2.5 text-xs rounded-md flex items-center bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0"
+          >
+            未选择模型
+          </span>
+          <span
+            v-else
+            class="h-7 px-2.5 text-xs rounded-md flex items-center bg-primary/10 text-primary shrink-0"
+          >
+            已选 {{ selectedModels.length }} 个
+          </span>
+          <!-- 刷新上游模型按钮 -->
+          <button
+            v-if="upstreamModelsLoaded"
+            type="button"
+            class="p-2 hover:bg-muted rounded-md transition-colors shrink-0"
+            :disabled="fetchingUpstreamModels"
+            title="刷新上游模型"
+            @click="refreshUpstreamModels"
+          >
+            <RefreshCw
+              class="w-4 h-4"
+              :class="{ 'animate-spin': fetchingUpstreamModels }"
+            />
+          </button>
+          <button
+            v-else-if="!fetchingUpstreamModels"
+            type="button"
+            class="p-2 hover:bg-muted rounded-md transition-colors shrink-0"
+            title="从提供商获取模型"
+            @click="refreshUpstreamModels"
+          >
+            <Zap class="w-4 h-4" />
+          </button>
+          <Loader2
+            v-else
+            class="w-4 h-4 animate-spin text-muted-foreground shrink-0"
+          />
+        </div>
 
-          <!-- 分组列表 -->
+        <!-- 模型列表 -->
+        <div class="border rounded-lg overflow-hidden">
           <div class="max-h-96 overflow-y-auto">
             <!-- 加载中 -->
             <div
@@ -77,7 +99,7 @@
               <!-- 自定义模型 -->
               <div v-if="customModels.length > 0">
                 <div
-                  class="flex items-center justify-between px-3 h-9 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors border-b border-border/30"
+                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors"
                   @click="toggleGroupCollapse('custom')"
                 >
                   <div class="flex items-center gap-2">
@@ -116,8 +138,14 @@
                       :title="isLocked(model) ? '已锁定 - 点击解锁' : '点击锁定（刷新时不会被删除）'"
                       @click="toggleLock(model, $event)"
                     >
-                      <Lock v-if="isLocked(model)" class="w-3.5 h-3.5" />
-                      <LockOpen v-else class="w-3.5 h-3.5" />
+                      <Lock
+                        v-if="isLocked(model)"
+                        class="w-3.5 h-3.5"
+                      />
+                      <LockOpen
+                        v-else
+                        class="w-3.5 h-3.5"
+                      />
                     </button>
                   </div>
                 </div>
@@ -127,7 +155,7 @@
               <template v-if="filteredGlobalModels.length > 0">
                 <!-- 标题 sticky top -->
                 <div
-                  class="flex items-center justify-between px-3 h-9 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors border-b border-border/30"
+                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors"
                   @click="toggleGroupCollapse('global')"
                 >
                   <div class="flex items-center gap-2">
@@ -181,8 +209,14 @@
                       :title="isLocked(model.name) ? '已锁定 - 点击解锁' : '点击锁定（刷新时不会被删除）'"
                       @click="toggleLock(model.name, $event)"
                     >
-                      <Lock v-if="isLocked(model.name)" class="w-3.5 h-3.5" />
-                      <LockOpen v-else class="w-3.5 h-3.5" />
+                      <Lock
+                        v-if="isLocked(model.name)"
+                        class="w-3.5 h-3.5"
+                      />
+                      <LockOpen
+                        v-else
+                        class="w-3.5 h-3.5"
+                      />
                     </button>
                   </div>
                 </div>
@@ -190,13 +224,9 @@
 
               <!-- 上游模型 -->
               <template v-if="filteredUpstreamModels.length > 0">
-                <!-- 标题 sticky（双向粘性：top 和 bottom） -->
+                <!-- 标题 sticky -->
                 <div
-                  class="flex items-center justify-between px-3 h-9 bg-muted sticky z-20 cursor-pointer hover:bg-muted/80 transition-colors border-b border-border/30"
-                  :style="{
-                    top: filteredGlobalModels.length > 0 ? '36px' : '0px',
-                    bottom: '0px'
-                  }"
+                  class="flex items-center justify-between px-3 py-2 bg-muted sticky top-0 z-20 cursor-pointer hover:bg-muted/80 transition-colors"
                   @click="toggleGroupCollapse('upstream')"
                 >
                   <div class="flex items-center gap-2">
@@ -206,8 +236,15 @@
                     />
                     <span class="text-xs font-medium">上游模型</span>
                     <span class="text-xs text-muted-foreground">({{ upstreamModelNames.length }})</span>
+                    <span
+                      v-if="isAutoFetchMode"
+                      class="text-xs text-muted-foreground"
+                    >
+                      (自动同步)
+                    </span>
                   </div>
                   <button
+                    v-if="!isAutoFetchMode"
                     type="button"
                     class="text-xs text-primary hover:underline"
                     @click.stop="toggleAllUpstreamModels"
@@ -222,29 +259,49 @@
                 >
                   <div
                     v-for="model in filteredUpstreamModels"
-                    :key="model"
-                    class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer"
-                    @click="toggleModel(model)"
+                    :key="model.id"
+                    class="flex items-center gap-2 px-2 py-1.5 rounded"
+                    :class="isAutoFetchMode ? 'opacity-80' : 'hover:bg-muted cursor-pointer'"
+                    @click="handleUpstreamModelClick(model)"
                   >
                     <div
                       class="w-4 h-4 border rounded flex items-center justify-center shrink-0"
-                      :class="selectedModels.includes(model) ? 'bg-primary border-primary' : ''"
+                      :class="[
+                        selectedModels.includes(model.id) ? 'bg-primary border-primary' : '',
+                        isAutoFetchMode ? 'opacity-50' : ''
+                      ]"
                     >
                       <Check
-                        v-if="selectedModels.includes(model)"
+                        v-if="selectedModels.includes(model.id)"
                         class="w-3 h-3 text-primary-foreground"
                       />
                     </div>
-                    <span class="text-sm font-mono truncate flex-1">{{ model }}</span>
+                    <span class="text-sm font-mono truncate flex-1">{{ model.id }}</span>
+                    <!-- API 格式标签 -->
+                    <div class="flex items-center gap-1 shrink-0">
+                      <span
+                        v-for="fmt in model.api_formats"
+                        :key="fmt"
+                        class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"
+                      >
+                        {{ API_FORMAT_SHORT[fmt] || fmt }}
+                      </span>
+                    </div>
                     <button
-                      v-if="selectedModels.includes(model)"
+                      v-if="selectedModels.includes(model.id)"
                       type="button"
                       class="p-1 rounded hover:bg-muted-foreground/10 transition-colors shrink-0 text-muted-foreground"
-                      :title="isLocked(model) ? '已锁定 - 点击解锁' : '点击锁定（刷新时不会被删除）'"
-                      @click="toggleLock(model, $event)"
+                      :title="isLocked(model.id) ? '已锁定 - 点击解锁' : '点击锁定（刷新时不会被删除）'"
+                      @click="toggleLock(model.id, $event)"
                     >
-                      <Lock v-if="isLocked(model)" class="w-3.5 h-3.5" />
-                      <LockOpen v-else class="w-3.5 h-3.5" />
+                      <Lock
+                        v-if="isLocked(model.id)"
+                        class="w-3.5 h-3.5"
+                      />
+                      <LockOpen
+                        v-else
+                        class="w-3.5 h-3.5"
+                      />
                     </button>
                   </div>
                 </div>
@@ -300,7 +357,9 @@ import {
   Check,
   ChevronDown,
   Lock,
-  LockOpen
+  LockOpen,
+  RefreshCw,
+  Zap
 } from 'lucide-vue-next'
 import { Dialog, Button, Input } from '@/components/ui'
 import { useToast } from '@/composables/useToast'
@@ -313,7 +372,7 @@ import {
 } from '@/api/endpoints'
 import { getGlobalModels, type GlobalModelResponse } from '@/api/global-models'
 import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
-import type { UpstreamModel } from '@/api/endpoints/types'
+import { API_FORMAT_SHORT, sortApiFormats, type UpstreamModel } from '@/api/endpoints/types'
 
 interface AvailableModel {
   name: string
@@ -409,37 +468,49 @@ function isGlobalModel(modelId: string): boolean {
   return globalModelNamesSet.value.has(modelId)
 }
 
-// Key 支持的 API 格式
-const keyApiFormats = computed(() => props.apiKey?.api_formats ?? [])
+// 上游模型信息（包含 api_format）
+interface UpstreamModelInfo {
+  id: string
+  api_formats: string[]  // 该模型支持的所有 API 格式
+}
 
-// 上游模型名称列表（去重后）
-const upstreamModelNames = computed(() => {
-  const names = new Set<string>()
+// 上游模型列表（按 id 聚合，包含所有 api_format）
+const upstreamModelList = computed(() => {
+  const modelMap = new Map<string, Set<string>>()
   upstreamModels.value.forEach(m => {
-    // 只包含 Key 支持的 API 格式的模型
-    if (!m.api_format || keyApiFormats.value.includes(m.api_format)) {
-      names.add(m.id)
+    if (!modelMap.has(m.id)) {
+      modelMap.set(m.id, new Set())
+    }
+    if (m.api_format) {
+      modelMap.get(m.id)!.add(m.api_format)
     }
   })
-  return Array.from(names).sort()
+  const result: UpstreamModelInfo[] = []
+  modelMap.forEach((formats, id) => {
+    result.push({ id, api_formats: sortApiFormats(Array.from(formats)) })
+  })
+  return result.sort((a, b) => a.id.localeCompare(b.id))
 })
+
+// 上游模型名称列表（用于计数和全选判断）
+const upstreamModelNames = computed(() => upstreamModelList.value.map(m => m.id))
 
 // 过滤后的上游模型
 const filteredUpstreamModels = computed(() => {
-  if (!searchQuery.value.trim()) return upstreamModelNames.value
+  if (!searchQuery.value.trim()) return upstreamModelList.value
   const query = searchQuery.value.toLowerCase()
-  return upstreamModelNames.value.filter(m => m.toLowerCase().includes(query))
+  return upstreamModelList.value.filter(m => m.id.toLowerCase().includes(query))
 })
 
 // 上游模型是否全选
 const isAllUpstreamModelsSelected = computed(() => {
   if (filteredUpstreamModels.value.length === 0) return false
-  return filteredUpstreamModels.value.every(m => selectedModels.value.includes(m))
+  return filteredUpstreamModels.value.every(m => selectedModels.value.includes(m.id))
 })
 
 // 全选/取消全选上游模型
 function toggleAllUpstreamModels() {
-  const allIds = filteredUpstreamModels.value
+  const allIds = filteredUpstreamModels.value.map(m => m.id)
   if (isAllUpstreamModelsSelected.value) {
     selectedModels.value = selectedModels.value.filter(id => !allIds.includes(id))
   } else {
@@ -448,6 +519,13 @@ function toggleAllUpstreamModels() {
         selectedModels.value.push(id)
       }
     })
+  }
+}
+
+// 处理上游模型点击（自动同步模式下禁用）
+function handleUpstreamModelClick(model: UpstreamModelInfo) {
+  if (!isAutoFetchMode.value) {
+    toggleModel(model.id)
   }
 }
 
@@ -600,7 +678,7 @@ async function loadGlobalModels() {
       name: m.name,
       display_name: m.display_name
     }))
-  } catch (err) {
+  } catch {
     if (loadingCancelled) return
     showError('加载全局模型失败', '错误')
   } finally {
@@ -609,11 +687,11 @@ async function loadGlobalModels() {
 }
 
 // 从提供商获取模型（使用缓存）
-async function fetchUpstreamModels() {
+async function fetchUpstreamModels(forceRefresh = false) {
   if (!props.providerId || !props.apiKey) return
   try {
     fetchingUpstreamModels.value = true
-    const result = await fetchCachedModels(props.providerId, props.apiKey.id)
+    const result = await fetchCachedModels(props.providerId, props.apiKey.id, forceRefresh)
     if (loadingCancelled) return
     if (result.models.length > 0) {
       upstreamModels.value = result.models
@@ -626,6 +704,16 @@ async function fetchUpstreamModels() {
     }
   } finally {
     fetchingUpstreamModels.value = false
+  }
+}
+
+// 手动刷新上游模型（强制跳过缓存）
+async function refreshUpstreamModels() {
+  await fetchUpstreamModels(true)
+  if (upstreamModels.value.length > 0) {
+    success('上游模型已刷新')
+    // 获取成功后收缩所有分组
+    collapsedGroups.value = new Set(['global', 'upstream', 'custom'])
   }
 }
 
@@ -656,26 +744,22 @@ watch(() => props.open, async (open) => {
     upstreamModelsLoaded.value = false
     allCustomModels.value = []
 
-    // 默认全部收缩，自动获取模式下展开上游模型
+    // 自动获取模式下展开上游模型，其他收缩；非自动获取模式下全部展开
     if (props.apiKey.auto_fetch_models) {
       collapsedGroups.value = new Set(['global', 'custom'])
     } else {
-      collapsedGroups.value = new Set(['global', 'upstream', 'custom'])
+      collapsedGroups.value = new Set()
     }
 
     // 加载全局模型
     await loadGlobalModels()
 
-    // 自动获取上游模型
-    await fetchUpstreamModels()
-
-    // 自动获取模式下，用最新上游模型刷新（保留锁定的模型）
+    // 自动获取模式下，获取上游模型用于显示（但选中状态使用已保存的 allowed_models）
     if (props.apiKey.auto_fetch_models) {
-      // 锁定的模型 + 最新上游模型（去重）
-      const newSelected = new Set(lockedModels.value)
-      upstreamModelNames.value.forEach(m => newSelected.add(m))
-      selectedModels.value = Array.from(newSelected)
-      initialSelectedModels.value = [...selectedModels.value]
+      await fetchUpstreamModels()
+      // 注意：不再将所有上游模型自动标记为选中
+      // 因为后端有过滤规则，实际保存的 allowed_models 是过滤后的结果
+      // selectedModels 已在上面从 props.apiKey.allowed_models 初始化
     }
 
     // 提取自定义模型（不在全局模型和上游模型中的）

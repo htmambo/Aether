@@ -130,7 +130,19 @@ class LDAPService:
     def get_config_data(db: Session) -> Optional[Dict[str, Any]]:
         """
         提前获取并解密配置，供线程池使用，避免跨线程共享 Session。
+
+        检查顺序：
+        1. LDAP 模块是否激活（available && enabled）
+        2. LDAP 配置是否启用
+        3. 绑定密码是否可解密
         """
+        # 检查 LDAP 模块是否激活
+        from src.core.modules import get_module_registry
+
+        registry = get_module_registry()
+        if not registry.is_active("ldap", db):
+            return None
+
         config = LDAPService.get_config(db)
         if not config or config.is_enabled is not True:
             return None

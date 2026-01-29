@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.models_service import invalidate_models_list_cache
 from src.api.base.pipeline import ApiRequestPipeline
-from src.config.constants import RPMDefaults
 from src.core.crypto import crypto_service
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.key_capabilities import get_capability
@@ -50,7 +50,7 @@ async def update_endpoint_key(
     - `api_key`: 新的 API Key 原文
     - `name`: Key 名称
     - `note`: 备注
-    - `rate_multiplier`: 速率倍数
+    - `rate_multipliers`: 按 API 格式的成本倍率
     - `internal_priority`: 内部优先级
     - `rpm_limit`: RPM 限制（设置为 null 可切换到自适应模式）
     - `allowed_models`: 允许的模型列表
@@ -82,8 +82,9 @@ async def get_keys_grouped_by_format(
       - `name`: Key 名称
       - `api_key_masked`: 脱敏后的 API Key
       - `internal_priority`: 内部优先级
-      - `global_priority`: 全局优先级
-      - `rate_multiplier`: 速率倍数
+      - `global_priority_by_format`: 按 API 格式的全局优先级
+      - `format_priority`: 当前格式的优先级
+      - `rate_multipliers`: 按 API 格式的成本倍率
       - `is_active`: 是否活跃
       - `circuit_breaker_open`: 熔断器状态
       - `provider_name`: Provider 名称
@@ -223,6 +224,10 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
         # 记录 allowed_models 变化前的值
         allowed_models_before = set(key.allowed_models or [])
 
+        # 记录过滤规则变化前的值（用于检测是否需要重新应用过滤）
+        include_patterns_before = key.model_include_patterns
+        exclude_patterns_before = key.model_exclude_patterns
+
         update_data = self.key_data.model_dump(exclude_unset=True)
         if "api_key" in update_data:
             update_data["api_key"] = crypto_service.encrypt(update_data["api_key"])
@@ -246,6 +251,17 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
             if isinstance(lm, list) and len(lm) == 0:
                 update_data["locked_models"] = None
 
+        # 处理模型过滤规则：空字符串 -> None
+        if "model_include_patterns" in update_data:
+            patterns = update_data["model_include_patterns"]
+            if isinstance(patterns, list) and len(patterns) == 0:
+                update_data["model_include_patterns"] = None
+
+        if "model_exclude_patterns" in update_data:
+            patterns = update_data["model_exclude_patterns"]
+            if isinstance(patterns, list) and len(patterns) == 0:
+                update_data["model_exclude_patterns"] = None
+
         for field, value in update_data.items():
             setattr(key, field, value)
         key.updated_at = datetime.now(timezone.utc)
@@ -255,16 +271,14 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
 
         # 处理 auto_fetch_models 的开启和关闭
         if not auto_fetch_enabled_before and auto_fetch_enabled_after:
-            # 刚刚开启了 auto_fetch_models，立即触发一次模型获取
-            logger.info("[AUTO_FETCH] Key %s 开启自动获取模型，立即触发模型获取", self.key_id)
+            # 刚刚开启了 auto_fetch_models，同步执行模型获取
+            logger.info("[AUTO_FETCH] Key %s 开启自动获取模型，同步执行模型获取", self.key_id)
             try:
                 from src.services.model.fetch_scheduler import get_model_fetch_scheduler
 
                 scheduler = get_model_fetch_scheduler()
-                # 在后台异步执行，不阻塞当前请求
-                import asyncio
-
-                asyncio.create_task(scheduler._fetch_models_for_key_by_id(self.key_id))
+                # 同步等待模型获取完成，确保前端刷新时能看到最新数据
+                await scheduler._fetch_models_for_key_by_id(self.key_id)
             except Exception as e:
                 logger.error(f"触发模型获取失败: {e}")
                 # 不抛出异常，避免影响 Key 更新操作
@@ -286,6 +300,27 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
                 )
             db.commit()
             db.refresh(key)
+        elif auto_fetch_enabled_after:
+            # auto_fetch_models 保持开启状态，检查过滤规则是否变更
+            include_patterns_after = key.model_include_patterns
+            exclude_patterns_after = key.model_exclude_patterns
+            patterns_changed = (
+                include_patterns_before != include_patterns_after
+                or exclude_patterns_before != exclude_patterns_after
+            )
+            if patterns_changed:
+                # 过滤规则变更，重新应用过滤（使用缓存的上游模型数据）
+                logger.info(
+                    "[AUTO_FETCH] Key %s 过滤规则变更，重新应用过滤",
+                    self.key_id,
+                )
+                try:
+                    from src.services.model.fetch_scheduler import get_model_fetch_scheduler
+
+                    scheduler = get_model_fetch_scheduler()
+                    await scheduler._fetch_models_for_key_by_id(self.key_id)
+                except Exception as e:
+                    logger.error(f"重新应用过滤规则失败: {e}")
 
         # 任何字段更新都清除缓存，确保缓存一致性
         # 包括 is_active、allowed_models、capabilities 等影响权限和行为的字段
@@ -296,11 +331,14 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
         if allowed_models_before != allowed_models_after and key.provider_id:
             from src.services.model.global_model import on_key_allowed_models_changed
 
-            on_key_allowed_models_changed(
+            await on_key_allowed_models_changed(
                 db=db,
                 provider_id=key.provider_id,
                 allowed_models=list(key.allowed_models or []),
             )
+        else:
+            # allowed_models 未变化时，仍需清除 /v1/models 缓存（is_active、api_formats 变更会影响模型可用性）
+            await invalidate_models_list_cache()
 
         logger.info("[OK] 更新 Key: ID=%s, Updates=%s", self.key_id, list(update_data.keys()))
 
@@ -342,6 +380,7 @@ class AdminDeleteEndpointKeyAdapter(AdminApiAdapter):
             raise NotFoundException(f"Key {self.key_id} 不存在")
 
         provider_id = key.provider_id
+        deleted_key_allowed_models = key.allowed_models  # 保存被删除 Key 的 allowed_models
         try:
             db.delete(key)
             db.commit()
@@ -349,6 +388,21 @@ class AdminDeleteEndpointKeyAdapter(AdminApiAdapter):
             db.rollback()
             logger.error(f"删除 Key 失败: ID={self.key_id}, Error={exc}")
             raise
+
+        # 触发缓存失效和自动解除关联检查
+        # 注意：只有当被删除的 Key 有具体的 allowed_models 时才触发 disassociate
+        # 如果 allowed_models 为 null（允许所有模型），则不需要检查解除关联
+        if provider_id:
+            from src.services.model.global_model import on_key_allowed_models_changed
+
+            await on_key_allowed_models_changed(
+                db=db,
+                provider_id=provider_id,
+                skip_disassociate=deleted_key_allowed_models is None,
+            )
+        else:
+            # 无 provider_id 时仅清除缓存
+            await invalidate_models_list_cache()
 
         logger.warning(f"[DELETE] 删除 Key: ID={self.key_id}, Provider={provider_id}")
         return {"message": f"Key {self.key_id} 已删除"}
@@ -367,7 +421,6 @@ class AdminGetKeysGroupedByFormatAdapter(AdminApiAdapter):
                 Provider.is_active.is_(True),
             )
             .order_by(
-                ProviderAPIKey.global_priority.asc().nullslast(),
                 ProviderAPIKey.internal_priority.asc(),
             )
             .all()
@@ -427,8 +480,8 @@ class AdminGetKeysGroupedByFormatAdapter(AdminApiAdapter):
                 "name": key.name,
                 "api_key_masked": masked_key,
                 "internal_priority": key.internal_priority,
-                "global_priority": key.global_priority,
-                "rate_multiplier": key.rate_multiplier,
+                "global_priority_by_format": key.global_priority_by_format,
+                "rate_multipliers": key.rate_multipliers,
                 "is_active": key.is_active,
                 "provider_name": provider.name,
                 "api_formats": api_formats,
@@ -438,9 +491,10 @@ class AdminGetKeysGroupedByFormatAdapter(AdminApiAdapter):
                 "request_count": key.request_count,
             }
 
-            # 将 Key 添加到每个支持的格式分组中，并附加格式特定的健康度数据
+            # 将 Key 添加到每个支持的格式分组中，并附加格式特定的数据
             health_by_format = key.health_by_format or {}
             circuit_by_format = key.circuit_breaker_by_format or {}
+            priority_by_format = key.global_priority_by_format or {}
             provider_id = str(provider.id)
             for api_format in api_formats:
                 if api_format not in grouped:
@@ -451,6 +505,8 @@ class AdminGetKeysGroupedByFormatAdapter(AdminApiAdapter):
                 format_key_info["endpoint_base_url"] = endpoint_base_url_map.get(
                     (provider_id, api_format)
                 )
+                # 添加格式特定的优先级
+                format_key_info["format_priority"] = priority_by_format.get(api_format)
                 # 添加格式特定的健康度数据
                 format_health = health_by_format.get(api_format, {})
                 format_circuit = circuit_by_format.get(api_format, {})
@@ -518,11 +574,7 @@ def _build_key_response(
             "avg_response_time_ms": round(avg_response_time_ms, 2),
             "is_adaptive": is_adaptive,
             "effective_limit": (
-                (
-                    key.learned_rpm_limit
-                    if key.learned_rpm_limit is not None
-                    else RPMDefaults.INITIAL_LIMIT
-                )
+                key.learned_rpm_limit  # 自适应模式：使用学习值，未学习时为 None（不限制）
                 if is_adaptive
                 else key.rpm_limit
             ),
@@ -597,8 +649,7 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             api_key=encrypted_key,
             name=self.key_data.name,
             note=self.key_data.note,
-            rate_multiplier=self.key_data.rate_multiplier,
-            rate_multipliers=self.key_data.rate_multipliers,  # 按 API 格式的成本倍率
+            rate_multipliers=self.key_data.rate_multipliers,
             internal_priority=self.key_data.internal_priority,
             rpm_limit=self.key_data.rpm_limit,
             allowed_models=self.key_data.allowed_models if self.key_data.allowed_models else None,
@@ -607,6 +658,12 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             max_probe_interval_minutes=self.key_data.max_probe_interval_minutes,
             auto_fetch_models=self.key_data.auto_fetch_models,
             locked_models=self.key_data.locked_models if self.key_data.locked_models else None,
+            model_include_patterns=(
+                self.key_data.model_include_patterns if self.key_data.model_include_patterns else None
+            ),
+            model_exclude_patterns=(
+                self.key_data.model_exclude_patterns if self.key_data.model_exclude_patterns else None
+            ),
             request_count=0,
             success_count=0,
             error_count=0,
@@ -628,29 +685,30 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             f"Formats={self.key_data.api_formats}, Key=***{self.key_data.api_key[-4:]}, ID={new_key.id}"
         )
 
-        # 如果开启了 auto_fetch_models，立即触发一次模型获取
+        # 如果开启了 auto_fetch_models，同步执行模型获取
         if self.key_data.auto_fetch_models:
-            logger.info("[AUTO_FETCH] 新 Key %s 开启自动获取模型，立即触发模型获取", new_key.id)
+            logger.info("[AUTO_FETCH] 新 Key %s 开启自动获取模型，同步执行模型获取", new_key.id)
             try:
                 from src.services.model.fetch_scheduler import get_model_fetch_scheduler
 
                 scheduler = get_model_fetch_scheduler()
-                # 在后台异步执行，不阻塞当前请求
-                import asyncio
-
-                asyncio.create_task(scheduler._fetch_models_for_key_by_id(new_key.id))
+                # 同步等待模型获取完成，确保前端刷新时能看到最新数据
+                await scheduler._fetch_models_for_key_by_id(new_key.id)
             except Exception as e:
                 logger.error(f"触发模型获取失败: {e}")
                 # 不抛出异常，避免影响 Key 创建操作
 
-        # 如果创建时指定了 allowed_models，触发自动关联检查
+        # 如果创建时指定了 allowed_models，触发自动关联检查（内部会清除 /v1/models 缓存）
         if new_key.allowed_models:
             from src.services.model.global_model import on_key_allowed_models_changed
 
-            on_key_allowed_models_changed(
+            await on_key_allowed_models_changed(
                 db=db,
                 provider_id=self.provider_id,
                 allowed_models=list(new_key.allowed_models),
             )
+        else:
+            # 没有 allowed_models 时，仍需清除 /v1/models 缓存
+            await invalidate_models_list_cache()
 
         return _build_key_response(new_key, api_key_plain=self.key_data.api_key)

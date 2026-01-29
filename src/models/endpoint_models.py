@@ -10,6 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.models.admin_requests import ProxyConfig
 
+
+# ========== Header Rule 类型定义 ==========
+# 请求头规则支持三种操作：
+# - set: 设置/覆盖请求头 {"action": "set", "key": "X-Custom", "value": "val"}
+# - drop: 删除请求头 {"action": "drop", "key": "X-Unwanted"}
+# - rename: 重命名请求头 {"action": "rename", "from": "X-Old", "to": "X-New"}
+# 实际验证在 headers.py 的 apply_rules 中处理
+HeaderRule = Dict[str, Any]
+
+
 # ========== ProviderEndpoint CRUD ==========
 
 
@@ -21,9 +31,15 @@ class ProviderEndpointCreate(BaseModel):
     base_url: str = Field(..., min_length=1, max_length=500, description="API 基础 URL")
     custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
 
-    # 请求配置
+    # 请求配置（旧格式）
     headers: Optional[Dict[str, Any]] = Field(default=None, description="自定义请求头（支持规则格式）")
-    timeout: int = Field(default=300, ge=10, le=600, description="超时时间（秒）")
+    timeout: Optional[int] = Field(default=None, ge=10, le=600, description="超时时间（秒）")
+
+    # 请求头配置（新格式）
+    header_rules: Optional[List[HeaderRule]] = Field(
+        default=None,
+        description="请求头规则列表，支持 set/drop/rename 操作",
+    )
     max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
 
     # 额外配置
@@ -54,11 +70,17 @@ class ProviderEndpointCreate(BaseModel):
 
         return v
 
+    # 格式转换配置
+    format_acceptance_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="格式接受策略配置（跨格式转换开关/白黑名单等）",
+    )
+
     @field_validator("api_format")
     @classmethod
     def validate_api_format(cls, v: str) -> str:
         """验证 API 格式"""
-        from src.core.enums import APIFormat
+        from src.core.api_format import APIFormat
 
         allowed = [fmt.value for fmt in APIFormat]
         v_upper = v.upper()
@@ -84,6 +106,12 @@ class ProviderEndpointUpdate(BaseModel):
     custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
     headers: Optional[Dict[str, Any]] = Field(default=None, description="自定义请求头（支持规则格式）")
     timeout: Optional[int] = Field(default=None, ge=10, le=600, description="超时时间（秒）")
+
+    # 请求头配置
+    header_rules: Optional[List[HeaderRule]] = Field(
+        default=None,
+        description="请求头规则列表，支持 set/drop/rename 操作",
+    )
     max_retries: Optional[int] = Field(default=None, ge=0, le=10, description="最大重试次数")
     is_active: Optional[bool] = Field(default=None, description="是否启用")
     config: Optional[Dict[str, Any]] = Field(default=None, description="额外配置")
@@ -111,6 +139,12 @@ class ProviderEndpointUpdate(BaseModel):
 
         return v
 
+    # 格式转换配置
+    format_acceptance_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="格式接受策略配置（跨格式转换开关/白黑名单等）",
+    )
+
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, v: Optional[str]) -> Optional[str]:
@@ -136,9 +170,14 @@ class ProviderEndpointResponse(BaseModel):
     base_url: str
     custom_path: Optional[str] = None
 
-    # 请求配置
+    # 请求配置（旧格式）
     headers: Optional[Dict[str, Any]] = None
-    timeout: int
+    timeout: Optional[int] = None
+
+    # 请求头配置（新格式）
+    header_rules: Optional[List[HeaderRule]] = Field(
+        default=None, description="请求头规则列表"
+    )
     max_retries: int
 
     # 状态
@@ -149,6 +188,12 @@ class ProviderEndpointResponse(BaseModel):
 
     # 代理配置（响应中密码已脱敏）
     proxy: Optional[Dict[str, Any]] = Field(default=None, description="代理配置（密码已脱敏）")
+
+    # 格式转换配置
+    format_acceptance_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="格式接受策略配置（跨格式转换开关/白黑名单等）",
+    )
 
     # 统计（从 Keys 聚合）
     total_keys: int = Field(default=0, description="总 Key 数量")
@@ -176,10 +221,6 @@ class EndpointAPIKeyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="密钥名称（必填，用于识别）")
 
     # 成本计算
-    # [DEPRECATED] rate_multiplier 已废弃，请使用 rate_multipliers
-    rate_multiplier: float = Field(
-        default=1.0, ge=0.01, description="[DEPRECATED] 默认成本倍率，已废弃，请使用 rate_multipliers"
-    )
     rate_multipliers: Optional[Dict[str, float]] = Field(
         default=None, description="按 API 格式的成本倍率，如 {'CLAUDE_CLI': 1.0, 'OPENAI_CLI': 0.8}"
     )
@@ -221,6 +262,14 @@ class EndpointAPIKeyCreate(BaseModel):
         default=None, description="被锁定的模型列表（刷新时不会被删除）"
     )
 
+    # 模型过滤规则（仅当 auto_fetch_models=True 时生效）
+    model_include_patterns: Optional[List[str]] = Field(
+        default=None, description="模型包含规则（支持 * 和 ? 通配符），空表示包含所有"
+    )
+    model_exclude_patterns: Optional[List[str]] = Field(
+        default=None, description="模型排除规则（支持 * 和 ? 通配符），空表示不排除"
+    )
+
     @field_validator("api_formats")
     @classmethod
     def validate_api_formats(cls, v: Optional[List[str]]) -> Optional[List[str]]:
@@ -228,7 +277,7 @@ class EndpointAPIKeyCreate(BaseModel):
         if v is None:
             return v
 
-        from src.core.enums import APIFormat
+        from src.core.api_format import APIFormat
 
         allowed = [fmt.value for fmt in APIFormat]
         validated = []
@@ -318,16 +367,14 @@ class EndpointAPIKeyUpdate(BaseModel):
         default=None, min_length=3, max_length=500, description="API Key（将自动加密）"
     )
     name: Optional[str] = Field(default=None, min_length=1, max_length=100, description="密钥名称")
-    # [DEPRECATED] rate_multiplier 已废弃，请使用 rate_multipliers
-    rate_multiplier: Optional[float] = Field(default=None, ge=0.01, description="[DEPRECATED] 默认成本倍率，已废弃")
     rate_multipliers: Optional[Dict[str, float]] = Field(
         default=None, description="按 API 格式的成本倍率，如 {'CLAUDE_CLI': 1.0, 'OPENAI_CLI': 0.8}"
     )
     internal_priority: Optional[int] = Field(
         default=None, description="Key 内部优先级（提供商优先模式，数字越小越优先）"
     )
-    global_priority: Optional[int] = Field(
-        default=None, description="全局 Key 优先级（全局 Key 优先模式，数字越小越优先）"
+    global_priority_by_format: Optional[Dict[str, int]] = Field(
+        default=None, description="按 API 格式的全局优先级，如 {'CLAUDE': 1, 'CLAUDE_CLI': 2}"
     )
     # rpm_limit: 使用特殊标记区分"未提供"和"设置为 null（自适应模式）"
     # - 不提供字段：不更新
@@ -357,6 +404,13 @@ class EndpointAPIKeyUpdate(BaseModel):
     locked_models: Optional[List[str]] = Field(
         default=None, description="被锁定的模型列表（刷新时不会被删除）"
     )
+    # 模型过滤规则（仅当 auto_fetch_models=True 时生效）
+    model_include_patterns: Optional[List[str]] = Field(
+        default=None, description="模型包含规则（支持 * 和 ? 通配符），空表示包含所有"
+    )
+    model_exclude_patterns: Optional[List[str]] = Field(
+        default=None, description="模型排除规则（支持 * 和 ? 通配符），空表示不排除"
+    )
 
     @field_validator("api_formats")
     @classmethod
@@ -365,7 +419,7 @@ class EndpointAPIKeyUpdate(BaseModel):
         if v is None:
             return v
 
-        from src.core.enums import APIFormat
+        from src.core.api_format import APIFormat
 
         allowed = [fmt.value for fmt in APIFormat]
         validated = []
@@ -394,8 +448,8 @@ class EndpointAPIKeyUpdate(BaseModel):
             return v
 
         v = v.strip()
-        if len(v) < 10:
-            raise ValueError("API Key 长度不能少于 10 个字符")
+        if len(v) < 3:
+            raise ValueError("API Key 长度不能少于 3 个字符")
 
         dangerous_chars = ["'", '"', ";", "--", "/*", "*/", "<", ">"]
         for char in dangerous_chars:
@@ -445,15 +499,15 @@ class EndpointAPIKeyResponse(BaseModel):
     name: str = Field(..., description="密钥名称")
 
     # 成本计算
-    # [DEPRECATED] rate_multiplier 已废弃，请使用 rate_multipliers
-    rate_multiplier: float = Field(default=1.0, description="[DEPRECATED] 默认成本倍率，已废弃")
     rate_multipliers: Optional[Dict[str, float]] = Field(
         default=None, description="按 API 格式的成本倍率，如 {'CLAUDE_CLI': 1.0, 'OPENAI_CLI': 0.8}"
     )
 
     # 优先级和限制
     internal_priority: int = Field(default=50, description="Endpoint 内部优先级")
-    global_priority: Optional[int] = Field(default=None, description="全局 Key 优先级")
+    global_priority_by_format: Optional[Dict[str, int]] = Field(
+        default=None, description="按 API 格式的全局优先级"
+    )
     rpm_limit: Optional[int] = None
     allowed_models: Optional[List[str]] = None
     capabilities: Optional[Dict[str, bool]] = Field(default=None, description="Key 能力标签")
@@ -514,6 +568,9 @@ class EndpointAPIKeyResponse(BaseModel):
     last_models_fetch_at: Optional[datetime] = Field(None, description="最后获取模型时间")
     last_models_fetch_error: Optional[str] = Field(None, description="最后获取模型错误信息")
     locked_models: Optional[List[str]] = Field(None, description="被锁定的模型列表")
+    # 模型过滤规则
+    model_include_patterns: Optional[List[str]] = Field(None, description="模型包含规则")
+    model_exclude_patterns: Optional[List[str]] = Field(None, description="模型排除规则")
 
     # 时间戳
     last_used_at: Optional[datetime] = None
@@ -607,6 +664,10 @@ class ProviderUpdateRequest(BaseModel):
     description: Optional[str] = None
     website: Optional[str] = Field(None, max_length=500, description="主站网站")
     provider_priority: Optional[int] = Field(None, description="提供商优先级(数字越小越优先)")
+    keep_priority_on_conversion: Optional[bool] = Field(
+        None,
+        description="格式转换时是否保持优先级（True=保持原优先级，False=需要转换时降级）",
+    )
     is_active: Optional[bool] = None
     billing_type: Optional[str] = Field(
         None, description="计费类型：monthly_quota/pay_as_you_go/free_tier"
@@ -615,9 +676,11 @@ class ProviderUpdateRequest(BaseModel):
     quota_reset_day: Optional[int] = Field(None, ge=1, le=31, description="配额重置日（1-31）")
     quota_expires_at: Optional[datetime] = Field(None, description="配额过期时间")
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(None, ge=1, le=600, description="请求超时（秒）")
     max_retries: Optional[int] = Field(None, ge=0, le=10, description="最大重试次数")
     proxy: Optional[Dict[str, Any]] = Field(None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
 
 
 class ProviderWithEndpointsSummary(BaseModel):
@@ -629,6 +692,10 @@ class ProviderWithEndpointsSummary(BaseModel):
     description: Optional[str] = None
     website: Optional[str] = None
     provider_priority: int = Field(default=100, description="提供商优先级(数字越小越优先)")
+    keep_priority_on_conversion: bool = Field(
+        default=False,
+        description="格式转换时是否保持优先级（True=保持原优先级，False=需要转换时降级）",
+    )
     is_active: bool
 
     # 计费相关字段
@@ -640,9 +707,11 @@ class ProviderWithEndpointsSummary(BaseModel):
     quota_expires_at: Optional[datetime] = Field(default=None, description="配额过期时间")
 
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(default=300, description="请求超时（秒）")
     max_retries: Optional[int] = Field(default=2, description="最大重试次数")
     proxy: Optional[Dict[str, Any]] = Field(default=None, description="代理配置")
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(default=None, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(default=None, description="非流式请求整体超时（秒）")
 
     # Endpoint 统计
     total_endpoints: int = Field(default=0, description="总 Endpoint 数量")
@@ -669,6 +738,12 @@ class ProviderWithEndpointsSummary(BaseModel):
     avg_health_score: float = Field(default=1.0, description="平均健康度")
     unhealthy_endpoints: int = Field(
         default=0, description="不健康的端点数量（health_score < 0.5）"
+    )
+
+    # Provider Ops 配置状态
+    ops_configured: bool = Field(default=False, description="是否配置了扩展操作（余额监控等）")
+    ops_architecture_id: Optional[str] = Field(
+        default=None, description="扩展操作使用的架构 ID（如 cubence, anyrouter）"
     )
 
     # 时间戳

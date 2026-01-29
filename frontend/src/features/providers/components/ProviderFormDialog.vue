@@ -80,29 +80,50 @@
               </SelectContent>
             </Select>
           </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="space-y-1.5">
-              <Label>超时时间 (秒)</Label>
-              <Input
-                :model-value="form.timeout ?? ''"
-                type="number"
-                min="1"
-                max="600"
-                placeholder="默认 300"
-                @update:model-value="(v) => form.timeout = parseNumberInput(v)"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <Label>最大重试次数</Label>
-              <Input
-                :model-value="form.max_retries ?? ''"
-                type="number"
-                min="0"
-                max="10"
-                placeholder="默认 2"
-                @update:model-value="(v) => form.max_retries = parseNumberInput(v)"
-              />
-            </div>
+          <div class="space-y-1.5">
+            <Label>最大重试次数</Label>
+            <Input
+              :model-value="form.max_retries ?? ''"
+              type="number"
+              min="0"
+              max="10"
+              placeholder="默认 2"
+              @update:model-value="(v) => form.max_retries = parseNumberInput(v)"
+            />
+          </div>
+        </div>
+
+        <!-- 超时配置 -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="space-y-1.5">
+            <Label>
+              流式首字节超时
+              <span class="text-xs text-muted-foreground">(秒)</span>
+            </Label>
+            <Input
+              :model-value="form.stream_first_byte_timeout ?? ''"
+              type="number"
+              min="1"
+              max="300"
+              step="1"
+              placeholder="30"
+              @update:model-value="(v) => form.stream_first_byte_timeout = parseNumberInput(v)"
+            />
+          </div>
+          <div class="space-y-1.5">
+            <Label>
+              非流式请求超时
+              <span class="text-xs text-muted-foreground">(秒)</span>
+            </Label>
+            <Input
+              :model-value="form.request_timeout ?? ''"
+              type="number"
+              min="1"
+              max="600"
+              step="1"
+              placeholder="300"
+              @update:model-value="(v) => form.request_timeout = parseNumberInput(v)"
+            />
           </div>
         </div>
 
@@ -147,6 +168,25 @@
               type="datetime-local"
             />
           </div>
+        </div>
+      </div>
+
+      <!-- 格式转换配置 -->
+      <div class="space-y-3">
+        <h3 class="text-sm font-medium border-b pb-2">
+          格式转换
+        </h3>
+        <div class="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
+          <div class="space-y-0.5">
+            <span class="text-sm font-medium">保持优先级</span>
+            <p class="text-xs text-muted-foreground">
+              跨格式请求时保持原优先级排名，不降级到格式匹配的提供商之后
+            </p>
+          </div>
+          <Switch
+            :model-value="form.keep_priority_on_conversion"
+            @update:model-value="(v: boolean) => form.keep_priority_on_conversion = v"
+          />
         </div>
       </div>
 
@@ -274,13 +314,16 @@ const form = ref({
   quota_last_reset_at: '',  // 周期开始时间
   quota_expires_at: '',
   provider_priority: 999,
+  keep_priority_on_conversion: false,  // 格式转换时是否保持优先级
   // 状态配置
   is_active: true,
   rate_limit: undefined as number | undefined,
   concurrent_limit: undefined as number | undefined,
   // 请求配置
-  timeout: undefined as number | undefined,
   max_retries: undefined as number | undefined,
+  // 超时配置（秒）
+  stream_first_byte_timeout: undefined as number | undefined,
+  request_timeout: undefined as number | undefined,
   // 代理配置（扁平化便于表单绑定）
   proxy_enabled: false,
   proxy_url: '',
@@ -300,12 +343,15 @@ function resetForm() {
     quota_last_reset_at: '',
     quota_expires_at: '',
     provider_priority: 999,
+    keep_priority_on_conversion: false,
     is_active: true,
     rate_limit: undefined,
     concurrent_limit: undefined,
     // 请求配置
-    timeout: undefined,
     max_retries: undefined,
+    // 超时配置
+    stream_first_byte_timeout: undefined,
+    request_timeout: undefined,
     // 代理配置
     proxy_enabled: false,
     proxy_url: '',
@@ -331,12 +377,15 @@ function loadProviderData() {
     quota_expires_at: props.provider.quota_expires_at ?
       new Date(props.provider.quota_expires_at).toISOString().slice(0, 16) : '',
     provider_priority: props.provider.provider_priority || 999,
+    keep_priority_on_conversion: props.provider.keep_priority_on_conversion ?? false,
     is_active: props.provider.is_active,
     rate_limit: undefined,
     concurrent_limit: undefined,
     // 请求配置
-    timeout: props.provider.timeout ?? undefined,
     max_retries: props.provider.max_retries ?? undefined,
+    // 超时配置
+    stream_first_byte_timeout: props.provider.stream_first_byte_timeout ?? undefined,
+    request_timeout: props.provider.request_timeout ?? undefined,
     // 代理配置
     proxy_enabled: proxy?.enabled ?? false,
     proxy_url: proxy?.url || '',
@@ -389,10 +438,13 @@ const handleSubmit = async () => {
       quota_last_reset_at: form.value.quota_last_reset_at || undefined,
       quota_expires_at: form.value.quota_expires_at || undefined,
       provider_priority: form.value.provider_priority,
+      keep_priority_on_conversion: form.value.keep_priority_on_conversion,
       is_active: form.value.is_active,
       // 请求配置
-      timeout: form.value.timeout ?? undefined,
       max_retries: form.value.max_retries ?? undefined,
+      // 超时配置（null 表示清除，使用全局配置）
+      stream_first_byte_timeout: form.value.stream_first_byte_timeout ?? null,
+      request_timeout: form.value.request_timeout ?? null,
       proxy,
     }
 

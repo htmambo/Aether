@@ -284,10 +284,16 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
             "api_format": e.api_format,
             "health_score": endpoint_health_map.get(e.id, 1.0),
             "is_active": e.is_active,
+            "total_keys": len(keys_by_endpoint.get(e.id, [])),
             "active_keys": active_keys_by_endpoint.get(e.id, 0),
         }
         for e in endpoints
     ]
+
+    # 检查是否配置了 Provider Ops（余额监控等）
+    provider_ops_config = (provider.config or {}).get("provider_ops")
+    ops_configured = bool(provider_ops_config)
+    ops_architecture_id = provider_ops_config.get("architecture_id") if provider_ops_config else None
 
     return ProviderWithEndpointsSummary(
         id=provider.id,
@@ -295,6 +301,7 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         description=provider.description,
         website=provider.website,
         provider_priority=provider.provider_priority,
+        keep_priority_on_conversion=provider.keep_priority_on_conversion,
         is_active=provider.is_active,
         billing_type=provider.billing_type.value if provider.billing_type else None,
         monthly_quota_usd=provider.monthly_quota_usd,
@@ -302,9 +309,10 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         quota_reset_day=provider.quota_reset_day,
         quota_last_reset_at=provider.quota_last_reset_at,
         quota_expires_at=provider.quota_expires_at,
-        timeout=provider.timeout,
         max_retries=provider.max_retries,
         proxy=provider.proxy,
+        stream_first_byte_timeout=provider.stream_first_byte_timeout,
+        request_timeout=provider.request_timeout,
         total_endpoints=total_endpoints,
         active_endpoints=active_endpoints,
         total_keys=total_keys,
@@ -315,6 +323,8 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         unhealthy_endpoints=unhealthy_endpoints,
         api_formats=api_formats,
         endpoint_health_details=endpoint_health_details,
+        ops_configured=ops_configured,
+        ops_architecture_id=ops_architecture_id,
         created_at=provider.created_at,
         updated_at=provider.updated_at,
     )

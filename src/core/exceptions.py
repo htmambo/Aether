@@ -17,9 +17,9 @@ import httpx
 from fastapi import HTTPException, status
 from fastapi.responses import JSONResponse
 
-from ..config import config
 from src.core.logger import logger
 
+from ..config import config
 
 # Pydantic 错误消息中英文翻译映射
 PYDANTIC_ERROR_TRANSLATIONS = {
@@ -81,6 +81,13 @@ FIELD_NAME_TRANSLATIONS = {
     "is_pinned": "置顶状态",
     "start_time": "开始时间",
     "end_time": "结束时间",
+    # OAuth 相关字段
+    "client_id": "Client ID",
+    "client_secret": "Client Secret",
+    "redirect_uri": "回调地址",
+    "frontend_callback_url": "前端回调地址",
+    "display_name": "显示名称",
+    "scopes": "授权范围",
 }
 
 
@@ -130,7 +137,6 @@ def translate_pydantic_errors(errors: List[Dict[str, Any]]) -> str:
 
     translated = [translate_pydantic_error(e) for e in errors]
     return "; ".join(translated)
-
 
 
 # 延迟导入韧性管理器，避免循环导入
@@ -340,6 +346,18 @@ class NotFoundException(ProxyException):
         )
 
 
+class ConfirmationRequiredException(ProxyException):
+    """需要用户确认的操作"""
+
+    def __init__(self, message: str, affected_count: int, action: str = "disable"):
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            error_type="confirmation_required",
+            message=message,
+            details={"affected_count": affected_count, "action": action},
+        )
+
+
 class ForbiddenException(ProxyException):
     """权限不足"""
 
@@ -508,6 +526,26 @@ class UpstreamClientException(ProxyException):
             error_type="upstream_client_error",
             message=message,
             details=details,
+        )
+
+
+class ThinkingSignatureException(UpstreamClientException):
+    """Thinking 块签名验证失败异常"""
+
+    def __init__(
+        self,
+        message: str,
+        provider_name: Optional[str] = None,
+        upstream_error: Optional[str] = None,
+        request_metadata: Any = None,
+    ):
+        super().__init__(
+            message=message,
+            provider_name=provider_name,
+            status_code=400,
+            error_type="thinking_signature_error",
+            upstream_error=upstream_error,
+            request_metadata=request_metadata,
         )
 
 

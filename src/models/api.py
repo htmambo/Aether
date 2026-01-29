@@ -55,7 +55,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = 86400  # Token有效期（秒），默认24小时
     user_id: str
-    email: str
+    email: Optional[str] = None
     username: str
     role: str
 
@@ -78,14 +78,19 @@ class RefreshTokenResponse(BaseModel):
 class RegisterRequest(BaseModel):
     """注册请求"""
 
-    email: str = Field(..., min_length=3, max_length=255, description="邮箱地址")
+    email: Optional[str] = Field(None, max_length=255, description="邮箱地址（可选）")
     username: str = Field(..., min_length=2, max_length=50, description="用户名")
     password: str = Field(..., min_length=6, max_length=128, description="密码")
 
-    @classmethod
     @field_validator("email")
+    @classmethod
     def validate_email(cls, v):
-        """验证邮箱格式"""
+        """验证邮箱格式（如果提供）"""
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
         email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_pattern, v):
             raise ValueError("邮箱格式无效")
@@ -98,8 +103,8 @@ class RegisterRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("用户名不能为空")
-        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
-            raise ValueError("用户名只能包含字母、数字、下划线和短横线")
+        if not re.match(r"^[a-zA-Z0-9_.\-]+$", v):
+            raise ValueError("用户名只能包含字母、数字、下划线、连字符和点号")
         return v
 
     @classmethod
@@ -121,7 +126,7 @@ class RegisterResponse(BaseModel):
     """注册响应"""
 
     user_id: str
-    email: str
+    email: Optional[str] = None
     username: str
     message: str
 
@@ -223,6 +228,7 @@ class RegistrationSettingsResponse(BaseModel):
 
     enable_registration: bool
     require_email_verification: bool
+    email_configured: bool = Field(description="是否配置了邮箱服务")
 
 
 # ========== 用户管理 ==========
@@ -231,14 +237,19 @@ class CreateUserRequest(BaseModel):
 
     username: str = Field(..., min_length=2, max_length=50, description="用户名")
     password: str = Field(..., min_length=6, max_length=128, description="密码")
-    email: str = Field(..., min_length=3, max_length=255, description="邮箱地址")
+    email: Optional[str] = Field(None, max_length=255, description="邮箱地址（可选）")
     role: Optional[UserRole] = Field(UserRole.USER, description="用户角色")
-    quota_usd: Optional[float] = Field(default=10.0, description="USD配额，null表示无限制")
+    quota_usd: Optional[float] = Field(default=None, description="USD配额，null表示使用系统默认配额")
+    unlimited: bool = Field(default=False, description="是否无限配额")
+    # 访问限制字段
+    allowed_providers: Optional[List[str]] = Field(default=None, description="允许使用的提供商ID列表，null表示无限制")
+    allowed_api_formats: Optional[List[str]] = Field(default=None, description="允许使用的API格式列表，null表示无限制")
+    allowed_models: Optional[List[str]] = Field(default=None, description="允许使用的模型名称列表，null表示无限制")
 
     @field_validator("quota_usd", mode="before")
     @classmethod
     def validate_quota_usd(cls, v):
-        """验证配额值，允许null表示无限制"""
+        """验证配额值，null表示使用系统默认配额"""
         if v is None:
             return None
         if isinstance(v, (int, float)) and v >= 0 and v <= 10000:
@@ -247,27 +258,29 @@ class CreateUserRequest(BaseModel):
             raise ValueError("配额必须在 0-10000 范围内")
         return v
 
-    @classmethod
     @field_validator("email")
-    def validate_email(cls, v):
-        """验证邮箱格式"""
+    @classmethod
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
+        """验证邮箱格式（如果提供）"""
+        if v is None:
+            return None
         v = v.strip()
         if not v:
-            raise ValueError("邮箱不能为空")
+            return None
         email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_pattern, v):
             raise ValueError("邮箱格式无效")
         return v.lower()
 
-    @classmethod
     @field_validator("username")
+    @classmethod
     def validate_username(cls, v):
         """验证用户名格式"""
         v = v.strip()
         if not v:
             raise ValueError("用户名不能为空")
-        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
-            raise ValueError("用户名只能包含字母、数字、下划线和短横线")
+        if not re.match(r"^[a-zA-Z0-9_.\-]+$", v):
+            raise ValueError("用户名只能包含字母、数字、下划线、连字符和点号")
         return v
 
     @classmethod
@@ -334,7 +347,7 @@ class UserResponse(BaseModel):
     """用户响应"""
 
     id: str
-    email: str
+    email: Optional[str] = None
     username: str
     role: UserRole
     allowed_providers: Optional[List[str]] = None  # 允许使用的提供商 ID 列表
@@ -392,6 +405,10 @@ class ProviderCreate(BaseModel):
     config: Optional[dict] = Field(None, description="额外配置")
     is_active: bool = Field(False, description="是否启用（默认false，需要配置API密钥后才能启用）")
 
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
+
 
 class ProviderUpdate(BaseModel):
     """更新提供商请求"""
@@ -402,7 +419,6 @@ class ProviderUpdate(BaseModel):
     api_format: Optional[str] = None
     base_url: Optional[str] = None
     headers: Optional[dict] = None
-    timeout: Optional[int] = Field(None, ge=1, le=600)
     max_retries: Optional[int] = Field(None, ge=0, le=10)
     priority: Optional[int] = None
     weight: Optional[float] = Field(None, gt=0)
@@ -410,6 +426,10 @@ class ProviderUpdate(BaseModel):
     concurrent_limit: Optional[int] = None
     config: Optional[dict] = None
     is_active: Optional[bool] = None
+
+    # 超时配置（秒），为空时使用全局配置
+    stream_first_byte_timeout: Optional[float] = Field(None, ge=1, le=300, description="流式请求首字节超时（秒）")
+    request_timeout: Optional[float] = Field(None, ge=1, le=600, description="非流式请求整体超时（秒）")
 
 
 class ProviderResponse(BaseModel):
@@ -422,7 +442,6 @@ class ProviderResponse(BaseModel):
     api_format: str
     base_url: str
     headers: Optional[dict]
-    timeout: int
     max_retries: int
     priority: int
     weight: float
@@ -435,6 +454,10 @@ class ProviderResponse(BaseModel):
     models_count: int = 0
     active_models_count: int = 0
     api_keys_count: int = 0
+
+    # 超时配置
+    stream_first_byte_timeout: Optional[float] = None
+    request_timeout: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -700,7 +723,7 @@ class UpdatePreferencesRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     """修改密码请求"""
 
-    old_password: str
+    old_password: Optional[str] = None  # 可选：首次设置密码时不需要
     new_password: str
 
 

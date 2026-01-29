@@ -90,8 +90,9 @@
         </SelectContent>
       </Select>
 
-      <!-- 提供商筛选 -->
+      <!-- 提供商筛选（仅管理员可见） -->
       <Select
+        v-if="isAdmin"
         v-model:open="filterProviderSelectOpen"
         :model-value="filterProvider"
         @update:model-value="$emit('update:filterProvider', $event)"
@@ -298,75 +299,90 @@
             v-if="isAdmin"
             class="py-4 w-[60px]"
           >
-            <div class="flex flex-col text-xs gap-0.5">
-              <div class="flex items-center gap-1">
+            <div class="flex items-center gap-1">
+              <div class="flex flex-col text-xs gap-0.5">
                 <span>{{ record.provider }}</span>
-                <!-- 故障转移图标（优先显示） -->
                 <span
-                  v-if="record.has_fallback"
-                  class="inline-flex items-center justify-center w-4 h-4 text-xs text-amber-600 dark:text-amber-400"
-                  title="此请求发生了 Provider 故障转移"
+                  v-if="record.api_key_name"
+                  class="text-muted-foreground truncate"
+                  :title="record.api_key_name"
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class="w-3.5 h-3.5"
-                  >
-                    <path d="m16 3 4 4-4 4" />
-                    <path d="M20 7H4" />
-                    <path d="m8 21-4-4 4-4" />
-                    <path d="M4 17h16" />
-                  </svg>
-                </span>
-                <!-- 重试图标（仅在无故障转移时显示） -->
-                <span
-                  v-else-if="record.has_retry"
-                  class="inline-flex items-center justify-center w-4 h-4 text-xs text-blue-600 dark:text-blue-400"
-                  title="此请求发生了亲和缓存重试"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class="w-3.5 h-3.5"
-                  >
-                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-                    <path d="M21 21v-5h-5" />
-                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                    <path d="M3 3v5h5" />
-                  </svg>
+                  {{ record.api_key_name }}
+                  <span
+                    v-if="record.rate_multiplier && record.rate_multiplier !== 1.0"
+                    class="text-foreground/60"
+                  >({{ record.rate_multiplier }}x)</span>
                 </span>
               </div>
-              <span
-                v-if="record.api_key_name"
-                class="text-muted-foreground truncate"
-                :title="record.api_key_name"
+              <!-- 故障转移图标（优先显示） -->
+              <svg
+                v-if="record.has_fallback"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0"
+                title="此请求发生了 Provider 故障转移"
               >
-                {{ record.api_key_name }}
-                <span
-                  v-if="record.rate_multiplier && record.rate_multiplier !== 1.0"
-                  class="text-foreground/60"
-                >({{ record.rate_multiplier }}x)</span>
-              </span>
+                <path d="m16 3 4 4-4 4" />
+                <path d="M20 7H4" />
+                <path d="m8 21-4-4 4-4" />
+                <path d="M4 17h16" />
+              </svg>
+              <!-- 重试图标（仅在无故障转移时显示） -->
+              <svg
+                v-else-if="record.has_retry"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0"
+                title="此请求发生了亲和缓存重试"
+              >
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M21 21v-5h-5" />
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
             </div>
           </TableCell>
-          <TableCell class="py-4 w-[80px]">
-            <span
-              v-if="record.api_format"
-              class="inline-flex items-center px-2 py-0.5 rounded-full border border-border/60 text-[10px] font-medium whitespace-nowrap text-muted-foreground"
-              :title="record.api_format"
+          <TableCell
+            class="py-4 w-[80px]"
+            :title="getApiFormatTooltip(record)"
+          >
+            <!-- 有格式转换或同族格式差异：两行显示 -->
+            <div
+              v-if="shouldShowFormatConversion(record)"
+              class="flex flex-col text-xs gap-0.5"
             >
-              {{ formatApiFormat(record.api_format) }}
-            </span>
+              <div class="flex items-center gap-1">
+                <span>{{ formatApiFormat(record.api_format!) }}</span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  class="w-3 h-3 text-muted-foreground flex-shrink-0"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+              </div>
+              <span class="text-muted-foreground">{{ formatApiFormat(record.endpoint_api_format!) }}</span>
+            </div>
+            <!-- 无格式转换：单行显示 -->
+            <span
+              v-else-if="record.api_format"
+              class="text-xs"
+            >{{ formatApiFormat(record.api_format) }}</span>
             <span
               v-else
               class="text-muted-foreground text-xs"
@@ -495,6 +511,7 @@
         :total="totalRecords"
         :page-size="pageSize"
         :page-size-options="pageSizeOptions"
+        cache-key="usage-records-page-size"
         @update:current="$emit('update:currentPage', $event)"
         @update:page-size="$emit('update:pageSize', $event)"
       />
@@ -681,6 +698,37 @@ function formatApiFormat(format: string): string {
     'GEMINI_CLI': 'Gemini CLI',
   }
   return formatMap[format.toUpperCase()] || format
+}
+
+// 判断是否应该显示格式转换信息
+// 包括：1. 跨格式转换（has_format_conversion=true）2. 同族格式差异（如 CLAUDE_CLI → CLAUDE）
+function shouldShowFormatConversion(record: UsageRecord): boolean {
+  if (!record.api_format || !record.endpoint_api_format) {
+    return false
+  }
+  // 跨格式转换
+  if (record.has_format_conversion) {
+    return true
+  }
+  // 同族格式差异（精确字符串比较，不区分大小写）
+  return record.api_format.toUpperCase() !== record.endpoint_api_format.toUpperCase()
+}
+
+// 获取 API 格式的 tooltip（包含转换信息）
+function getApiFormatTooltip(record: UsageRecord): string {
+  if (!record.api_format) {
+    return ''
+  }
+  const displayFormat = formatApiFormat(record.api_format)
+
+  // 如果发生了格式转换或同族格式差异，显示详细信息
+  if (shouldShowFormatConversion(record)) {
+    const endpointDisplayFormat = formatApiFormat(record.endpoint_api_format!)
+    const conversionType = record.has_format_conversion ? '格式转换' : '格式兼容（无需转换）'
+    return `用户请求格式: ${displayFormat}\n端点原生格式: ${endpointDisplayFormat}\n${conversionType}`
+  }
+
+  return record.api_format
 }
 
 // 获取实际使用的模型（优先 target_model，其次 model_version）
