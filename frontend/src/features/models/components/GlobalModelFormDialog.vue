@@ -4,12 +4,12 @@
     :title="isEditMode ? '编辑模型' : '创建统一模型'"
     :description="isEditMode ? '修改模型配置和价格信息' : ''"
     :icon="isEditMode ? SquarePen : Layers"
-    size="3xl"
+    size="4xl"
     @update:model-value="handleDialogUpdate"
   >
     <div
       class="flex gap-4"
-      :class="isEditMode ? '' : 'h-[500px]'"
+      :class="isEditMode ? '' : 'h-[600px]'"
     >
       <!-- 左侧：模型选择（仅创建模式） -->
       <div
