@@ -2848,6 +2848,14 @@ class UsageService:
             logger.warning(f"未找到 request_id={request_id} 的使用记录，无法更新状态")
             return None
 
+        # 避免状态回退：streaming 只能从 pending/streaming 进入
+        if status == "streaming" and usage.status not in ("pending", "streaming"):
+            logger.debug(
+                f"跳过 streaming 状态更新（避免回退）: request_id={request_id}, "
+                f"{usage.status} -> {status}"
+            )
+            return usage
+
         old_status = usage.status
         usage.status = status
         if error_message:
@@ -3077,6 +3085,8 @@ class UsageService:
             Usage.api_format,
             Usage.endpoint_api_format,
             Usage.has_format_conversion,
+            # 模型映射（streaming 时已可确定）
+            Usage.target_model,
         )
 
         # 管理员轮询：可附带 provider 与上游 key 名称（注意：不要在普通用户接口暴露上游 key 信息）
@@ -3234,6 +3244,9 @@ class UsageService:
                 item["endpoint_api_format"] = endpoint_api_format
             if has_format_conversion is not None:
                 item["has_format_conversion"] = bool(has_format_conversion)
+            # 模型映射（streaming 时已可确定）
+            if r.target_model:
+                item["target_model"] = r.target_model
             if include_admin_fields:
                 item["provider"] = r.provider_name
                 item["api_key_name"] = r.api_key_name

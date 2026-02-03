@@ -211,20 +211,10 @@ const filteredRecords = computed(() => {
         records = records.filter(record =>
           !record.is_stream && !record.error_message && (!record.status_code || record.status_code === 200)
         )
-      } else if (filterStatus.value === 'error') {
-        records = records.filter(record =>
-          record.error_message || (record.status_code && record.status_code >= 400)
-        )
       } else if (filterStatus.value === 'active') {
         records = records.filter(record =>
           record.status === 'pending' || record.status === 'streaming'
         )
-      } else if (filterStatus.value === 'pending') {
-        records = records.filter(record => record.status === 'pending')
-      } else if (filterStatus.value === 'streaming') {
-        records = records.filter(record => record.status === 'streaming')
-      } else if (filterStatus.value === 'completed') {
-        records = records.filter(record => record.status === 'completed')
       } else if (filterStatus.value === 'failed') {
         // 失败请求需要同时考虑新旧两种判断方式：
         // 1. 新方式：status = "failed"
@@ -234,6 +224,8 @@ const filteredRecords = computed(() => {
           (record.status_code && record.status_code >= 400) ||
           record.error_message
         )
+      } else if (filterStatus.value === 'cancelled') {
+        records = records.filter(record => record.status === 'cancelled')
       }
     }
 
@@ -260,8 +252,12 @@ const GLOBAL_AUTO_REFRESH_INTERVAL = 5000 // 5秒刷新一次（全局自动刷�
 const globalAutoRefresh = ref(false) // 全局自动刷新开关
 
 // 轮询活跃请求状态（轻量级，只更新状态变化的记录）
+
+let pollInFlight = false
 async function pollActiveRequests() {
   if (!hasActiveRequests.value) return
+  if (pollInFlight) return
+  pollInFlight = true
 
   try {
     // 根据页面类型选择不同的 API
@@ -280,34 +276,53 @@ async function pollActiveRequests() {
         continue
       }
 
-      // 状态变化：completed/failed 需要刷新获取完整数据
-      if (record.status !== update.status) {
+      // 状态只允许单向推进，避免异步响应回退（pending -> streaming -> completed/failed/cancelled）
+      const statusPriority: Record<string, number> = {
+        pending: 0,
+        streaming: 1,
+        completed: 2,
+        failed: 2,
+        cancelled: 2
+      }
+      const currentRank = record.status ? (statusPriority[record.status] ?? 0) : 0
+      const newRank = update.status ? (statusPriority[update.status] ?? 0) : 0
+      const shouldApply = newRank >= currentRank
+
+      if (shouldApply && record.status !== update.status) {
         record.status = update.status
       }
-      if (update.status === 'completed' || update.status === 'failed') {
+      if (shouldApply && (update.status === 'completed' || update.status === 'failed')) {
         shouldRefresh = true
       }
 
-      // 进行中状态也需要持续更新（provider/key/TTFB 可能在 streaming 后才落库）
-      record.input_tokens = update.input_tokens
-      record.output_tokens = update.output_tokens
-      record.cache_creation_input_tokens = update.cache_creation_input_tokens ?? undefined
-      record.cache_read_input_tokens = update.cache_read_input_tokens ?? undefined
-      record.cost = update.cost
-      record.actual_cost = update.actual_cost ?? undefined
-      record.rate_multiplier = update.rate_multiplier ?? undefined
-      record.response_time_ms = update.response_time_ms ?? undefined
-      record.first_byte_time_ms = update.first_byte_time_ms ?? undefined
-      // API 格式/格式转换：streaming 时已可确定，轮询时同步更新
-      if (update.api_format !== undefined) record.api_format = update.api_format
-      if (update.endpoint_api_format !== undefined) record.endpoint_api_format = update.endpoint_api_format
-      if (update.has_format_conversion !== undefined) record.has_format_conversion = update.has_format_conversion
-      // 管理员接口返回额外字段
-      if ('provider' in update && typeof update.provider === 'string') {
-        record.provider = update.provider
-      }
-      if ('api_key_name' in update) {
-        record.api_key_name = typeof update.api_key_name === 'string' ? update.api_key_name : undefined
+      if (shouldApply) {
+        // 进行中状态也需要持续更新（provider/key/TTFB 可能在 streaming 后才落库）
+        record.input_tokens = update.input_tokens
+        record.output_tokens = update.output_tokens
+        record.cache_creation_input_tokens = update.cache_creation_input_tokens ?? undefined
+        record.cache_read_input_tokens = update.cache_read_input_tokens ?? undefined
+        record.cost = update.cost
+        record.actual_cost = update.actual_cost ?? undefined
+        record.rate_multiplier = update.rate_multiplier ?? undefined
+        record.response_time_ms = update.response_time_ms ?? undefined
+        record.first_byte_time_ms = update.first_byte_time_ms ?? undefined
+        // API 格式/格式转换：streaming 时已可确定，轮询时同步更新
+        if (update.api_format != null) record.api_format = update.api_format
+        if (update.endpoint_api_format != null) record.endpoint_api_format = update.endpoint_api_format
+        if (update.has_format_conversion != null) record.has_format_conversion = update.has_format_conversion
+        // 模型映射：streaming 时已可确定
+        if ('target_model' in update && (typeof update.target_model === 'string' || update.target_model === null)) {
+          record.target_model = update.target_model
+        }
+        // 管理员接口返回额外字段
+        // 只有当返回的 provider 不是 pending/unknown 时才更新，避免覆盖已有的正确值
+        if ('provider' in update && typeof update.provider === 'string' &&
+            update.provider !== 'pending' && update.provider !== 'unknown') {
+          record.provider = update.provider
+        }
+        if ('api_key_name' in update) {
+          record.api_key_name = typeof update.api_key_name === 'string' ? update.api_key_name : undefined
+        }
       }
     }
 
@@ -316,6 +331,8 @@ async function pollActiveRequests() {
     }
   } catch (error) {
     log.error('轮询活跃请求状态失败:', error)
+  } finally {
+    pollInFlight = false
   }
 }
 

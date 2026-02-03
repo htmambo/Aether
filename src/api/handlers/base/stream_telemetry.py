@@ -112,6 +112,7 @@ class StreamTelemetryRecorder:
 
                 try:
                     await self._dispatch_record(
+                        bg_db,
                         writer,
                         ctx,
                         original_headers,
@@ -137,6 +138,7 @@ class StreamTelemetryRecorder:
                     if response_body is None and should_log_body:
                         response_body = ctx.build_response_body(response_time_ms)
                     await self._dispatch_record(
+                        bg_db,
                         db_writer,
                         ctx,
                         original_headers,
@@ -438,6 +440,7 @@ class StreamTelemetryRecorder:
 
     async def _dispatch_record(
         self,
+        db: Session,
         writer: TelemetryWriter,
         ctx: StreamContext,
         original_headers: dict[str, str],
@@ -455,6 +458,14 @@ class StreamTelemetryRecorder:
                 response_body,
                 response_time_ms,
             )
+            # Queue writer 异步落库可能造成 UI 延迟，先直接更新 Usage 状态
+            if isinstance(writer, QueueTelemetryWriter):
+                await self._update_usage_status_directly(
+                    db=db,
+                    status=self._get_status_from_ctx(ctx),
+                    response_time_ms=response_time_ms,
+                    status_code=ctx.status_code,
+                )
         elif ctx.is_client_disconnected():
             await self._record_cancelled(
                 writer,
@@ -464,6 +475,14 @@ class StreamTelemetryRecorder:
                 response_body,
                 response_time_ms,
             )
+            # Queue writer 异步落库可能造成 UI 延迟，先直接更新 Usage 状态
+            if isinstance(writer, QueueTelemetryWriter):
+                await self._update_usage_status_directly(
+                    db=db,
+                    status="cancelled",
+                    response_time_ms=response_time_ms,
+                    status_code=ctx.status_code,
+                )
         else:
             await self._record_failure(
                 writer,
@@ -473,6 +492,15 @@ class StreamTelemetryRecorder:
                 response_body,
                 response_time_ms,
             )
+            # Queue writer 异步落库可能造成 UI 延迟，先直接更新 Usage 状态
+            if isinstance(writer, QueueTelemetryWriter):
+                await self._update_usage_status_directly(
+                    db=db,
+                    status=self._get_status_from_ctx(ctx),
+                    response_time_ms=response_time_ms,
+                    status_code=ctx.status_code,
+                    error_message=ctx.error_message or f"HTTP {ctx.status_code}",
+                )
 
     def _get_status_from_ctx(self, ctx: StreamContext) -> str:
         """根据上下文获取状态字符串"""

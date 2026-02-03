@@ -37,9 +37,17 @@ def _index_exists(table_name: str, index_name: str) -> bool:
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
-    inspector = inspect(bind)
-    columns = [col["name"] for col in inspector.get_columns(table_name)]
-    return column_name in columns
+    # Use information_schema for more reliable detection (inspector can have caching issues)
+    result = bind.execute(
+        sa.text(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = :table AND column_name = :column"
+            ")"
+        ),
+        {"table": table_name, "column": column_name},
+    )
+    return bool(result.scalar())
 
 
 def upgrade() -> None:

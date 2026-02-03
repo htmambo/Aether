@@ -164,7 +164,9 @@ export function useUsageData(options: UseUsageDataOptions) {
         }))
 
         // 用户页面：记录直接从 userData 获取（数量较少）
-        currentRecords.value = (userData.records || []) as UsageRecord[]
+        // 使用 mergeRecordStatus 保护已有的活跃状态，避免轮询更新被覆盖
+        const nextRecords = (userData.records || []) as UsageRecord[]
+        currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = currentRecords.value.length
 
         // 从记录中提取筛选选项和 API 格式统计
@@ -272,12 +274,14 @@ export function useUsageData(options: UseUsageDataOptions) {
         }
 
         const response = await usageApi.getAllUsageRecords(params)
-        currentRecords.value = (response.records || []) as UsageRecord[]
+        const nextRecords = (response.records || []) as UsageRecord[]
+        currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = response.total || 0
       } else {
         // 用户页面：使用用户 API
         const userData = await meApi.getUsage(params)
-        currentRecords.value = (userData.records || []) as UsageRecord[]
+        const nextRecords = (userData.records || []) as UsageRecord[]
+        currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
         totalRecords.value = userData.pagination?.total || currentRecords.value.length
       }
     } catch (error) {
@@ -287,6 +291,79 @@ export function useUsageData(options: UseUsageDataOptions) {
     } finally {
       isLoadingRecords.value = false
     }
+  }
+
+  function mergeRecordStatus(
+    current: UsageRecord[],
+    next: UsageRecord[]
+  ): UsageRecord[] {
+    if (!current.length) return next
+    const statusPriority: Record<string, number> = {
+      pending: 0,
+      streaming: 1,
+      completed: 2,
+      failed: 2,
+      cancelled: 2
+    }
+    const currentById = new Map<string, UsageRecord>(
+      current.map(record => [record.id, record])
+    )
+    return next.map(record => {
+      const existing = currentById.get(record.id)
+      if (!existing) return record
+
+      // 确定是否需要保护 status（避免刷新把已知状态覆盖为 undefined 或回退）
+      const hasExistingStatus = typeof existing.status === 'string' && existing.status.length > 0
+      const hasNextStatus = typeof record.status === 'string' && record.status.length > 0
+      const currentRank = hasExistingStatus ? (statusPriority[existing.status] ?? -1) : -1
+      const nextRank = hasNextStatus ? (statusPriority[record.status] ?? -1) : -1
+      const statusProgressed = hasNextStatus && (
+        !hasExistingStatus ||
+        nextRank > currentRank ||
+        (nextRank === currentRank && existing.status === record.status)
+      )
+      const mergedStatus = statusProgressed ? record.status : existing.status
+      const protectStatus = mergedStatus !== record.status
+
+      // 确定是否需要保护 provider（避免 pending/unknown 覆盖已有的正确值）
+      const isPendingProvider = !record.provider || record.provider === 'pending' || record.provider === 'unknown'
+      const hasValidExistingProvider = existing.provider && existing.provider !== 'pending' && existing.provider !== 'unknown'
+      const protectProvider = isPendingProvider && hasValidExistingProvider
+
+      // 如果需要保护状态，说明本地数据比后端更新，应该保留本地的所有实时更新字段
+      if (protectStatus) {
+        return {
+          ...record,
+          // 保留本地的状态和所有通过轮询更新的字段
+          status: mergedStatus,
+          provider: protectProvider ? existing.provider : (record.provider || existing.provider),
+          input_tokens: existing.input_tokens || record.input_tokens,
+          output_tokens: existing.output_tokens || record.output_tokens,
+          cache_creation_input_tokens: existing.cache_creation_input_tokens ?? record.cache_creation_input_tokens,
+          cache_read_input_tokens: existing.cache_read_input_tokens ?? record.cache_read_input_tokens,
+          cost: existing.cost || record.cost,
+          actual_cost: existing.actual_cost ?? record.actual_cost,
+          response_time_ms: existing.response_time_ms ?? record.response_time_ms,
+          first_byte_time_ms: existing.first_byte_time_ms ?? record.first_byte_time_ms,
+          api_format: existing.api_format || record.api_format,
+          endpoint_api_format: existing.endpoint_api_format || record.endpoint_api_format,
+          has_format_conversion: existing.has_format_conversion ?? record.has_format_conversion,
+          api_key_name: existing.api_key_name || record.api_key_name,
+          rate_multiplier: existing.rate_multiplier ?? record.rate_multiplier,
+          target_model: existing.target_model || record.target_model
+        }
+      }
+
+      // 只需要保护 provider
+      if (protectProvider) {
+        return {
+          ...record,
+          provider: existing.provider
+        }
+      }
+
+      return record
+    })
   }
 
   // 刷新所有数据

@@ -70,10 +70,18 @@ export function useUsageFilters(options: UseUsageFiltersOptions) {
         records = records.filter(record =>
           !record.is_stream && !record.error_message && (!record.status_code || record.status_code === 200)
         )
-      } else if (filterStatus.value === 'error') {
+      } else if (filterStatus.value === 'active') {
         records = records.filter(record =>
-          record.error_message || (record.status_code && record.status_code >= 400)
+          record.status === 'pending' || record.status === 'streaming'
         )
+      } else if (filterStatus.value === 'failed') {
+        records = records.filter(record =>
+          record.status === 'failed' ||
+          (record.status_code && record.status_code >= 400) ||
+          record.error_message
+        )
+      } else if (filterStatus.value === 'cancelled') {
+        records = records.filter(record => record.status === 'cancelled')
       }
     }
 

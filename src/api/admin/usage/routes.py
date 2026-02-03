@@ -857,7 +857,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                 query = query.filter(Usage.is_stream == False)  # noqa: E712
             elif self.status == "error":
                 query = query.filter((Usage.status_code >= 400) | (Usage.error_message.isnot(None)))
-            elif self.status in ("pending", "streaming", "completed"):
+            elif self.status in ("pending", "streaming", "completed", "cancelled"):
                 # 新的状态筛选：直接按 status 字段过滤
                 query = query.filter(Usage.status == self.status)
             elif self.status == "failed":

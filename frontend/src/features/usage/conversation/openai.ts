@@ -37,7 +37,7 @@ export class OpenAIParser implements ApiFormatParser {
   readonly displayName = 'OpenAI'
 
   /**
-   * 检测是否为 OpenAI 格式
+   * 检测是否为 OpenAI 格式（包括 Chat Completions 和 CLI/Responses API）
    */
   detect(requestBody: any, responseBody: any, hint?: string): number {
     // 1. 后端提示优先
@@ -52,7 +52,12 @@ export class OpenAIParser implements ApiFormatParser {
     if (model.includes('gpt') || model.includes('o1') || model.includes('o3')) return 95
 
     // 3. 检查请求体结构
-    if (!requestBody?.messages || !Array.isArray(requestBody.messages)) {
+    // OpenAI CLI (Responses API) 使用 input 字段
+    const isCliFormat = requestBody?.input !== undefined || requestBody?.instructions !== undefined
+    // OpenAI Chat Completions 使用 messages 数组
+    const isChatFormat = requestBody?.messages && Array.isArray(requestBody.messages)
+
+    if (!isCliFormat && !isChatFormat) {
       return 0
     }
 
@@ -62,7 +67,11 @@ export class OpenAIParser implements ApiFormatParser {
       : responseBody
 
     if (respBody) {
-      // OpenAI 响应特征: choices 数组
+      // OpenAI CLI 响应特征: type 字段为 response.* 格式
+      if (this.isCliResponseEvent(respBody)) {
+        return 95
+      }
+      // OpenAI Chat Completions 响应特征: choices 数组
       if (respBody.choices || respBody.object?.includes('chat.completion')) {
         return 90
       }
@@ -73,6 +82,10 @@ export class OpenAIParser implements ApiFormatParser {
     }
 
     // 5. 检查 OpenAI 特有的请求结构
+    if (isCliFormat) {
+      return 80
+    }
+
     // OpenAI 的 system 是在 messages 数组中作为 role: system
     const hasSystemInMessages = requestBody.messages?.some(
       (m: any) => m.role === 'system'
@@ -85,13 +98,36 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 解析请求体
+   * 检查是否为 OpenAI CLI (Responses API) 的响应事件
+   */
+  private isCliResponseEvent(chunk: any): boolean {
+    const type = chunk?.type
+    if (typeof type !== 'string') return false
+    return type.startsWith('response.') || chunk?.object === 'response'
+  }
+
+  /**
+   * 解析请求体（支持 Chat Completions 和 CLI/Responses API 格式）
    */
   parseRequest(requestBody: any): ParsedConversation {
     if (!requestBody) {
       return createEmptyConversation('openai', '无请求体')
     }
 
+    // 检测是否为 CLI 格式
+    const isCliFormat = requestBody.input !== undefined || requestBody.instructions !== undefined
+
+    if (isCliFormat) {
+      return this.parseCliRequest(requestBody)
+    }
+
+    return this.parseChatRequest(requestBody)
+  }
+
+  /**
+   * 解析 OpenAI Chat Completions 请求
+   */
+  private parseChatRequest(requestBody: any): ParsedConversation {
     try {
       const result: ParsedConversation = {
         messages: [],
@@ -127,13 +163,128 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 解析响应体
+   * 解析 OpenAI CLI (Responses API) 请求
+   *
+   * CLI 格式特点：
+   * - 使用 input 字段（可以是字符串、消息数组或对象）
+   * - 使用 instructions 字段作为系统指令
+   */
+  private parseCliRequest(requestBody: any): ParsedConversation {
+    try {
+      const result: ParsedConversation = {
+        messages: [],
+        isStream: requestBody.stream === true,
+        apiFormat: 'openai',
+        model: requestBody.model,
+      }
+
+      // 处理 instructions（系统指令）
+      if (requestBody.instructions) {
+        result.system = requestBody.instructions
+      }
+
+      // 处理 input
+      const input = requestBody.input
+
+      if (typeof input === 'string') {
+        // 简单字符串输入
+        result.messages.push(createMessage('user', [createTextBlock(input)]))
+      } else if (Array.isArray(input)) {
+        // 消息数组
+        for (const item of input) {
+          const parsedMsg = this.parseCliInputItem(item)
+          if (parsedMsg) {
+            result.messages.push(parsedMsg)
+          }
+        }
+      } else if (input?.messages && Array.isArray(input.messages)) {
+        // 包装在对象中的消息数组
+        for (const item of input.messages) {
+          const parsedMsg = this.parseCliInputItem(item)
+          if (parsedMsg) {
+            result.messages.push(parsedMsg)
+          }
+        }
+      }
+
+      return result
+    } catch (e) {
+      return createEmptyConversation('openai', `CLI 格式解析失败: ${e}`)
+    }
+  }
+
+  /**
+   * 解析 CLI 格式的单个输入项
+   */
+  private parseCliInputItem(item: any): ParsedMessage | null {
+    if (!item) return null
+
+    const itemType = item.type
+
+    // 标准消息（有 role 字段）
+    if (itemType === 'message' || item.role) {
+      const role = this.mapRole(item.role)
+      const contentBlocks: ContentBlock[] = []
+
+      const content = item.content
+      if (typeof content === 'string') {
+        contentBlocks.push(createTextBlock(content))
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
+            contentBlocks.push(createTextBlock(part.text || ''))
+          }
+        }
+      }
+
+      if (contentBlocks.length === 0) return null
+      return createMessage(role, contentBlocks)
+    }
+
+    // function_call -> 工具调用
+    if (itemType === 'function_call') {
+      const toolId = item.call_id || item.id || ''
+      const toolName = item.name || ''
+      const args = item.arguments || '{}'
+      return createMessage('assistant', [createToolUseBlock(toolId, toolName, args)])
+    }
+
+    // function_call_output -> 工具结果
+    if (itemType === 'function_call_output') {
+      const toolUseId = item.call_id || item.id || ''
+      const output = typeof item.output === 'string'
+        ? item.output
+        : JSON.stringify(item.output, null, 2)
+      return createMessage('tool', [createToolResultBlock(toolUseId, output)])
+    }
+
+    return null
+  }
+
+  /**
+   * 解析响应体（支持 Chat Completions 和 CLI/Responses API 格式）
    */
   parseResponse(responseBody: any): ParsedConversation {
     if (!responseBody) {
       return createEmptyConversation('openai', '无响应体')
     }
 
+    // 检测是否为 CLI 格式
+    const isCliFormat = this.isCliResponseEvent(responseBody) ||
+      responseBody.object === 'response' ||
+      responseBody.output !== undefined
+
+    if (isCliFormat) {
+      return this.parseCliResponse(responseBody)
+    }
+
+    return this.parseChatResponse(responseBody)
+  }
+
+  /**
+   * 解析 OpenAI Chat Completions 响应
+   */
+  private parseChatResponse(responseBody: any): ParsedConversation {
     try {
       const result: ParsedConversation = {
         messages: [],
@@ -175,13 +326,70 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 解析流式响应
+   * 解析 OpenAI CLI (Responses API) 响应
+   *
+   * CLI 响应格式: { output: [{ type: "message", content: [...] }] }
+   */
+  private parseCliResponse(responseBody: any): ParsedConversation {
+    try {
+      const result: ParsedConversation = {
+        messages: [],
+        isStream: false,
+        apiFormat: 'openai',
+        model: responseBody.model,
+      }
+
+      const output = responseBody.output
+      if (!Array.isArray(output)) {
+        return result
+      }
+
+      for (const item of output) {
+        if (item?.type === 'message') {
+          const contentBlocks: ContentBlock[] = []
+
+          if (Array.isArray(item.content)) {
+            for (const content of item.content) {
+              if (content?.type === 'output_text' && content?.text) {
+                contentBlocks.push(createTextBlock(content.text))
+              }
+            }
+          }
+
+          if (contentBlocks.length > 0) {
+            result.messages.push(createMessage('assistant', contentBlocks))
+          }
+        }
+      }
+
+      return result
+    } catch (e) {
+      return createEmptyConversation('openai', `CLI 格式解析失败: ${e}`)
+    }
+  }
+
+  /**
+   * 解析流式响应（支持 Chat Completions 和 CLI/Responses API 格式）
    */
   parseStreamResponse(chunks: any[]): ParsedConversation {
     if (!chunks || chunks.length === 0) {
       return createEmptyConversation('openai', '无响应数据')
     }
 
+    // 检测是否为 CLI 格式
+    const isCliFormat = chunks.some(chunk => this.isCliResponseEvent(chunk))
+
+    if (isCliFormat) {
+      return this.parseCliStreamResponse(chunks)
+    }
+
+    return this.parseChatStreamResponse(chunks)
+  }
+
+  /**
+   * 解析 OpenAI Chat Completions 流式响应
+   */
+  private parseChatStreamResponse(chunks: any[]): ParsedConversation {
     try {
       const result: ParsedConversation = {
         messages: [],
@@ -249,6 +457,126 @@ export class OpenAIParser implements ApiFormatParser {
       return result
     } catch (e) {
       return createEmptyConversation('openai', `解析失败: ${e}`)
+    }
+  }
+
+  /**
+   * 解析 OpenAI CLI (Responses API) 流式响应
+   *
+   * 支持的事件类型：
+   * - response.created: 响应创建
+   * - response.output_text.delta: 文本增量
+   * - response.completed: 响应完成（包含完整响应和 usage）
+   * - response.function_call_arguments.delta: 函数调用参数增量
+   */
+  private parseCliStreamResponse(chunks: any[]): ParsedConversation {
+    try {
+      const result: ParsedConversation = {
+        messages: [],
+        isStream: true,
+        apiFormat: 'openai',
+      }
+
+      const textParts: string[] = []
+      const toolCalls = new Map<string, { name: string; id: string; args: string[] }>()
+      let currentToolId = ''
+      let currentToolName = ''
+
+      for (const chunk of chunks) {
+        const eventType = chunk.type
+
+        // 从 response.created 或 response.completed 提取模型名
+        if (!result.model) {
+          const response = chunk.response
+          if (response?.model) {
+            result.model = response.model
+          }
+        }
+
+        // 处理文本增量: response.output_text.delta
+        if (eventType === 'response.output_text.delta') {
+          const delta = chunk.delta
+          if (typeof delta === 'string') {
+            textParts.push(delta)
+          } else if (delta?.text) {
+            textParts.push(delta.text)
+          }
+          continue
+        }
+
+        // 处理函数调用输出项添加: response.output_item.added
+        if (eventType === 'response.output_item.added') {
+          const item = chunk.item
+          if (item?.type === 'function_call') {
+            currentToolId = item.call_id || item.id || ''
+            currentToolName = item.name || ''
+            if (currentToolId && !toolCalls.has(currentToolId)) {
+              toolCalls.set(currentToolId, {
+                name: currentToolName,
+                id: currentToolId,
+                args: [],
+              })
+            }
+          }
+          continue
+        }
+
+        // 处理函数调用参数增量: response.function_call_arguments.delta
+        if (eventType === 'response.function_call_arguments.delta') {
+          const delta = chunk.delta
+          if (delta && currentToolId && toolCalls.has(currentToolId)) {
+            toolCalls.get(currentToolId)!.args.push(delta)
+          }
+          continue
+        }
+
+        // 处理完成事件: response.completed
+        // 如果之前没有收集到文本，从完成事件中提取
+        if (eventType === 'response.completed') {
+          const response = chunk.response
+          if (response?.model && !result.model) {
+            result.model = response.model
+          }
+
+          // 从 output 中提取文本（备用方案）
+          if (textParts.length === 0 && response?.output) {
+            for (const item of response.output) {
+              if (item?.type === 'message' && item?.content) {
+                for (const content of item.content) {
+                  if (content?.type === 'output_text' && content?.text) {
+                    textParts.push(content.text)
+                  }
+                }
+              }
+            }
+          }
+          continue
+        }
+      }
+
+      const contentBlocks: ContentBlock[] = []
+
+      // 文本内容
+      if (textParts.length > 0) {
+        contentBlocks.push(createTextBlock(textParts.join('')))
+      }
+
+      // 工具调用
+      for (const [, call] of toolCalls) {
+        contentBlocks.push(createToolUseBlock(
+          call.id,
+          call.name,
+          call.args.join('')
+        ))
+      }
+
+      if (contentBlocks.length > 0) {
+        result.messages.push(createMessage('assistant', contentBlocks))
+      }
+
+      return result
+    } catch (e) {
+      return createEmptyConversation('openai', `CLI 格式解析失败: ${e}`)
     }
   }
 
@@ -328,13 +656,27 @@ export class OpenAIParser implements ApiFormatParser {
   // ============================================================
 
   /**
-   * 渲染请求体
+   * 渲染请求体（支持 Chat Completions 和 CLI/Responses API 格式）
    */
   renderRequest(requestBody: any): RenderResult {
     if (!requestBody) {
       return createEmptyRenderResult('无请求体')
     }
 
+    // 检测是否为 CLI 格式
+    const isCliFormat = requestBody.input !== undefined || requestBody.instructions !== undefined
+
+    if (isCliFormat) {
+      return this.renderCliRequest(requestBody)
+    }
+
+    return this.renderChatRequest(requestBody)
+  }
+
+  /**
+   * 渲染 OpenAI Chat Completions 请求
+   */
+  private renderChatRequest(requestBody: any): RenderResult {
     try {
       const blocks: RenderBlock[] = []
       const isStream = requestBody.stream === true
@@ -366,7 +708,104 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 渲染响应体
+   * 渲染 OpenAI CLI (Responses API) 请求
+   */
+  private renderCliRequest(requestBody: any): RenderResult {
+    try {
+      const blocks: RenderBlock[] = []
+      const isStream = requestBody.stream === true
+
+      // 渲染 instructions（系统指令）
+      if (requestBody.instructions) {
+        blocks.push(createMessageBlock('system', [
+          createTextRenderBlock(requestBody.instructions),
+        ], { roleLabel: 'Instructions' }))
+      }
+
+      // 渲染 input
+      const input = requestBody.input
+
+      if (typeof input === 'string') {
+        // 简单字符串输入
+        blocks.push(createMessageBlock('user', [
+          createTextRenderBlock(input),
+        ], { roleLabel: 'User' }))
+      } else if (Array.isArray(input)) {
+        // 消息数组
+        for (const item of input) {
+          const msgBlock = this.renderCliInputItem(item)
+          if (msgBlock) {
+            blocks.push(msgBlock)
+          }
+        }
+      } else if (input?.messages && Array.isArray(input.messages)) {
+        // 包装在对象中的消息数组
+        for (const item of input.messages) {
+          const msgBlock = this.renderCliInputItem(item)
+          if (msgBlock) {
+            blocks.push(msgBlock)
+          }
+        }
+      }
+
+      return { blocks, isStream }
+    } catch (e) {
+      return createEmptyRenderResult(`CLI 格式渲染失败: ${e}`)
+    }
+  }
+
+  /**
+   * 渲染 CLI 格式的单个输入项
+   */
+  private renderCliInputItem(item: any): RenderBlock | null {
+    if (!item) return null
+
+    const itemType = item.type
+
+    // 标准消息
+    if (itemType === 'message' || item.role) {
+      const role = this.mapRole(item.role)
+      const contentBlocks: RenderBlock[] = []
+
+      const content = item.content
+      if (typeof content === 'string') {
+        contentBlocks.push(createTextRenderBlock(content))
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
+            contentBlocks.push(createTextRenderBlock(part.text || ''))
+          }
+        }
+      }
+
+      if (contentBlocks.length === 0) return null
+      return createMessageBlock(role, contentBlocks, { roleLabel: this.getRoleLabel(role) })
+    }
+
+    // function_call -> 工具调用
+    if (itemType === 'function_call') {
+      const toolName = item.name || '工具调用'
+      const args = this.formatJson(item.arguments)
+      return createMessageBlock('assistant', [
+        createToolUseRenderBlock(toolName, args, item.call_id || item.id),
+      ], { roleLabel: 'Assistant', badges: [createBadgeBlock('工具调用', 'outline')] })
+    }
+
+    // function_call_output -> 工具结果
+    if (itemType === 'function_call_output') {
+      const output = typeof item.output === 'string'
+        ? item.output
+        : JSON.stringify(item.output, null, 2)
+      return createMessageBlock('tool', [
+        createToolResultRenderBlock(output),
+      ], { roleLabel: 'Tool', badges: [createBadgeBlock('工具结果', 'outline')] })
+    }
+
+    return null
+  }
+
+  /**
+   * 渲染响应体（支持 Chat Completions 和 CLI/Responses API 格式）
    */
   renderResponse(responseBody: any): RenderResult {
     if (!responseBody) {
@@ -378,6 +817,22 @@ export class OpenAIParser implements ApiFormatParser {
       return this.renderStreamResponse(responseBody.chunks || [])
     }
 
+    // 检测是否为 CLI 格式
+    const isCliFormat = this.isCliResponseEvent(responseBody) ||
+      responseBody.object === 'response' ||
+      responseBody.output !== undefined
+
+    if (isCliFormat) {
+      return this.renderCliResponse(responseBody)
+    }
+
+    return this.renderChatResponse(responseBody)
+  }
+
+  /**
+   * 渲染 OpenAI Chat Completions 响应
+   */
+  private renderChatResponse(responseBody: any): RenderResult {
     try {
       const blocks: RenderBlock[] = []
 
@@ -415,6 +870,44 @@ export class OpenAIParser implements ApiFormatParser {
       return { blocks, isStream: false }
     } catch (e) {
       return createEmptyRenderResult(`渲染失败: ${e}`)
+    }
+  }
+
+  /**
+   * 渲染 OpenAI CLI (Responses API) 响应
+   */
+  private renderCliResponse(responseBody: any): RenderResult {
+    try {
+      const blocks: RenderBlock[] = []
+
+      const output = responseBody.output
+      if (!Array.isArray(output)) {
+        return { blocks, isStream: false }
+      }
+
+      for (const item of output) {
+        if (item?.type === 'message') {
+          const contentBlocks: RenderBlock[] = []
+
+          if (Array.isArray(item.content)) {
+            for (const content of item.content) {
+              if (content?.type === 'output_text' && content?.text) {
+                contentBlocks.push(createTextRenderBlock(content.text))
+              }
+            }
+          }
+
+          if (contentBlocks.length > 0) {
+            blocks.push(createMessageBlock('assistant', contentBlocks, {
+              roleLabel: 'Assistant',
+            }))
+          }
+        }
+      }
+
+      return { blocks, isStream: false }
+    } catch (e) {
+      return createEmptyRenderResult(`CLI 格式渲染失败: ${e}`)
     }
   }
 

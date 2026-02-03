@@ -411,25 +411,144 @@ class OpenAICliNormalizer(FormatNormalizer):
             if not state.model:
                 state.model = event.model or ""
             ss.setdefault("collected_text", "")
+            ss.setdefault("tool_calls", {})
+            ss.setdefault("tool_blocks", {})
+            ss.setdefault("tool_output_index", {})
+            ss.setdefault("output_order", [])
+            ss.setdefault("message_output_index", None)
+            ss.setdefault("message_output_started", False)
+            ss.setdefault("text_started", False)
+            ss.setdefault("next_output_index", 0)
+            ss.setdefault("sent_in_progress", False)
+            response_obj = {
+                "id": state.message_id,
+                "object": "response",
+                "created": int(time.time()),
+                "model": state.model,
+                "status": "in_progress",
+                "output": [],
+            }
             out.append(
                 event_block(
                     {
                         "type": "response.created",
-                        "response": {
-                            "id": state.message_id,
-                            "object": "response",
-                            "created": int(time.time()),
-                            "model": state.model,
-                            "status": "in_progress",
-                            "output": [],
-                        },
+                        "response": response_obj,
                     }
                 )
             )
+            # OpenAI Responses API 常见的 in_progress 事件（可选，最佳努力）
+            if not ss.get("sent_in_progress"):
+                ss["sent_in_progress"] = True
+                out.append(event_block({"type": "response.in_progress", "response": response_obj}))
+            return out
+
+        if isinstance(event, ContentBlockStartEvent):
+            # 工具调用块：输出 function_call 添加事件
+            if event.block_type == ContentType.TOOL_USE:
+                tool_id = event.tool_id or ""
+                tool_name = event.tool_name or ""
+                output_index = int(ss.get("next_output_index") or 0)
+                ss["next_output_index"] = output_index + 1
+                if tool_id:
+                    tool_calls = ss.setdefault("tool_calls", {})
+                    tool_calls.setdefault(tool_id, {"name": tool_name, "args": ""})
+                    output_order = ss.setdefault("output_order", [])
+                    output_order.append(
+                        {"kind": "tool", "id": tool_id, "output_index": output_index}
+                    )
+                    ss.setdefault("tool_blocks", {})[event.block_index] = tool_id
+                    ss.setdefault("tool_output_index", {})[tool_id] = output_index
+                out.append(
+                    event_block(
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": {
+                                "type": "function_call",
+                                "call_id": tool_id,
+                                "id": tool_id or f"call_{output_index}",
+                                "name": tool_name,
+                                "status": "in_progress",
+                                "arguments": "",
+                            },
+                        }
+                    )
+                )
+                return out
+
+        if isinstance(event, ToolCallDeltaEvent):
+            tool_id = event.tool_id or ss.get("tool_blocks", {}).get(event.block_index, "")
+            if tool_id:
+                tool_calls = ss.setdefault("tool_calls", {})
+                entry = tool_calls.setdefault(tool_id, {"name": "", "args": ""})
+                entry["args"] = str(entry.get("args") or "") + (event.input_delta or "")
+                output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
+                out.append(
+                    event_block(
+                        {
+                            "type": "response.function_call_arguments.delta",
+                            "delta": event.input_delta,
+                            "item_id": tool_id,
+                            "output_index": output_index,
+                        }
+                    )
+                )
+            return out
+
+        if isinstance(event, ContentBlockStopEvent):
+            tool_blocks = ss.get("tool_blocks", {})
+            tool_id = (
+                tool_blocks.pop(event.block_index, None) if isinstance(tool_blocks, dict) else None
+            )
+            if tool_id:
+                tool_calls = ss.get("tool_calls", {})
+                entry = tool_calls.get(tool_id, {})
+                output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
+                out.append(
+                    event_block(
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": {
+                                "type": "function_call",
+                                "call_id": tool_id,
+                                "id": tool_id,
+                                "name": entry.get("name") or "",
+                                "arguments": entry.get("args") or "",
+                                "status": "completed",
+                            },
+                        }
+                    )
+                )
             return out
 
         if isinstance(event, ContentDeltaEvent):
             if event.text_delta:
+                if not ss.get("message_output_started"):
+                    output_index = int(ss.get("next_output_index") or 0)
+                    ss["next_output_index"] = output_index + 1
+                    ss["message_output_index"] = output_index
+                    ss["message_output_started"] = True
+                    message_id = f"msg_{state.message_id or 'stream'}"
+                    ss.setdefault("output_order", []).append(
+                        {"kind": "message", "id": message_id, "output_index": output_index}
+                    )
+                    out.append(
+                        event_block(
+                            {
+                                "type": "response.output_item.added",
+                                "output_index": output_index,
+                                "item": {
+                                    "type": "message",
+                                    "id": message_id,
+                                    "role": "assistant",
+                                    "status": "in_progress",
+                                    "content": [],
+                                },
+                            }
+                        )
+                    )
+                ss["text_started"] = True
                 ss["collected_text"] = str(ss.get("collected_text") or "") + event.text_delta
                 out.append(
                     event_block(
@@ -443,6 +562,34 @@ class OpenAICliNormalizer(FormatNormalizer):
 
         if isinstance(event, MessageStopEvent):
             final_text = str(ss.get("collected_text") or "")
+            message_id = f"msg_{state.message_id or 'stream'}"
+            message_item = {
+                "type": "message",
+                "id": message_id,
+                "role": "assistant",
+                "status": "completed",
+                "content": ([{"type": "output_text", "text": final_text}] if final_text else []),
+            }
+            if ss.get("text_started"):
+                out.append(
+                    event_block(
+                        {
+                            "type": "response.output_text.done",
+                            "text": final_text,
+                        }
+                    )
+                )
+            if ss.get("message_output_started"):
+                output_index = ss.get("message_output_index") or 0
+                out.append(
+                    event_block(
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": message_item,
+                        }
+                    )
+                )
             response_obj = self.response_from_internal(
                 InternalResponse(
                     id=state.message_id or "resp",
@@ -452,6 +599,53 @@ class OpenAICliNormalizer(FormatNormalizer):
                     usage=event.usage or UsageInfo(),
                 )
             )
+            # 将工具调用添加到 output（最佳努力）
+            tool_calls = ss.get("tool_calls", {})
+            output_order = ss.get("output_order", [])
+            output_items: list[dict[str, Any]] = []
+            used_tool_ids: set[str] = set()
+            if isinstance(output_order, list) and output_order:
+                for entry in output_order:
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("kind") == "message":
+                        if message_item.get("content"):
+                            output_items.append(message_item)
+                    elif entry.get("kind") == "tool":
+                        tool_id = entry.get("id")
+                        if not isinstance(tool_id, str) or not tool_id:
+                            continue
+                        used_tool_ids.add(tool_id)
+                        tool_entry = (
+                            tool_calls.get(tool_id) if isinstance(tool_calls, dict) else None
+                        )
+                        if isinstance(tool_entry, dict):
+                            output_items.append(
+                                {
+                                    "type": "function_call",
+                                    "call_id": tool_id,
+                                    "id": tool_id,
+                                    "name": tool_entry.get("name") or "",
+                                    "arguments": tool_entry.get("args") or "",
+                                    "status": "completed",
+                                }
+                            )
+            if isinstance(tool_calls, dict):
+                for tool_id, tool_entry in tool_calls.items():
+                    if tool_id in used_tool_ids or not isinstance(tool_entry, dict):
+                        continue
+                    output_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": tool_id,
+                            "id": tool_id,
+                            "name": tool_entry.get("name") or "",
+                            "arguments": tool_entry.get("args") or "",
+                            "status": "completed",
+                        }
+                    )
+            if output_items:
+                response_obj["output"] = output_items
             out.append(event_block({"type": "response.completed", "response": response_obj}))
             return out
 

@@ -213,6 +213,7 @@ export const usageApi = {
       api_format?: string | null
       endpoint_api_format?: string | null
       has_format_conversion?: boolean | null
+      target_model?: string | null
     }>
   }> {
     const params = ids?.length ? { ids: ids.join(',') } : {}

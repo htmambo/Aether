@@ -109,8 +109,8 @@ export interface DateRangeParams {
 // 时间段选项
 export type PeriodValue = 'today' | 'yesterday' | 'last7days' | 'last30days' | 'last90days'
 
-// 筛选状态（包含新的请求状态值）
-export type FilterStatusValue = '__all__' | 'stream' | 'standard' | 'error' | 'active' | 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
+// 筛选状态（简化为常用维度）
+export type FilterStatusValue = '__all__' | 'stream' | 'standard' | 'active' | 'failed' | 'cancelled'
 
 // 默认统计状态
 export function createDefaultStats(): UsageStatsState {

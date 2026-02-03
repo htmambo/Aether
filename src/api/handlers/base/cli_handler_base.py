@@ -2676,7 +2676,28 @@ class CliMessageHandlerBase(BaseMessageHandler):
             ctx.record_first_byte_time(self.start_time)
             state["first_yield"] = False
             if not state["streaming_updated"]:
-                self._update_usage_to_streaming_with_ctx(ctx)
+                # 优先使用当前请求的 DB 会话同步更新，避免状态延迟或丢失
+                try:
+                    from src.services.usage import UsageService
+
+                    UsageService.update_usage_status(
+                        db=self.db,
+                        request_id=self.request_id,
+                        status="streaming",
+                        provider=ctx.provider_name,
+                        target_model=ctx.mapped_model,
+                        provider_id=ctx.provider_id,
+                        provider_endpoint_id=ctx.endpoint_id,
+                        provider_api_key_id=ctx.key_id,
+                        first_byte_time_ms=ctx.first_byte_time_ms,
+                        api_format=ctx.api_format,
+                        endpoint_api_format=ctx.provider_api_format or None,
+                        has_format_conversion=ctx.needs_conversion,
+                    )
+                except Exception as e:
+                    logger.warning(f"[{self.request_id}] 同步更新 streaming 状态失败: {e}")
+                    # 回退到后台任务更新
+                    self._update_usage_to_streaming_with_ctx(ctx)
                 state["streaming_updated"] = True
 
     def _convert_sse_line(

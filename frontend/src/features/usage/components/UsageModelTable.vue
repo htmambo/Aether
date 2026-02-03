@@ -1,11 +1,12 @@
 <template>
-  <Card class="overflow-hidden">
-    <div class="px-3 py-2 border-b">
+  <Card class="overflow-hidden flex flex-col">
+    <div class="px-3 py-2 border-b flex-shrink-0">
       <h3 class="text-sm font-medium">
         按模型分析
       </h3>
     </div>
-    <Table class="text-sm">
+    <div class="overflow-auto max-h-[320px]">
+      <Table class="text-sm">
       <TableHeader>
         <TableRow>
           <TableHead class="h-8 px-2">
@@ -64,6 +65,7 @@
         </TableRow>
       </TableBody>
     </Table>
+    </div>
   </Card>
 </template>
 

@@ -134,17 +134,14 @@
           <SelectItem value="standard">
             标准
           </SelectItem>
-          <SelectItem value="pending">
-            等待中
-          </SelectItem>
-          <SelectItem value="streaming">
-            传输中
-          </SelectItem>
-          <SelectItem value="completed">
-            完成
+          <SelectItem value="active">
+            活跃
           </SelectItem>
           <SelectItem value="failed">
             失败
+          </SelectItem>
+          <SelectItem value="cancelled">
+            已取消
           </SelectItem>
         </SelectContent>
       </Select>
@@ -414,6 +411,13 @@
               class="whitespace-nowrap"
             >
               失败
+            </Badge>
+            <Badge
+              v-else-if="record.status === 'cancelled'"
+              variant="outline"
+              class="whitespace-nowrap border-amber-500/50 text-amber-600 dark:text-amber-400"
+            >
+              已取消
             </Badge>
             <Badge
               v-else-if="record.is_stream"
@@ -732,7 +736,8 @@ function getApiFormatTooltip(record: UsageRecord): string {
 
   // 如果发生了格式转换或同族格式差异，显示详细信息
   if (shouldShowFormatConversion(record)) {
-    const endpointDisplayFormat = formatApiFormat(record.endpoint_api_format!)
+    const endpointApiFormat = record.endpoint_api_format ?? record.api_format
+    const endpointDisplayFormat = formatApiFormat(endpointApiFormat)
     const conversionType = record.has_format_conversion ? '格式转换' : '格式兼容（无需转换）'
     return `用户请求格式: ${displayFormat}\n端点原生格式: ${endpointDisplayFormat}\n${conversionType}`
   }

@@ -96,9 +96,11 @@ def test_stream_openai_to_openai_cli_delta() -> None:
 
     out_events = reg.convert_stream_chunk(chunk, "openai:chat", "openai:cli", state=state)
     assert isinstance(out_events, list) and out_events
-    assert out_events[0].get("type") == "response.created"
-    assert out_events[1].get("type") == "response.output_text.delta"
-    assert out_events[1].get("delta") == "hi"
+    created = [e for e in out_events if e.get("type") == "response.created"]
+    assert created
+    deltas = [e for e in out_events if e.get("type") == "response.output_text.delta"]
+    assert deltas
+    assert deltas[0].get("delta") == "hi"
 
 
 def test_stream_openai_cli_to_openai_delta() -> None:
@@ -376,7 +378,7 @@ def test_real_claude_cli_stream_response_conversion() -> None:
     state = StreamState()
 
     # 真实的 Claude CLI 流式响应事件序列
-    chunks = [
+    chunks: list[dict[str, Any]] = [
         {
             "type": "message_start",
             "message": {
@@ -533,7 +535,7 @@ def test_real_claude_cli_stream_to_openai_cli() -> None:
     state = StreamState()
 
     # 简化的真实事件序列
-    chunks = [
+    chunks: list[dict[str, Any]] = [
         {
             "type": "message_start",
             "message": {
