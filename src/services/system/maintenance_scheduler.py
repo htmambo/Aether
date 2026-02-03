@@ -761,7 +761,6 @@ class MaintenanceScheduler:
         """执行用户配额自动重置任务
 
         适用范围：
-        - 普通用户（role=user）
         - 未删除（is_deleted=false）
         - 仅对 quota_usd != NULL 的用户生效
         """
@@ -822,14 +821,12 @@ class MaintenanceScheduler:
             if not should_run:
                 return
 
-            from src.core.enums import UserRole
             from src.models.database import User as DBUser
 
             now_utc = datetime.now(timezone.utc)
             reset_count = (
                 db.query(DBUser)
                 .filter(
-                    DBUser.role == UserRole.USER,
                     DBUser.is_deleted.is_(False),
                     DBUser.quota_usd.isnot(None),
                 )
