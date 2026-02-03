@@ -11,6 +11,8 @@ from typing import Any
 
 from .base import TokenCounterPlugin
 
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
 
 class ClaudeTokenCounterPlugin(TokenCounterPlugin):
     """
@@ -138,8 +140,7 @@ class ClaudeTokenCounterPlugin(TokenCounterPlugin):
 
         # 考虑不同语言的特点
         # 检测是否包含中文/日文/韩文
-        cjk_pattern = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
-        cjk_count = len(cjk_pattern.findall(text))
+        cjk_count = len(_CJK_PATTERN.findall(text))
 
         if cjk_count > len(text) * 0.3:  # 超过30%是CJK字符
             # CJK字符通常每个字符1-2个token

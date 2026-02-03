@@ -283,12 +283,10 @@ class UsageQueueConsumer:
             # 准备批量记录数据
             records: list[dict[str, Any]] = []
             message_ids: list[str] = []
-            message_fields: list[dict[str, Any]] = []
 
             for message_id, fields, event in messages:
                 records.append(_event_to_record(event))
                 message_ids.append(message_id)
-                message_fields.append(fields)
 
             # 批量写入
             await UsageService.record_usage_batch(db, records)

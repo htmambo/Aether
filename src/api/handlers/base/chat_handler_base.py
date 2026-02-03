@@ -73,6 +73,7 @@ from src.services.provider.transport import (
     get_vertex_ai_effective_format,
     redact_url_for_log,
 )
+from src.services.system.config import SystemConfigService
 
 
 def _get_error_status_code(e: Exception, default: int = 400) -> int:
@@ -541,6 +542,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         ctx.client_api_format = (
             api_format.value if hasattr(api_format, "value") else str(api_format)
         )
+        # 仅在 FULL 级别才需要保留 parsed_chunks，避免长流式响应导致的内存占用
+        ctx.record_parsed_chunks = SystemConfigService.should_log_body(self.db)
 
         # 创建更新状态的回调闭包（可以访问 ctx）
         def update_streaming_status() -> None:

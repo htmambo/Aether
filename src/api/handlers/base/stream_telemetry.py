@@ -20,6 +20,7 @@ from src.config.settings import config
 from src.core.logger import logger
 from src.database import get_db
 from src.models.database import ApiKey, User
+from src.services.system.config import SystemConfigService
 from src.services.usage.telemetry_writer import (
     DbTelemetryWriter,
     QueueTelemetryWriter,
@@ -99,9 +100,15 @@ class StreamTelemetryRecorder:
                 if writer is None:
                     return
                 actual_request_body = ctx.provider_request_body or original_request_body
-                response_body = None
-                if not isinstance(writer, QueueTelemetryWriter) or writer.include_bodies:
-                    response_body = ctx.build_response_body(response_time_ms)
+                should_log_body = SystemConfigService.should_log_body(bg_db)
+                include_bodies = (
+                    writer.include_bodies
+                    if isinstance(writer, QueueTelemetryWriter)
+                    else should_log_body
+                )
+                response_body = (
+                    ctx.build_response_body(response_time_ms) if include_bodies else None
+                )
 
                 try:
                     await self._dispatch_record(
@@ -127,7 +134,7 @@ class StreamTelemetryRecorder:
                             status_code=ctx.status_code,
                         )
                         return
-                    if response_body is None:
+                    if response_body is None and should_log_body:
                         response_body = ctx.build_response_body(response_time_ms)
                     await self._dispatch_record(
                         db_writer,
@@ -400,8 +407,6 @@ class StreamTelemetryRecorder:
         self, bg_db: Session, ctx: StreamContext, response_time_ms: int
     ) -> TelemetryWriter | None:
         if config.usage_queue_enabled and self.user_id and self.api_key_id:
-            from src.services.system.config import SystemConfigService
-
             # Queue payload detail follows system config request_record_level.
             log_level = SystemConfigService.get_request_record_level(bg_db).value
             sensitive_headers = SystemConfigService.get_sensitive_headers(bg_db) or []

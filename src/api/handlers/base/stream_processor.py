@@ -139,10 +139,11 @@ class StreamProcessor:
         if not isinstance(data, dict):
             return
 
-        # 收集原始 chunk 数据（当需要格式转换时跳过，由 _emit_converted_line 记录转换后的数据）
+        # 统计数据事件数量（当需要格式转换时跳过，由 _emit_converted_line 统计/记录转换后的数据）
         if not skip_record:
-            ctx.parsed_chunks.append(data)
             ctx.data_count += 1
+            if ctx.record_parsed_chunks:
+                ctx.parsed_chunks.append(data)
 
         # 根据 Provider 格式选择解析器
         parser = self.get_parser_for_provider(ctx)
@@ -565,8 +566,9 @@ class StreamProcessor:
                         for evt in converted_events:
                             # 记录转换后的数据到 parsed_chunks（这是客户端实际收到的格式）
                             if isinstance(evt, dict):
-                                ctx.parsed_chunks.append(evt)
                                 ctx.data_count += 1
+                                if ctx.record_parsed_chunks:
+                                    ctx.parsed_chunks.append(evt)
 
                             # 统一使用 SSE 格式输出（Gemini streamGenerateContent 也使用 SSE）
                             # 参考: https://ai.google.dev/api/generate-content

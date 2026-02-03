@@ -73,6 +73,7 @@ from src.models.database import (
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
 from src.services.provider.transport import build_provider_url
+from src.services.system.config import SystemConfigService
 from src.utils.sse_parser import SSEEventParser
 from src.utils.timeout import read_first_chunk_with_ttfb_timeout
 
@@ -544,6 +545,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
             user_id=self.user.id,
             api_key_id=self.api_key.id,
         )
+        # 仅在 FULL 级别才需要保留 parsed_chunks，避免长流式响应导致的内存占用
+        ctx.record_parsed_chunks = SystemConfigService.should_log_body(self.db)
 
         # 定义请求函数
         async def stream_request_func(
@@ -1530,11 +1533,12 @@ class CliMessageHandlerBase(BaseMessageHandler):
         except json.JSONDecodeError:
             return
 
-        # 当不需要格式转换时，记录原始数据到 parsed_chunks 并更新 data_count
+        # 当不需要格式转换时，更新 data_count；需要记录时再写入 parsed_chunks。
         # 当需要格式转换时（record_chunk=False），data_count 由 _record_converted_chunks 更新
         if record_chunk and isinstance(data, dict):
-            ctx.parsed_chunks.append(data)
             ctx.data_count += 1
+            if ctx.record_parsed_chunks:
+                ctx.parsed_chunks.append(data)
 
         if not isinstance(data, dict):
             return
@@ -1641,8 +1645,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
         """
         for evt in converted_events:
             if isinstance(evt, dict):
-                ctx.parsed_chunks.append(evt)
                 ctx.data_count += 1
+                if ctx.record_parsed_chunks:
+                    ctx.parsed_chunks.append(evt)
 
                 # 检测完成事件（根据客户端格式判断）
                 # OpenAI 格式: choices[].finish_reason

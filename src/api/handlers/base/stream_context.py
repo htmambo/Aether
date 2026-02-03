@@ -90,6 +90,8 @@ class StreamContext:
     data_count: int = 0
     chunk_count: int = 0
     parsed_chunks: list[dict[str, Any]] = field(default_factory=list)
+    # 是否记录 parsed_chunks（可用于降低高并发/长流式响应的内存占用）
+    record_parsed_chunks: bool = True
 
     # 流式格式转换状态（跨 chunk 追踪）
     stream_conversion_state: StreamState | None = None

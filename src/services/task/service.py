@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +18,11 @@ from src.services.task.context import TaskMode
 from src.services.task.exceptions import TaskNotFoundError
 from src.services.task.protocol import AttemptKind, AttemptResult
 from src.services.task.schema import ExecutionResult, TaskStatusResult
+
+_SENSITIVE_PATTERN = re.compile(
+    r"(api[_-]?key|token|bearer|authorization)[=:\s]+\S+",
+    re.IGNORECASE,
+)
 
 
 class TaskService:
@@ -883,7 +889,6 @@ class TaskService:
         - stop on "client error" (raise UpstreamClientRequestError)
         - if all failed, raise AllCandidatesFailedError
         """
-        import re
         from datetime import datetime, timezone
 
         import httpx
@@ -900,11 +905,6 @@ class TaskService:
         )
         from src.services.orchestration.error_classifier import ErrorClassifier
         from src.services.system.config import SystemConfigService
-
-        _SENSITIVE_PATTERN = re.compile(
-            r"(api[_-]?key|token|bearer|authorization)[=:\s]+\S+",
-            re.IGNORECASE,
-        )
 
         def _sanitize(message: str, max_length: int = 200) -> str:
             if not message:

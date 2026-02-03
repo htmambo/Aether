@@ -500,10 +500,11 @@ class SystemConfigService:
             return headers
 
         sensitive_headers = cls.get_sensitive_headers(db)
+        sensitive_lower = {h.lower() for h in sensitive_headers if isinstance(h, str) and h}
         masked_headers = {}
 
         for key, value in headers.items():
-            if key.lower() in [h.lower() for h in sensitive_headers]:
+            if key.lower() in sensitive_lower:
                 # 保留前后各4个字符，中间用星号替换
                 if len(str(value)) > 8:
                     masked_value = str(value)[:4] + "****" + str(value)[-4:]
