@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import jwt
@@ -25,6 +26,25 @@ def _coerce_proxy_url(proxy_config: dict[str, Any] | None) -> str | None:
         return None
 
 
+def _redact_url(url: str) -> str:
+    """Remove query and fragment to avoid leaking secrets in logs."""
+    try:
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except Exception:
+        return "<invalid_url>"
+
+
+def _format_exc_chain(e: BaseException) -> str:
+    parts: list[str] = []
+    cur: BaseException | None = e
+    while cur is not None:
+        parts.append(f"{type(cur).__name__}: {cur}")
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        cur = nxt if isinstance(nxt, BaseException) else None
+    return " <- ".join(parts)
+
+
 async def _httpx_post(
     url: str,
     *,
@@ -35,13 +55,67 @@ async def _httpx_post(
     timeout_seconds: float,
 ) -> httpx.Response:
     client = await HTTPClientPool.get_proxy_client(proxy_config)
-    return await client.post(
-        url,
-        headers=headers,
-        data=data,
-        json=json_body,
-        timeout=timeout_seconds,
-    )
+    proxy_url = _coerce_proxy_url(proxy_config)
+    safe_url = _redact_url(url)
+
+    last_exc: Exception | None = None
+    # Only retry connection-level transient failures.
+    for attempt in range(2):
+        if attempt:
+            await asyncio.sleep(0.25 * attempt)
+        try:
+            return await client.post(
+                url,
+                headers=headers,
+                data=data,
+                json=json_body,
+                timeout=timeout_seconds,
+            )
+        except httpx.ConnectError as e:
+            last_exc = e
+            logger.warning(
+                "OAuth token POST connect error (attempt={}/2) url={} host={} proxy={} err_chain={} err={!r}",
+                attempt + 1,
+                safe_url,
+                urlsplit(url).netloc,
+                proxy_url,
+                _format_exc_chain(e),
+                e,
+            )
+            if attempt == 0:
+                continue
+            raise
+        except httpx.TimeoutException as e:
+            last_exc = e
+            logger.warning(
+                "OAuth token POST timeout (attempt={}/2) url={} host={} proxy={} err_chain={} err={!r}",
+                attempt + 1,
+                safe_url,
+                urlsplit(url).netloc,
+                proxy_url,
+                _format_exc_chain(e),
+                e,
+            )
+            # Retry only the first time for timeouts.
+            if attempt == 0:
+                continue
+            raise
+        except httpx.RequestError as e:
+            # Other request-level errors (proxy, TLS, etc). Log and re-raise.
+            last_exc = e
+            logger.error(
+                "OAuth token POST request error url={} host={} proxy={} err_chain={} err={!r}",
+                safe_url,
+                urlsplit(url).netloc,
+                proxy_url,
+                _format_exc_chain(e),
+                e,
+            )
+            raise
+
+    # Should not be reachable.
+    assert last_exc is not None
+    raise last_exc
 
 
 def _tls_client_post_sync(
