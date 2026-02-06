@@ -590,7 +590,7 @@ async def test_model(
         logger.debug(f"[test-model] 端点 API Format: {endpoint.api_format}")
         logger.debug(f"[test-model] 使用 Key: {api_key.name or api_key.id} (auth_type={auth_type})")
 
-        # 准备测试请求数据
+        # 准备测试请求数据（优先使用流式）
         check_request = {
             "model": request.model_name,
             "messages": [
@@ -598,6 +598,7 @@ async def test_model(
             ],
             "max_tokens": 30,
             "temperature": 0.7,
+            "stream": True,
         }
 
         # 获取端点规则（不在此处应用，传递给 check_endpoint 在格式转换后应用）
@@ -619,27 +620,57 @@ async def test_model(
             # Provider 上下文：auth_type 用于 OAuth 认证头处理，provider_type 用于特殊路由
             p_type = str(getattr(provider, "provider_type", "") or "").lower()
 
-            response = await adapter_class.check_endpoint(
-                client,
-                endpoint_config["base_url"],
-                endpoint_config["api_key"],
-                check_request,
-                extra_headers if extra_headers else None,
-                # 端点规则（在 check_endpoint 内部格式转换后应用）
-                body_rules=body_rules,
-                header_rules=header_rules,
-                # 用量计算参数（现在强制记录）
-                db=db,
-                user=current_user,
-                provider_name=provider.name,
-                provider_id=provider.id,
-                api_key_id=endpoint_config.get("api_key_id"),
-                model_name=request.model_name,
-                # Provider 上下文
-                auth_type=auth_type,
-                provider_type=p_type if p_type else None,
-                decrypted_auth_config=oauth_meta if oauth_meta else None,
-            )
+            async def _do_check(req: dict) -> dict:
+                return await adapter_class.check_endpoint(
+                    client,
+                    endpoint_config["base_url"],
+                    endpoint_config["api_key"],
+                    req,
+                    extra_headers if extra_headers else None,
+                    body_rules=body_rules,
+                    header_rules=header_rules,
+                    db=db,
+                    user=current_user,
+                    provider_name=provider.name,
+                    provider_id=provider.id,
+                    api_key_id=endpoint_config.get("api_key_id"),
+                    model_name=request.model_name,
+                    auth_type=auth_type,
+                    provider_type=p_type if p_type else None,
+                    decrypted_auth_config=oauth_meta if oauth_meta else None,
+                )
+
+            def _response_has_error(resp: dict) -> bool:
+                """快速判断响应是否包含错误"""
+                if "error" in resp:
+                    return True
+                if resp.get("status_code", 0) != 200:
+                    return True
+                resp_data = resp.get("response", {})
+                resp_body = resp_data.get("response_body", {})
+                parsed = resp_body
+                if isinstance(resp_body, str):
+                    try:
+                        parsed = json.loads(resp_body)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                if isinstance(parsed, dict) and "error" in parsed:
+                    return True
+                return False
+
+            # 策略：优先流式，若失败回退到非流式
+            used_stream = True
+            logger.debug("[test-model] 尝试流式请求...")
+            response = await _do_check(check_request)
+
+            if _response_has_error(response):
+                logger.info(
+                    "[test-model] 流式请求失败 (status={})，回退到非流式请求",
+                    response.get("status_code", "?"),
+                )
+                check_request["stream"] = False
+                used_stream = False
+                response = await _do_check(check_request)
 
             # 记录提供商返回信息
             logger.debug("[test-model] 端点测试结果:")
@@ -745,7 +776,7 @@ async def test_model(
             return {
                 "success": is_success,
                 "data": {
-                    "stream": False,
+                    "stream": used_stream,
                     "response": response,
                 },
                 "provider": {

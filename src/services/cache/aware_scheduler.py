@@ -83,6 +83,43 @@ class ProviderCandidate:
     needs_conversion: bool = False  # 是否需要格式转换
     provider_api_format: str = ""  # Provider 端点实际格式（用于健康度/熔断 bucket）
 
+    def _stable_order_key(self) -> tuple[int, int, str, str, str]:
+        """
+        为排序/优先队列提供稳定的比较键。
+
+        说明：
+        - 运行时偶发会出现对 ProviderCandidate 做 tuple 排序/heap 排序的场景；
+          当主键相同需要比较候选本身时，若候选不可比较会触发：
+          TypeError: '<' not supported between instances of 'ProviderCandidate' and 'ProviderCandidate'
+        - 这里提供一个与调度逻辑无关、但足够稳定且可比的兜底顺序。
+        """
+        provider_priority_raw = getattr(self.provider, "provider_priority", None)
+        internal_priority_raw = getattr(self.key, "internal_priority", None)
+
+        try:
+            provider_priority = (
+                int(provider_priority_raw) if provider_priority_raw is not None else 999999
+            )
+        except Exception:
+            provider_priority = 999999
+
+        try:
+            internal_priority = (
+                int(internal_priority_raw) if internal_priority_raw is not None else 999999
+            )
+        except Exception:
+            internal_priority = 999999
+
+        provider_id = str(getattr(self.provider, "id", "") or "")
+        endpoint_id = str(getattr(self.endpoint, "id", "") or "")
+        key_id = str(getattr(self.key, "id", "") or "")
+        return (provider_priority, internal_priority, provider_id, endpoint_id, key_id)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, ProviderCandidate):
+            return NotImplemented
+        return self._stable_order_key() < other._stable_order_key()
+
 
 @dataclass
 class ConcurrencySnapshot:
@@ -1585,7 +1622,7 @@ class CacheAwareScheduler:
                     scored_candidates.append((hash_value, candidate))
 
                 # 按哈希值排序
-                sorted_group = [c for _, c in sorted(scored_candidates)]
+                sorted_group = [c for _, c in sorted(scored_candidates, key=lambda x: x[0])]
                 result.extend(sorted_group)
             else:
                 # 单个候选或没有 affinity_key，按次要排序条件排序
@@ -1706,7 +1743,7 @@ class CacheAwareScheduler:
                         key_scores.append((hash_value, key))
 
                     # 按哈希值排序
-                    sorted_group = [key for _, key in sorted(key_scores)]
+                    sorted_group = [key for _, key in sorted(key_scores, key=lambda x: x[0])]
                     result.extend(sorted_group)
                 else:
                     # 没有 affinity_key 时按 ID 排序保持稳定性

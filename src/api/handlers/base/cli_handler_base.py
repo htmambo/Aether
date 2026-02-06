@@ -1353,6 +1353,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
         except GeneratorExit:
             raise
         except httpx.StreamClosed:
+            # 连接关闭前 flush 残余数据，尝试捕获尾部事件（如 response.completed 中的 usage）
+            self._flush_remaining_sse_data(
+                ctx, buffer, decoder, sse_parser, record_chunk=not needs_conversion
+            )
             if ctx.data_count == 0:
                 # 流已开始，发送错误事件而不是抛出异常
                 logger.warning(f"Provider '{ctx.provider_name}' 流连接关闭且无数据")
@@ -1369,6 +1373,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 }
                 yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
         except httpx.RemoteProtocolError:
+            # 连接异常关闭前 flush 残余数据，尝试捕获尾部事件（如 response.completed 中的 usage）
+            self._flush_remaining_sse_data(
+                ctx, buffer, decoder, sse_parser, record_chunk=not needs_conversion
+            )
             if ctx.data_count > 0:
                 error_event = {
                     "type": "error",
@@ -1389,6 +1397,106 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 await http_client.aclose()
             except Exception:
                 pass
+
+    def _flush_remaining_sse_data(
+        self,
+        ctx: StreamContext,
+        buffer: bytes,
+        decoder: codecs.IncrementalDecoder,
+        sse_parser: SSEEventParser,
+        *,
+        record_chunk: bool = True,
+    ) -> None:
+        """
+        异常发生时 flush 残留的字节 buffer 和 SSE parser 内部缓冲区。
+
+        用于 StreamClosed / RemoteProtocolError 等场景：
+        连接断开可能恰好发生在最后一个 SSE 事件（如 response.completed）
+        的 data 行已收到、但终止空行尚未到达之时。此方法确保这些事件仍能被处理，
+        从而正确捕获 usage 等关键信息。
+        """
+        try:
+            # 1) flush 字节 buffer 中的残余行
+            if buffer:
+                remaining = decoder.decode(buffer, True)
+                for line in remaining.split("\n"):
+                    stripped = line.rstrip("\r")
+                    events = sse_parser.feed_line(stripped)
+                    for event in events:
+                        self._handle_sse_event(
+                            ctx,
+                            event.get("event"),
+                            event.get("data") or "",
+                            record_chunk=record_chunk,
+                        )
+            # 2) flush SSE parser 内部累积的未完成事件
+            for event in sse_parser.flush():
+                self._handle_sse_event(
+                    ctx,
+                    event.get("event"),
+                    event.get("data") or "",
+                    record_chunk=record_chunk,
+                )
+        except Exception:
+            # best-effort: 不应因 flush 失败影响后续流程
+            pass
+
+    def _estimate_tokens_for_incomplete_stream(
+        self,
+        ctx: StreamContext,
+        request_body: dict[str, Any],
+    ) -> None:
+        """
+        流未正常完成（无 response.completed）且 token 均为 0 时的兜底估算。
+
+        从已收集的输出文本和请求体粗略估算 token 数，确保 usage 记录不为 0。
+        估算采用 ~4 字符/token 的保守比例。
+        """
+        # 输出 tokens：从已收集的文本估算
+        collected = ctx.collected_text
+        if collected:
+            ctx.output_tokens = max(1, len(collected) // 4)
+
+        # 输入 tokens：从请求体文本内容估算
+        try:
+            total_input_len = 0
+            instructions = request_body.get("instructions")
+            if isinstance(instructions, str):
+                total_input_len += len(instructions)
+            # OpenAI Responses API 使用 input 字段；Claude 使用 messages
+            input_items = request_body.get("input") or request_body.get("messages") or []
+            if isinstance(input_items, list):
+                for item in input_items:
+                    if isinstance(item, str):
+                        total_input_len += len(item)
+                    elif isinstance(item, dict):
+                        content = item.get("content", "")
+                        if isinstance(content, str):
+                            total_input_len += len(content)
+                        elif isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict):
+                                    text = block.get("text", "")
+                                    if isinstance(text, str):
+                                        total_input_len += len(text)
+            if total_input_len > 0:
+                ctx.input_tokens = max(1, total_input_len // 4)
+            else:
+                # fallback: 整个请求体 JSON 大小
+                body_str = json.dumps(request_body, ensure_ascii=False)
+                ctx.input_tokens = max(1, len(body_str) // 4)
+        except Exception:
+            pass
+
+        if ctx.input_tokens > 0 or ctx.output_tokens > 0:
+            logger.warning(
+                "[{}] 流未正常完成 (has_completion=False, data_count={}), "
+                "使用估算 tokens: in={}, out={}",
+                ctx.request_id,
+                ctx.data_count,
+                ctx.input_tokens,
+                ctx.output_tokens,
+            )
 
     async def _prefetch_and_check_embedded_error(
         self,
@@ -1787,6 +1895,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
         except GeneratorExit:
             raise
         except httpx.StreamClosed:
+            # 连接关闭前 flush 残余数据，尝试捕获尾部事件（如 response.completed 中的 usage）
+            self._flush_remaining_sse_data(
+                ctx, buffer, decoder, sse_parser, record_chunk=not needs_conversion
+            )
             if ctx.data_count == 0:
                 logger.warning(f"Provider '{ctx.provider_name}' 流连接关闭且无数据")
                 # 设置错误状态用于后续记录
@@ -1802,6 +1914,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 }
                 yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
         except httpx.RemoteProtocolError:
+            # 连接异常关闭前 flush 残余数据，尝试捕获尾部事件（如 response.completed 中的 usage）
+            self._flush_remaining_sse_data(
+                ctx, buffer, decoder, sse_parser, record_chunk=not needs_conversion
+            )
             if ctx.data_count > 0:
                 error_event = {
                     "type": "error",
@@ -2356,6 +2472,16 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 else:
                     # 在记录统计前，允许子类从 parsed_chunks 中提取额外的元数据
                     self._finalize_stream_metadata(ctx)
+
+                    # 流未正常完成（如上游截断/连接中断）且无 token 数据时，
+                    # 从已收集的文本和请求体估算 tokens，避免 usage 记录为 0
+                    if (
+                        not ctx.has_completion
+                        and ctx.data_count > 0
+                        and ctx.input_tokens == 0
+                        and ctx.output_tokens == 0
+                    ):
+                        self._estimate_tokens_for_incomplete_stream(ctx, actual_request_body)
 
                     # 流式成功时，返回给客户端的是提供商响应头 + SSE 必需头
                     client_response_headers = filter_proxy_response_headers(ctx.response_headers)

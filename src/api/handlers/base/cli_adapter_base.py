@@ -18,7 +18,6 @@ CLI Adapter 通用基类
 from __future__ import annotations
 
 import time
-import traceback
 from typing import Any, ClassVar
 
 import httpx
@@ -417,18 +416,10 @@ class CliAdapterBase(ApiAdapter):
     ) -> JSONResponse:
         """处理未预期的异常"""
         if isinstance(e, ProxyException):
-            logger.error(f"{self.FORMAT_ID} 请求处理业务异常: {type(e).__name__}")
+            logger.error(f"{self.FORMAT_ID} 请求处理业务异常: {type(e).__name__}: {e}")
         else:
-            logger.error(
-                f"{self.FORMAT_ID} 请求处理意外异常",
-                exception=e,
-                extra_data={
-                    "exception_class": e.__class__.__name__,
-                    "processing_stage": "request_processing",
-                    "model": model,
-                    "stream": stream,
-                    "traceback_preview": str(traceback.format_exc())[:500],
-                },
+            logger.opt(exception=e).error(
+                f"{self.FORMAT_ID} 请求处理意外异常: {type(e).__name__}: {e}"
             )
 
         response_time = int((time.time() - start_time) * 1000)
