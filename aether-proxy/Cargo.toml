@@ -9,7 +9,7 @@ tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "http1", "server"] }
 http-body-util = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "native-tls-vendored"] }
 hmac = "0.12"
 sha2 = "0.10"
 subtle = "2"
