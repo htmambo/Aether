@@ -4,7 +4,7 @@ use std::sync::Arc;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::auth;
 use crate::config::Config;
@@ -56,7 +56,7 @@ pub async fn handle_plain(
         }
     };
 
-    debug!(target = %target_addr, method = %req.method(), "HTTP proxy forwarding");
+    info!(target = %target_addr, method = %req.method(), "HTTP proxy forwarding");
 
     // Build outgoing request (strip proxy headers, use relative URI)
     let path_and_query = uri
@@ -116,6 +116,7 @@ pub async fn handle_plain(
 
     match sender.send_request(outgoing).await {
         Ok(resp) => {
+            info!(target = %target_addr, status = resp.status().as_u16(), "HTTP proxy response");
             // Stream the response body directly — no buffering
             let (parts, body) = resp.into_parts();
             let body: BoxBody = body

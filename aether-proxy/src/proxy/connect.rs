@@ -4,7 +4,7 @@ use std::sync::Arc;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use tokio::net::TcpStream;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::auth;
 use crate::config::Config;
@@ -53,7 +53,7 @@ pub async fn handle_connect(
         }
     };
 
-    debug!(target = %target_addr, "CONNECT tunnel establishing");
+    info!(target = %target_addr, "CONNECT tunnel establishing");
 
     // Connect to target
     let target_stream = match TcpStream::connect(target_addr).await {
@@ -74,7 +74,7 @@ pub async fn handle_connect(
 
                 match tokio::io::copy_bidirectional(&mut upgraded, &mut target).await {
                     Ok((from_client, from_target)) => {
-                        debug!(
+                        info!(
                             from_client,
                             from_target,
                             "CONNECT tunnel closed"

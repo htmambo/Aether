@@ -201,6 +201,8 @@ class StreamTelemetryRecorder:
         metadata: dict[str, Any] = {"stream": True, "content_length": ctx.data_count}
         if ctx.perf_metrics:
             metadata["perf"] = ctx.perf_metrics
+        if ctx.proxy_info:
+            metadata["proxy"] = ctx.proxy_info
 
         await writer.record_success(
             provider=ctx.provider_name or "unknown",
@@ -250,6 +252,8 @@ class StreamTelemetryRecorder:
         metadata: dict[str, Any] = {"stream": True, "content_length": ctx.data_count}
         if ctx.perf_metrics:
             metadata["perf"] = ctx.perf_metrics
+        if ctx.proxy_info:
+            metadata["proxy"] = ctx.proxy_info
 
         await writer.record_failure(
             provider=ctx.provider_name or "unknown",
@@ -297,6 +301,8 @@ class StreamTelemetryRecorder:
         metadata: dict[str, Any] = {"stream": True, "content_length": ctx.data_count}
         if ctx.perf_metrics:
             metadata["perf"] = ctx.perf_metrics
+        if ctx.proxy_info:
+            metadata["proxy"] = ctx.proxy_info
 
         await writer.record_cancelled(
             provider=ctx.provider_name or "unknown",

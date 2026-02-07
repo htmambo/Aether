@@ -913,9 +913,15 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         # Capture the selected base_url from transport (used by some envelopes for failover).
         ctx.selected_base_url = envelope.capture_selected_base_url() if envelope else None
 
+        # 记录代理信息
+        from src.clients.http_client import get_proxy_label, resolve_proxy_info
+
+        ctx.proxy_info = resolve_proxy_info(provider.proxy)
+        proxy_label = get_proxy_label(ctx.proxy_info)
+
         logger.debug(
             f"  [{self.request_id}] 发送流式请求: Provider={provider.name}, "
-            f"模型={ctx.model} -> {mapped_model or '无映射'}"
+            f"模型={ctx.model} -> {mapped_model or '无映射'}, 代理={proxy_label}"
         )
 
         # If upstream is forced to non-stream mode, we execute a sync request and then
@@ -1307,6 +1313,10 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         # 失败时返回给客户端的是 JSON 错误响应
         client_response_headers = {"content-type": "application/json"}
 
+        stream_fail_metadata: dict[str, Any] | None = None
+        if ctx.proxy_info:
+            stream_fail_metadata = {"proxy": ctx.proxy_info}
+
         await self.telemetry.record_failure(
             provider=ctx.provider_name or "unknown",
             model=ctx.model,
@@ -1324,6 +1334,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             endpoint_api_format=ctx.provider_api_format or None,
             has_format_conversion=ctx.has_format_conversion,
             target_model=ctx.mapped_model,
+            request_metadata=stream_fail_metadata,
         )
 
     # ==================== 非流式处理 ====================
@@ -1372,6 +1383,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         endpoint_id: str | None = None  # Endpoint ID（用于失败记录）
         key_id: str | None = None  # Key ID（用于失败记录）
         mapped_model_result: str | None = None  # 映射后的目标模型名（用于 Usage 记录）
+        sync_proxy_info: dict[str, Any] | None = None  # 代理信息（用于 Usage 记录）
 
         async def sync_request_func(
             provider: Provider,
@@ -1382,6 +1394,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             nonlocal provider_name, response_json, status_code, response_headers
             nonlocal provider_request_headers, provider_request_body, mapped_model_result
             nonlocal provider_api_format_for_error, client_api_format_for_error, needs_conversion_for_error
+            nonlocal sync_proxy_info
 
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format or api_format)
@@ -1533,9 +1546,16 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             # 非流式：必须在 build_provider_url 调用后立即缓存（避免 contextvar 被后续调用覆盖）
             selected_base_url_cached = envelope.capture_selected_base_url() if envelope else None
 
+            # 记录代理信息
+            from src.clients.http_client import get_proxy_label, resolve_proxy_info
+
+            sync_proxy_info = resolve_proxy_info(provider.proxy)
+            _proxy_label = get_proxy_label(sync_proxy_info)
+
             logger.info(
                 f"  [{self.request_id}] 发送{'上游流式(聚合)' if upstream_is_stream else '非流式'}请求: "
-                f"Provider={provider.name}, 模型={model} -> {mapped_model or '无映射'}"
+                f"Provider={provider.name}, 模型={model} -> {mapped_model or '无映射'}, "
+                f"代理={_proxy_label}"
             )
             logger.debug(f"  [{self.request_id}] 请求URL: {redact_url_for_log(url)}")
 
@@ -1775,7 +1795,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             client_response_headers = filter_proxy_response_headers(response_headers)
             client_response_headers["content-type"] = "application/json"
 
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             total_cost = await self.telemetry.record_success(
                 provider=provider_name,
                 model=model,
@@ -1803,7 +1825,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 provider_api_key_id=key_id,
                 # 模型映射信息
                 target_model=mapped_model_result,
-                request_metadata=request_metadata,
+                request_metadata=request_metadata or None,
             )
 
             logger.debug(f"{self.FORMAT_ID} 非流式响应完成")
@@ -1826,7 +1848,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             # 记录实际发送给 Provider 的请求体，便于排查问题根因
             response_time_ms = self.elapsed_ms()
             actual_request_body = provider_request_body or original_request_body
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             await self.telemetry.record_failure(
                 provider=provider_name or "unknown",
                 model=model,
@@ -1836,7 +1860,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 request_body=actual_request_body,
                 error_message=str(e),
                 is_stream=False,
-                request_metadata=request_metadata,
+                request_metadata=request_metadata or None,
             )
             client_format = (client_api_format_for_error or "").upper()
             provider_format = (provider_api_format_for_error or client_format).upper()
@@ -1851,7 +1875,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         except UpstreamClientException as e:
             response_time_ms = self.elapsed_ms()
             actual_request_body = provider_request_body or original_request_body
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             await self.telemetry.record_failure(
                 provider=provider_name or "unknown",
                 model=model,
@@ -1903,7 +1929,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             elif isinstance(e, httpx.HTTPStatusError) and hasattr(e, "response"):
                 error_response_headers = dict(e.response.headers)
 
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             await self.telemetry.record_failure(
                 provider=provider_name or "unknown",
                 model=model,

@@ -40,8 +40,8 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
     读取 ProxyNode 信息（带内存 TTL 缓存）
 
     Returns:
-        aether-proxy 节点: {"ip": str, "port": int}
-        手动节点: {"is_manual": True, "proxy_url": str, "username": str|None, "password": str|None}
+        aether-proxy 节点: {"ip": str, "port": int, "name": str, ...}
+        手动节点: {"is_manual": True, "name": str, "proxy_url": str, ...}
         不存在/非在线: None
     """
     now = time.time()
@@ -68,12 +68,14 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
         if node.is_manual:
             value: dict[str, Any] = {
                 "is_manual": True,
+                "name": node.name,
                 "proxy_url": node.proxy_url,
                 "username": node.proxy_username,
                 "password": node.proxy_password,
             }
         else:
             value = {
+                "name": node.name,
                 "ip": node.ip,
                 "port": node.port,
                 "tls_enabled": bool(node.tls_enabled),
@@ -96,6 +98,7 @@ def _build_hmac_proxy_url(ip: str, port: int, node_id: str, *, tls_enabled: bool
     当 tls_enabled=True 时使用 https:// scheme。
     """
     if not config.proxy_hmac_key:
+        logger.error("PROXY_HMAC_KEY 未配置，无法使用 ProxyNode 代理 (node_id={})", node_id)
         raise ProxyNodeUnavailableError(
             "PROXY_HMAC_KEY 未配置，无法使用 ProxyNode 代理", node_id=node_id
         )
@@ -262,6 +265,7 @@ def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
         node_id = node_id.strip()
         node_info = _get_proxy_node_info(node_id)
         if not node_info:
+            logger.warning("代理节点不可用（离线或不存在）: node_id={}", node_id)
             raise ProxyNodeUnavailableError(f"代理节点 {node_id} 不可用", node_id=node_id)
 
         # 手动节点：直接使用存储的代理 URL（含认证信息）
@@ -323,6 +327,61 @@ def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
         return auth_proxy
 
     return proxy_url
+
+
+def resolve_proxy_info(proxy_config: dict[str, Any] | None) -> dict[str, Any] | None:
+    """
+    解析代理配置的摘要信息（用于日志和 usage 记录）
+
+    不构建实际的代理 URL，仅返回可读的代理标识信息。
+
+    Returns:
+        {"node_id": "xxx", "node_name": "proxy-01", "source": "provider"} 或
+        {"url": "socks5://host:port", "source": "provider"} 或
+        {"node_id": "xxx", "node_name": "...", "source": "system"} 或
+        None (直连)
+    """
+    source = "provider"
+    effective_config = proxy_config
+
+    # 无 provider 级代理时，尝试系统默认代理
+    if not effective_config or not effective_config.get("enabled", True):
+        effective_config = get_system_proxy_config()
+        source = "system"
+
+    if not effective_config or not effective_config.get("enabled", True):
+        return None
+
+    # ProxyNode 模式
+    node_id = effective_config.get("node_id")
+    if isinstance(node_id, str) and node_id.strip():
+        node_id = node_id.strip()
+        node_info = _get_proxy_node_info(node_id)
+        node_name = node_info.get("name", "unknown") if node_info else "offline"
+        return {"node_id": node_id, "node_name": node_name, "source": source}
+
+    # 旧格式 URL 模式
+    proxy_url = effective_config.get("url")
+    if proxy_url:
+        # 脱敏：只保留 scheme + host + port
+        try:
+            parsed = urlparse(proxy_url)
+            host_part = parsed.hostname or "unknown"
+            if parsed.port:
+                host_part = f"{host_part}:{parsed.port}"
+            safe_url = f"{parsed.scheme}://{host_part}"
+        except Exception:
+            safe_url = "unknown"
+        return {"url": safe_url, "source": source}
+
+    return None
+
+
+def get_proxy_label(proxy_info: dict[str, Any] | None) -> str:
+    """从 proxy_info 中提取简短的代理标签（用于日志）"""
+    if not proxy_info:
+        return "direct"
+    return proxy_info.get("node_name") or proxy_info.get("url") or "unknown"
 
 
 def _make_proxy_param(proxy_url: str | None) -> str | httpx.Proxy | None:

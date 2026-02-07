@@ -53,7 +53,7 @@ pub async fn run(
                     }
                 };
 
-                debug!(peer = %peer_addr, "new connection");
+                info!(peer = %peer_addr, "new connection");
 
                 let config = Arc::clone(&config);
                 let node_id = Arc::clone(&node_id);

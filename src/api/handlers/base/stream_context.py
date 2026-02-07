@@ -112,6 +112,9 @@ class StreamContext:
     perf_sampled: bool = False
     perf_metrics: dict[str, Any] = field(default_factory=dict)
 
+    # 代理信息（用于 usage 记录和日志）
+    proxy_info: dict[str, Any] | None = None
+
     # 流式格式转换状态（跨 chunk 追踪）
     stream_conversion_state: StreamState | None = None
 
@@ -142,6 +145,7 @@ class StreamContext:
         self.response_id = None
         self.final_usage = None
         self.final_response = None
+        self.proxy_info = None
         self.stream_conversion_state = None
         self.needs_conversion = False
         self.selected_base_url = None

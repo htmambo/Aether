@@ -746,9 +746,15 @@ class TaskService:
             return "break"
 
         if isinstance(cause, ProxyNodeUnavailableError):
-            # ProxyNode 不可用属于“配置明确指定但不可达/不可用”的情况，
+            # ProxyNode 不可用属于"配置明确指定但不可达/不可用"的情况，
             # 在当前候选上重试通常没有意义，直接切换到下一个候选更合理。
-            logger.warning("  [{}] 代理节点不可用，切换候选: {}", request_id, str(cause))
+            node_id = cause.details.get("proxy_node_id") if cause.details else None
+            logger.warning(
+                "  [{}] 代理节点不可用 (node_id={})，切换候选: {}",
+                request_id,
+                node_id or "unknown",
+                str(cause),
+            )
             RequestCandidateService.mark_candidate_failed(
                 db=self.db,
                 candidate_id=candidate_record_id,

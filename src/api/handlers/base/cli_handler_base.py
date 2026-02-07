@@ -890,6 +890,12 @@ class CliMessageHandlerBase(BaseMessageHandler):
         # Capture the selected base_url from transport (used by some envelopes for failover).
         ctx.selected_base_url = envelope.capture_selected_base_url() if envelope else None
 
+        # 记录代理信息（sync-bridge 路径，早于流式路径执行）
+        from src.clients.http_client import get_proxy_label as _gpl
+        from src.clients.http_client import resolve_proxy_info as _rpi
+
+        ctx.proxy_info = _rpi(provider.proxy)
+
         # If upstream is forced to non-stream mode, we execute a sync request and then
         # simulate streaming to the client (sync -> stream bridge).
         if not upstream_is_stream:
@@ -1073,12 +1079,14 @@ class CliMessageHandlerBase(BaseMessageHandler):
         # 优先使用 Provider 配置，否则使用全局配置
         request_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
 
+        _proxy_label = _gpl(ctx.proxy_info)
+
         logger.debug(
             f"  └─ [{self.request_id}] 发送流式请求: "
             f"Provider={provider.name}, Endpoint={endpoint.id[:8] if endpoint.id else 'N/A'}..., "
             f"Key=***{key.api_key[-4:] if key.api_key else 'N/A'}, "
             f"原始模型={ctx.model}, 映射后={mapped_model or '无映射'}, URL模型={url_model}, "
-            f"timeout={request_timeout}s"
+            f"timeout={request_timeout}s, 代理={_proxy_label}"
         )
 
         # 创建 HTTP 客户端（支持代理配置，从 Provider 读取）
@@ -2802,6 +2810,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         mapped_model_result = None  # 映射后的目标模型名（用于 Usage 记录）
         response_metadata_result: dict[str, Any] = {}  # Provider 响应元数据
         needs_conversion = False  # 是否需要格式转换（由 candidate 决定）
+        sync_proxy_info: dict[str, Any] | None = None  # 代理信息
 
         # 可变请求体容器：允许 TaskService 在遇到 Thinking 签名错误时整流请求体后重试
         # 结构: {"body": 实际请求体, "_rectified": 是否已整流, "_rectified_this_turn": 本轮是否整流}
@@ -2813,7 +2822,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             key: ProviderAPIKey,
             candidate: ProviderCandidate,
         ) -> dict[str, Any]:
-            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result, needs_conversion
+            nonlocal provider_name, response_json, status_code, response_headers, provider_api_format, provider_request_headers, provider_request_body, mapped_model_result, response_metadata_result, needs_conversion, sync_proxy_info
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
 
@@ -2948,11 +2957,18 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 非流式：必须在 build_provider_url 调用后立即缓存（避免 contextvar 被后续调用覆盖）
             selected_base_url_cached = envelope.capture_selected_base_url() if envelope else None
 
+            # 记录代理信息
+            from src.clients.http_client import get_proxy_label, resolve_proxy_info
+
+            sync_proxy_info = resolve_proxy_info(provider.proxy)
+            _proxy_label = get_proxy_label(sync_proxy_info)
+
             logger.info(
                 f"  └─ [{self.request_id}] 发送{'上游流式(聚合)' if upstream_is_stream else '非流式'}请求: "
                 f"Provider={provider.name}, Endpoint={endpoint.id[:8] if endpoint.id else 'N/A'}..., "
                 f"Key=***{key.api_key[-4:] if key.api_key else 'N/A'}, "
-                f"原始模型={model}, 映射后={mapped_model or '无映射'}, URL模型={url_model}"
+                f"原始模型={model}, 映射后={mapped_model or '无映射'}, URL模型={url_model}, "
+                f"代理={_proxy_label}"
             )
 
             # 获取复用的 HTTP 客户端（支持代理配置，从 Provider 读取）
@@ -3190,7 +3206,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             client_response_headers = filter_proxy_response_headers(response_headers)
             client_response_headers["content-type"] = "application/json"
 
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             total_cost = await self.telemetry.record_success(
                 provider=provider_name,
                 model=model,
@@ -3219,7 +3237,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 target_model=mapped_model_result,
                 # Provider 响应元数据（如 Gemini 的 modelVersion）
                 response_metadata=response_metadata_result if response_metadata_result else None,
-                request_metadata=request_metadata,
+                request_metadata=request_metadata or None,
             )
 
             logger.info(f"{self.FORMAT_ID} 非流式响应处理完成")
@@ -3236,7 +3254,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 记录实际发送给 Provider 的请求体，便于排查问题根因
             response_time_ms = int((time.time() - sync_start_time) * 1000)
             actual_request_body = provider_request_body or original_request_body
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             await self.telemetry.record_failure(
                 provider=provider_name or "unknown",
                 model=model,
@@ -3247,7 +3267,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 error_message=str(e),
                 is_stream=False,
                 api_format=api_format,
-                request_metadata=request_metadata,
+                request_metadata=request_metadata or None,
             )
             raise
 
@@ -3272,7 +3292,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             elif isinstance(e, httpx.HTTPStatusError) and hasattr(e, "response"):
                 error_response_headers = dict(e.response.headers)
 
-            request_metadata = self._build_request_metadata()
+            request_metadata = self._build_request_metadata() or {}
+            if sync_proxy_info:
+                request_metadata["proxy"] = sync_proxy_info
             await self.telemetry.record_failure(
                 provider=provider_name or "unknown",
                 model=model,
@@ -3292,7 +3314,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 has_format_conversion=is_format_converted(provider_api_format, str(api_format)),
                 # 模型映射信息
                 target_model=mapped_model_result,
-                request_metadata=request_metadata,
+                request_metadata=request_metadata or None,
             )
 
             raise
