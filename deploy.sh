@@ -256,9 +256,18 @@ else
     echo ">>> Code unchanged."
 fi
 
-# 只在有变化时重启
+# 检查容器是否在运行
+CONTAINERS_RUNNING=true
+if [ -z "$($DC ps -q 2>/dev/null)" ]; then
+    CONTAINERS_RUNNING=false
+fi
+
+# 有变化时重启，或容器未运行时启动
 if [ "$NEED_RESTART" = true ]; then
     echo ">>> Restarting services..."
+    $DC up -d
+elif [ "$CONTAINERS_RUNNING" = false ]; then
+    echo ">>> Containers not running, starting services..."
     $DC up -d
 else
     echo ">>> No changes detected, skipping restart."
