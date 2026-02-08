@@ -914,7 +914,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         ctx.selected_base_url = envelope.capture_selected_base_url() if envelope else None
 
         # 记录代理信息
-        from src.clients.http_client import get_proxy_label, resolve_proxy_info
+        from src.services.proxy_node.resolver import get_proxy_label, resolve_proxy_info
 
         ctx.proxy_info = resolve_proxy_info(provider.proxy)
         proxy_label = get_proxy_label(ctx.proxy_info)
@@ -928,19 +928,23 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         # simulate streaming to the client (sync -> stream bridge).
         if not upstream_is_stream:
             from src.clients.http_client import HTTPClientPool
+            from src.services.proxy_node.resolver import build_post_kwargs, resolve_delegate_config
 
             request_timeout_sync = provider.request_timeout or config.http_request_timeout
-            http_client = await HTTPClientPool.get_proxy_client(
-                proxy_config=provider.proxy,
+            delegate_cfg = resolve_delegate_config(provider.proxy)
+            http_client = await HTTPClientPool.get_upstream_client(
+                delegate_cfg, proxy_config=provider.proxy
             )
 
             try:
-                resp = await http_client.post(
-                    url,
-                    json=provider_payload,
+                _pkw = build_post_kwargs(
+                    delegate_cfg,
+                    url=url,
                     headers=provider_headers,
-                    timeout=httpx.Timeout(request_timeout_sync),
+                    payload=provider_payload,
+                    timeout=request_timeout_sync,
                 )
+                resp = await http_client.post(**_pkw)
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
                 if envelope:
                     envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
@@ -971,12 +975,15 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                         ctx.provider_request_headers = provider_headers
 
                     # retry once
-                    resp = await http_client.post(
-                        url,
-                        json=provider_payload,
+                    _pkw = build_post_kwargs(
+                        delegate_cfg,
+                        url=url,
                         headers=provider_headers,
-                        timeout=httpx.Timeout(request_timeout_sync),
+                        payload=provider_payload,
+                        timeout=request_timeout_sync,
+                        refresh_auth=True,
                     )
+                    resp = await http_client.post(**_pkw)
                     ctx.status_code = resp.status_code
                     ctx.response_headers = dict(resp.headers)
                     if envelope:
@@ -1120,10 +1127,11 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
         # 创建 HTTP 客户端（支持代理配置，从 Provider 读取）
         from src.clients.http_client import HTTPClientPool
+        from src.services.proxy_node.resolver import build_stream_kwargs, resolve_delegate_config
 
-        http_client = HTTPClientPool.create_client_with_proxy(
-            proxy_config=provider.proxy,
-            timeout=timeout_config,
+        delegate_cfg = resolve_delegate_config(provider.proxy)
+        http_client = HTTPClientPool.create_upstream_stream_client(
+            delegate_cfg, proxy_config=provider.proxy, timeout=timeout_config
         )
 
         # 用于存储内部函数的结果（必须在函数定义前声明，供 nonlocal 使用）
@@ -1134,9 +1142,18 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         async def _connect_and_prefetch() -> None:
             """建立连接并预读首字节（受整体超时控制）"""
             nonlocal byte_iterator, prefetched_chunks, response_ctx
-            response_ctx = http_client.stream(
-                "POST", url, json=provider_payload, headers=provider_headers
+            _skw = build_stream_kwargs(
+                delegate_cfg,
+                url=url,
+                headers=provider_headers,
+                payload=provider_payload,
+                timeout=(
+                    provider.request_timeout or config.http_request_timeout
+                    if delegate_cfg
+                    else None
+                ),
             )
+            response_ctx = http_client.stream(**_skw)
             stream_response = await response_ctx.__aenter__()
 
             ctx.status_code = stream_response.status_code
@@ -1547,7 +1564,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             selected_base_url_cached = envelope.capture_selected_base_url() if envelope else None
 
             # 记录代理信息
-            from src.clients.http_client import get_proxy_label, resolve_proxy_info
+            from src.services.proxy_node.resolver import get_proxy_label, resolve_proxy_info
 
             sync_proxy_info = resolve_proxy_info(provider.proxy)
             _proxy_label = get_proxy_label(sync_proxy_info)
@@ -1562,12 +1579,19 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             # 获取复用的 HTTP 客户端（支持代理配置，从 Provider 读取）
             # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
             from src.clients.http_client import HTTPClientPool
+            from src.services.proxy_node.resolver import (
+                build_post_kwargs,
+                build_stream_kwargs,
+                resolve_delegate_config,
+            )
 
             # 非流式请求使用 http_request_timeout 作为整体超时
             # 优先使用 Provider 配置，否则使用全局配置
             request_timeout = provider.request_timeout or config.http_request_timeout
-            http_client = await HTTPClientPool.get_proxy_client(
-                proxy_config=provider.proxy,
+
+            delegate_cfg = resolve_delegate_config(provider.proxy)
+            http_client = await HTTPClientPool.get_upstream_client(
+                delegate_cfg, proxy_config=provider.proxy
             )
 
             # 注意：不使用 async with，因为复用的客户端不应该被关闭
@@ -1575,12 +1599,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             resp: httpx.Response | None = None
             if not upstream_is_stream:
                 try:
-                    resp = await http_client.post(
-                        url,
-                        json=provider_payload,
+                    _pkw = build_post_kwargs(
+                        delegate_cfg,
+                        url=url,
                         headers=provider_hdrs,
-                        timeout=httpx.Timeout(request_timeout),
+                        payload=provider_payload,
+                        timeout=request_timeout,
                     )
+                    resp = await http_client.post(**_pkw)
                 except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
                     if envelope:
                         envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
@@ -1596,13 +1622,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 )
 
                 try:
-                    async with http_client.stream(
-                        "POST",
-                        url,
-                        json=provider_payload,
+                    _stream_args = build_stream_kwargs(
+                        delegate_cfg,
+                        url=url,
                         headers=provider_hdrs,
-                        timeout=httpx.Timeout(request_timeout),
-                    ) as stream_resp:
+                        payload=provider_payload,
+                        timeout=request_timeout,
+                    )
+                    async with http_client.stream(**_stream_args) as stream_resp:
                         resp = stream_resp
 
                         status_code = stream_resp.status_code

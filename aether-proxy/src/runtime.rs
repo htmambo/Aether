@@ -14,6 +14,7 @@ use crate::config::Config;
 /// Configuration that can be changed at runtime without restart.
 #[derive(Debug)]
 pub struct DynamicConfig {
+    pub node_name: String,
     pub allowed_ports: HashSet<u16>,
     pub timestamp_tolerance: u64,
     pub log_level: String,
@@ -27,6 +28,7 @@ impl DynamicConfig {
     /// Initialize from static config (startup defaults).
     pub fn from_config(config: &Config) -> Self {
         Self {
+            node_name: config.node_name.clone(),
             allowed_ports: config.allowed_ports.iter().copied().collect(),
             timestamp_tolerance: config.timestamp_tolerance,
             log_level: config.log_level.clone(),
@@ -54,7 +56,7 @@ pub fn set_log_reloader(f: Box<dyn Fn(&str) + Send + Sync>) {
 /// Returns `true` if the config was actually changed.
 pub fn apply_remote_config(
     dynamic: &SharedDynamicConfig,
-    remote: &super::registration::client::RemoteConfig,
+    remote: &crate::registration::client::RemoteConfig,
     version: u64,
 ) -> bool {
     let mut cfg = dynamic.write().unwrap();
@@ -64,6 +66,13 @@ pub fn apply_remote_config(
     }
 
     let mut changed = Vec::new();
+
+    if let Some(ref name) = remote.node_name {
+        if *name != cfg.node_name {
+            changed.push(format!("node_name → {}", name));
+            cfg.node_name = name.clone();
+        }
+    }
 
     if let Some(ref ports) = remote.allowed_ports {
         let new_set: HashSet<u16> = ports.iter().copied().collect();

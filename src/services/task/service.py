@@ -699,7 +699,6 @@ class TaskService:
         """
         import httpx
 
-        from src.clients.http_client import resolve_proxy_info
         from src.core.api_format.conversion.exceptions import FormatConversionError
         from src.core.error_utils import extract_error_message
         from src.core.exceptions import (
@@ -709,6 +708,7 @@ class TaskService:
             ThinkingSignatureException,
             UpstreamClientException,
         )
+        from src.services.proxy_node.resolver import resolve_proxy_info
         from src.services.request.executor import ExecutionError
 
         # 提前解析代理信息，写入候选记录的 extra_data（用于链路追踪展示）

@@ -1,6 +1,9 @@
 <template>
   <div class="space-y-6 pb-8">
-    <Card variant="default" class="overflow-hidden">
+    <Card
+      variant="default"
+      class="overflow-hidden"
+    >
       <!-- 标题和筛选器 -->
       <div class="px-4 sm:px-6 py-3.5 border-b border-border/60">
         <!-- 移动端 -->
@@ -39,10 +42,18 @@
                 <SelectValue placeholder="状态" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部</SelectItem>
-                <SelectItem value="online">在线</SelectItem>
-                <SelectItem value="unhealthy">异常</SelectItem>
-                <SelectItem value="offline">离线</SelectItem>
+                <SelectItem value="all">
+                  全部
+                </SelectItem>
+                <SelectItem value="online">
+                  在线
+                </SelectItem>
+                <SelectItem value="unhealthy">
+                  异常
+                </SelectItem>
+                <SelectItem value="offline">
+                  离线
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -69,10 +80,18 @@
                 <SelectValue placeholder="全部状态" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="online">在线</SelectItem>
-                <SelectItem value="unhealthy">异常</SelectItem>
-                <SelectItem value="offline">离线</SelectItem>
+                <SelectItem value="all">
+                  全部状态
+                </SelectItem>
+                <SelectItem value="online">
+                  在线
+                </SelectItem>
+                <SelectItem value="unhealthy">
+                  异常
+                </SelectItem>
+                <SelectItem value="offline">
+                  离线
+                </SelectItem>
               </SelectContent>
             </Select>
             <div class="h-4 w-px bg-border" />
@@ -98,15 +117,33 @@
         <Table>
           <TableHeader>
             <TableRow class="border-b border-border/60 hover:bg-transparent">
-              <TableHead class="w-[160px] h-12 font-semibold">名称</TableHead>
-              <TableHead class="w-[180px] h-12 font-semibold">地址</TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold">区域</TableHead>
-              <TableHead class="w-[90px] h-12 font-semibold text-center">状态</TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold text-center">连接数</TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold text-center">总请求</TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold text-center">延迟</TableHead>
-              <TableHead class="w-[160px] h-12 font-semibold">最后心跳</TableHead>
-              <TableHead class="w-[80px] h-12 font-semibold text-center">操作</TableHead>
+              <TableHead class="w-[160px] h-12 font-semibold">
+                名称
+              </TableHead>
+              <TableHead class="w-[180px] h-12 font-semibold">
+                地址
+              </TableHead>
+              <TableHead class="w-[100px] h-12 font-semibold">
+                区域
+              </TableHead>
+              <TableHead class="w-[90px] h-12 font-semibold text-center">
+                状态
+              </TableHead>
+              <TableHead class="w-[100px] h-12 font-semibold text-center">
+                连接数
+              </TableHead>
+              <TableHead class="w-[100px] h-12 font-semibold text-center">
+                总请求
+              </TableHead>
+              <TableHead class="w-[100px] h-12 font-semibold text-center">
+                延迟
+              </TableHead>
+              <TableHead class="w-[160px] h-12 font-semibold">
+                最后心跳
+              </TableHead>
+              <TableHead class="w-[80px] h-12 font-semibold text-center">
+                操作
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -125,6 +162,7 @@
                   >
                     手动
                   </Badge>
+                  <HardwareTooltip :node="node" />
                 </div>
               </TableCell>
               <TableCell class="py-4">
@@ -134,7 +172,10 @@
                 <span class="text-sm text-muted-foreground">{{ node.region || '-' }}</span>
               </TableCell>
               <TableCell class="py-4 text-center">
-                <Badge :variant="statusVariant(node.status)" class="font-medium px-2.5 py-0.5 text-xs">
+                <Badge
+                  :variant="statusVariant(node.status)"
+                  class="font-medium px-2.5 py-0.5 text-xs"
+                >
                   {{ statusLabel(node.status) }}
                 </Badge>
               </TableCell>
@@ -160,8 +201,14 @@
                     :disabled="testingNodes.has(node.id)"
                     @click="handleTest(node)"
                   >
-                    <Loader2 v-if="testingNodes.has(node.id)" class="h-4 w-4 animate-spin" />
-                    <Activity v-else class="h-4 w-4" />
+                    <Loader2
+                      v-if="testingNodes.has(node.id)"
+                      class="h-4 w-4 animate-spin"
+                    />
+                    <Activity
+                      v-else
+                      class="h-4 w-4"
+                    />
                   </Button>
                   <Button
                     v-if="node.is_manual"
@@ -196,7 +243,10 @@
               </TableCell>
             </TableRow>
             <TableRow v-if="paginatedNodes.length === 0">
-              <TableCell colspan="9" class="py-12 text-center text-muted-foreground text-sm">
+              <TableCell
+                colspan="9"
+                class="py-12 text-center text-muted-foreground text-sm"
+              >
                 {{ store.loading ? '加载中...' : '暂无代理节点' }}
               </TableCell>
             </TableRow>
@@ -222,10 +272,14 @@
                 >
                   手动
                 </Badge>
+                <HardwareTooltip :node="node" />
               </div>
               <code class="text-xs text-muted-foreground">{{ node.is_manual ? (node.proxy_url || `${node.ip}:${node.port}`) : `${node.ip}:${node.port}` }}</code>
             </div>
-            <Badge :variant="statusVariant(node.status)" class="text-xs">
+            <Badge
+              :variant="statusVariant(node.status)"
+              class="text-xs"
+            >
               {{ statusLabel(node.status) }}
             </Badge>
           </div>
@@ -253,8 +307,14 @@
                 :disabled="testingNodes.has(node.id)"
                 @click="handleTest(node)"
               >
-                <Loader2 v-if="testingNodes.has(node.id)" class="h-3 w-3 mr-1 animate-spin" />
-                <Activity v-else class="h-3 w-3 mr-1" />
+                <Loader2
+                  v-if="testingNodes.has(node.id)"
+                  class="h-3 w-3 mr-1 animate-spin"
+                />
+                <Activity
+                  v-else
+                  class="h-3 w-3 mr-1"
+                />
                 {{ testingNodes.has(node.id) ? '测试中' : '测试' }}
               </Button>
               <Button
@@ -289,7 +349,10 @@
             </div>
           </div>
         </div>
-        <div v-if="paginatedNodes.length === 0" class="p-8 text-center text-muted-foreground text-sm">
+        <div
+          v-if="paginatedNodes.length === 0"
+          class="p-8 text-center text-muted-foreground text-sm"
+        >
           {{ store.loading ? '加载中...' : '暂无代理节点' }}
         </div>
       </div>
@@ -390,25 +453,40 @@
       size="md"
       @update:model-value="handleConfigDialogClose"
     >
-      <form class="space-y-4" @submit.prevent>
+      <form
+        class="space-y-4"
+        @submit.prevent
+      >
         <div class="space-y-1.5">
           <Label>允许的端口</Label>
           <Input
             v-model="configForm.allowed_ports"
             placeholder="80, 443, 8080, 8443"
           />
-          <p class="text-xs text-muted-foreground">逗号分隔的目标端口白名单</p>
+          <p class="text-xs text-muted-foreground">
+            逗号分隔的目标端口白名单
+          </p>
         </div>
         <div class="space-y-1.5">
           <Label>日志级别</Label>
           <Select v-model="configForm.log_level">
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="trace">trace</SelectItem>
-              <SelectItem value="debug">debug</SelectItem>
-              <SelectItem value="info">info</SelectItem>
-              <SelectItem value="warn">warn</SelectItem>
-              <SelectItem value="error">error</SelectItem>
+              <SelectItem value="trace">
+                trace
+              </SelectItem>
+              <SelectItem value="debug">
+                debug
+              </SelectItem>
+              <SelectItem value="info">
+                info
+              </SelectItem>
+              <SelectItem value="warn">
+                warn
+              </SelectItem>
+              <SelectItem value="error">
+                error
+              </SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -432,7 +510,10 @@
             />
           </div>
         </div>
-        <div v-if="configNode" class="text-xs text-muted-foreground">
+        <div
+          v-if="configNode"
+          class="text-xs text-muted-foreground"
+        >
           配置版本: v{{ configNode.config_version }}
         </div>
       </form>
@@ -484,6 +565,7 @@ import {
 } from '@/components/ui'
 
 import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings } from 'lucide-vue-next'
+import HardwareTooltip from './components/HardwareTooltip.vue'
 
 const { success, error: toastError } = useToast()
 const { confirmDanger } = useConfirm()

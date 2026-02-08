@@ -24,7 +24,9 @@ impl std::fmt::Display for AuthError {
             Self::MissingHeader => write!(f, "missing Proxy-Authorization header"),
             Self::InvalidBasicAuth => write!(f, "invalid Basic auth encoding"),
             Self::InvalidUsername => write!(f, "username must be 'hmac'"),
-            Self::InvalidPasswordFormat => write!(f, "password format must be 'timestamp.signature'"),
+            Self::InvalidPasswordFormat => {
+                write!(f, "password format must be 'timestamp.signature'")
+            }
             Self::TimestampParseError => write!(f, "invalid timestamp"),
             Self::TimestampExpired => write!(f, "timestamp outside tolerance window"),
             Self::SignatureMismatch => write!(f, "HMAC signature mismatch"),
@@ -60,9 +62,7 @@ pub fn validate_proxy_auth(
     let decoded = String::from_utf8(decoded_bytes).map_err(|_| AuthError::InvalidBasicAuth)?;
 
     // format: hmac:{timestamp}.{signature}
-    let (username, password) = decoded
-        .split_once(':')
-        .ok_or(AuthError::InvalidBasicAuth)?;
+    let (username, password) = decoded.split_once(':').ok_or(AuthError::InvalidBasicAuth)?;
 
     if username != "hmac" {
         return Err(AuthError::InvalidUsername);
@@ -82,11 +82,7 @@ pub fn validate_proxy_auth(
         .expect("system clock before epoch")
         .as_secs();
 
-    let diff = if now > timestamp {
-        now - timestamp
-    } else {
-        timestamp - now
-    };
+    let diff = now.abs_diff(timestamp);
 
     if diff > timestamp_tolerance {
         return Err(AuthError::TimestampExpired);
@@ -129,6 +125,9 @@ mod tests {
             timestamp_tolerance: 300,
             log_level: "info".to_string(),
             log_json: false,
+            enable_tls: false,
+            tls_cert: String::new(),
+            tls_key: String::new(),
         }
     }
 
@@ -138,8 +137,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let payload = format!("{}\n{}", now, node_id);
-        let mut mac =
-            HmacSha256::new_from_slice(config.hmac_key.as_bytes()).unwrap();
+        let mut mac = HmacSha256::new_from_slice(config.hmac_key.as_bytes()).unwrap();
         mac.update(payload.as_bytes());
         let sig = hex::encode(mac.finalize().into_bytes());
         let cred = format!("hmac:{}.{}", now, sig);
@@ -151,7 +149,10 @@ mod tests {
     fn test_valid_auth() {
         let config = make_config();
         let header = make_valid_auth(&config, "node-1");
-        assert!(validate_proxy_auth(Some(&header), &config, "node-1", config.timestamp_tolerance).is_ok());
+        assert!(
+            validate_proxy_auth(Some(&header), &config, "node-1", config.timestamp_tolerance)
+                .is_ok()
+        );
     }
 
     #[test]

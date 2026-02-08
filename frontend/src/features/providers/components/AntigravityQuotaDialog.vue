@@ -7,7 +7,10 @@
     :z-index="70"
     @update:model-value="$emit('update:open', $event)"
   >
-    <template v-if="providerId && items.length > 0" #header-actions>
+    <template
+      v-if="providerId && items.length > 0"
+      #header-actions
+    >
       <DropdownMenu :modal="false">
         <DropdownMenuTrigger as-child>
           <Button

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
+use crate::hardware::HardwareInfo;
 
 /// Heartbeat-specific error that distinguishes "node not found" (needs
 /// re-registration) from transient / other failures.
@@ -35,6 +36,10 @@ struct RegisterRequest {
     tls_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls_cert_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware_info: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    estimated_max_concurrency: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +61,7 @@ struct HeartbeatRequest {
 /// Remote configuration pushed by the Aether management backend.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteConfig {
+    pub node_name: Option<String>,
     pub allowed_ports: Option<Vec<u16>>,
     pub log_level: Option<String>,
     pub heartbeat_interval: Option<u64>,
@@ -119,6 +125,7 @@ impl AetherClient {
         public_ip: &str,
         tls_enabled: bool,
         tls_cert_fingerprint: Option<&str>,
+        hw: Option<&HardwareInfo>,
     ) -> anyhow::Result<String> {
         let url = format!("{}/api/admin/proxy-nodes/register", self.base_url);
         let body = RegisterRequest {
@@ -129,6 +136,8 @@ impl AetherClient {
             heartbeat_interval: config.heartbeat_interval,
             tls_enabled,
             tls_cert_fingerprint: tls_cert_fingerprint.map(|s| s.to_string()),
+            hardware_info: hw.and_then(|h| serde_json::to_value(h).ok()),
+            estimated_max_concurrency: hw.map(|h| h.estimated_max_concurrency),
         };
 
         info!(
@@ -215,10 +224,13 @@ impl AetherClient {
                     config_version,
                 }
             }
-            Err(_) => HeartbeatResult {
-                remote_config: None,
-                config_version: 0,
-            },
+            Err(e) => {
+                debug!(error = %e, "failed to parse heartbeat response body");
+                HeartbeatResult {
+                    remote_config: None,
+                    config_version: 0,
+                }
+            }
         };
 
         debug!(node_id = %node_id, config_version = result.config_version, "heartbeat ok");
@@ -259,37 +271,4 @@ impl AetherClient {
             }
         }
     }
-}
-
-/// Auto-detect public IP by querying external services.
-pub async fn detect_public_ip() -> anyhow::Result<String> {
-    let endpoints = [
-        "https://api.ipify.org",
-        "https://ifconfig.me/ip",
-        "https://icanhazip.com",
-    ];
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-
-    for endpoint in &endpoints {
-        match client.get(*endpoint).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                let ip = resp.text().await?.trim().to_string();
-                if !ip.is_empty() {
-                    info!(ip = %ip, source = %endpoint, "detected public IP");
-                    return Ok(ip);
-                }
-            }
-            Ok(resp) => {
-                debug!(endpoint = %endpoint, status = %resp.status(), "IP detection failed");
-            }
-            Err(e) => {
-                debug!(endpoint = %endpoint, error = %e, "IP detection failed");
-            }
-        }
-    }
-
-    anyhow::bail!("failed to detect public IP from any source; use --public-ip")
 }

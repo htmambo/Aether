@@ -1,11 +1,12 @@
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
-use crate::config::Config;
-use crate::registration::client::{AetherClient, HeartbeatError};
-use crate::runtime::{self, SharedDynamicConfig};
+use crate::registration::client::HeartbeatError;
+use crate::runtime;
+use crate::state::AppState;
 
 /// Run periodic heartbeat task until shutdown signal.
 ///
@@ -16,19 +17,11 @@ use crate::runtime::{self, SharedDynamicConfig};
 /// When the heartbeat response includes a `remote_config`, it is applied
 /// to the [`DynamicConfig`](crate::runtime::DynamicConfig) so the proxy
 /// picks up changes without a restart.
-pub async fn run(
-    client: Arc<AetherClient>,
-    node_id: Arc<RwLock<String>>,
-    config: Arc<Config>,
-    public_ip: String,
-    tls_fingerprint: Option<String>,
-    dynamic: SharedDynamicConfig,
-    mut shutdown_rx: watch::Receiver<bool>,
-) {
+pub async fn run(state: &Arc<AppState>, mut shutdown_rx: watch::Receiver<bool>) {
     let mut consecutive_failures: u32 = 0;
 
     // Skip the first tick (registration already acts as initial heartbeat)
-    let initial_interval = dynamic.read().unwrap().heartbeat_interval;
+    let initial_interval = state.dynamic.read().unwrap().heartbeat_interval;
     tokio::select! {
         _ = tokio::time::sleep(std::time::Duration::from_secs(initial_interval)) => {}
         _ = shutdown_rx.changed() => {
@@ -38,12 +31,17 @@ pub async fn run(
     }
 
     loop {
-        let current_node_id = node_id.read().unwrap().clone();
+        let current_node_id = state.node_id.read().unwrap().clone();
+        let active_conns = state.active_connections.load(Ordering::Relaxed) as i64;
 
-        match client.heartbeat(&current_node_id, None, None, None).await {
+        match state
+            .aether_client
+            .heartbeat(&current_node_id, Some(active_conns), None, None)
+            .await
+        {
             Ok(result) => {
                 if consecutive_failures > 0 {
-                    debug!(
+                    info!(
                         previous_failures = consecutive_failures,
                         "heartbeat recovered"
                     );
@@ -52,7 +50,7 @@ pub async fn run(
 
                 // Apply remote config if present and version changed
                 if let Some(ref remote) = result.remote_config {
-                    runtime::apply_remote_config(&dynamic, remote, result.config_version);
+                    runtime::apply_remote_config(&state.dynamic, remote, result.config_version);
                 }
             }
             Err(HeartbeatError::NodeNotFound(_)) => {
@@ -60,19 +58,24 @@ pub async fn run(
                     old_node_id = %current_node_id,
                     "node not found, re-registering"
                 );
-                match client.register(
-                    &config,
-                    &public_ip,
-                    config.enable_tls,
-                    tls_fingerprint.as_deref(),
-                ).await {
+                match state
+                    .aether_client
+                    .register(
+                        &state.config,
+                        &state.public_ip,
+                        state.config.enable_tls,
+                        state.tls_fingerprint.as_deref(),
+                        Some(&state.hardware_info),
+                    )
+                    .await
+                {
                     Ok(new_id) => {
                         info!(
                             old_node_id = %current_node_id,
                             new_node_id = %new_id,
                             "re-registered successfully"
                         );
-                        *node_id.write().unwrap() = new_id;
+                        *state.node_id.write().unwrap() = new_id;
                         consecutive_failures = 0;
                     }
                     Err(e) => {
@@ -96,7 +99,7 @@ pub async fn run(
         }
 
         // Read interval from dynamic config (may have been updated remotely)
-        let interval_secs = dynamic.read().unwrap().heartbeat_interval;
+        let interval_secs = state.dynamic.read().unwrap().heartbeat_interval;
 
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(interval_secs)) => {}

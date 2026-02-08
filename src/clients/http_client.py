@@ -11,397 +11,25 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import time
 from contextlib import asynccontextmanager
 from typing import Any
-from urllib.parse import quote, urlparse
 
 import httpx
 
 from src.config import config
-from src.core.exceptions import ProxyNodeUnavailableError
 from src.core.logger import logger
+from src.services.proxy_node.resolver import (
+    build_proxy_url,
+    compute_proxy_cache_key,
+    get_system_proxy_config,
+    make_proxy_param,
+)
 from src.utils.ssl_utils import get_ssl_context
 
 # 模块级锁，避免类属性延迟初始化的竞态条件
 _proxy_clients_lock = asyncio.Lock()
 _default_client_lock = asyncio.Lock()
-
-# ProxyNode 信息缓存（降低高频 DB 查询开销）
-_proxy_node_cache: dict[str, tuple[dict[str, Any] | None, float]] = {}
-_PROXY_NODE_CACHE_TTL_SECONDS = 60.0
-_PROXY_NODE_CACHE_MAX_SIZE = 256
-
-
-def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
-    """
-    读取 ProxyNode 信息（带内存 TTL 缓存）
-
-    Returns:
-        aether-proxy 节点: {"ip": str, "port": int, "name": str, ...}
-        手动节点: {"is_manual": True, "name": str, "proxy_url": str, ...}
-        不存在/非在线: None
-    """
-    now = time.time()
-    cached = _proxy_node_cache.get(node_id)
-    if cached:
-        value, expires_at = cached
-        if now < expires_at:
-            return value
-
-    # 防止无效 node_id 导致缓存无限膨胀
-    if len(_proxy_node_cache) >= _PROXY_NODE_CACHE_MAX_SIZE:
-        _proxy_node_cache.clear()
-
-    from src.database import create_session
-    from src.models.database import ProxyNode, ProxyNodeStatus
-
-    db = create_session()
-    try:
-        node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
-        if not node or node.status != ProxyNodeStatus.ONLINE:
-            _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_TTL_SECONDS)
-            return None
-
-        if node.is_manual:
-            value: dict[str, Any] = {
-                "is_manual": True,
-                "name": node.name,
-                "proxy_url": node.proxy_url,
-                "username": node.proxy_username,
-                "password": node.proxy_password,
-            }
-        else:
-            value = {
-                "name": node.name,
-                "ip": node.ip,
-                "port": node.port,
-                "tls_enabled": bool(node.tls_enabled),
-                "tls_cert_fingerprint": node.tls_cert_fingerprint,
-            }
-
-        _proxy_node_cache[node_id] = (value, now + _PROXY_NODE_CACHE_TTL_SECONDS)
-        return value
-    finally:
-        db.close()
-
-
-def _build_hmac_proxy_url(ip: str, port: int, node_id: str, *, tls_enabled: bool = False) -> str:
-    """
-    构建带 HMAC BasicAuth 的 httpx proxy URL
-
-    格式: http(s)://hmac:{timestamp}.{signature}@{ip}:{port}
-    signature = HMAC-SHA256(PROXY_HMAC_KEY, "{timestamp}\\n{node_id}") 的 hex
-
-    当 tls_enabled=True 时使用 https:// scheme。
-    """
-    if not config.proxy_hmac_key:
-        logger.error("PROXY_HMAC_KEY 未配置，无法使用 ProxyNode 代理 (node_id={})", node_id)
-        raise ProxyNodeUnavailableError(
-            "PROXY_HMAC_KEY 未配置，无法使用 ProxyNode 代理", node_id=node_id
-        )
-
-    timestamp = str(int(time.time()))
-    payload = f"{timestamp}\n{node_id}".encode("utf-8")
-    signature = hmac.new(
-        config.proxy_hmac_key.encode("utf-8"),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-
-    host = f"[{ip}]" if ":" in ip else ip
-    scheme = "https" if tls_enabled else "http"
-    return f"{scheme}://hmac:{timestamp}.{signature}@{host}:{int(port)}"
-
-
-# 系统默认代理缓存
-_system_proxy_cache: tuple[dict[str, Any] | None, float] | None = None
-_SYSTEM_PROXY_CACHE_TTL = 60.0
-
-
-def invalidate_system_proxy_cache() -> None:
-    """手动失效系统代理缓存（在删除节点等操作后调用）"""
-    global _system_proxy_cache
-    _system_proxy_cache = None
-
-
-def get_system_proxy_config() -> dict[str, Any] | None:
-    """
-    获取系统默认代理配置（带 TTL 缓存）
-
-    从 system_configs 表中读取 system_proxy_node_id。
-    返回 {"node_id": "...", "enabled": True} 或 None。
-    """
-    global _system_proxy_cache
-    now = time.time()
-    if _system_proxy_cache:
-        value, expires_at = _system_proxy_cache
-        if now < expires_at:
-            return value
-
-    from src.database import create_session
-    from src.services.system.config import SystemConfigService
-
-    db = create_session()
-    try:
-        node_id = SystemConfigService.get_config(db, "system_proxy_node_id")
-        if node_id and isinstance(node_id, str) and node_id.strip():
-            result: dict[str, Any] | None = {"node_id": node_id.strip(), "enabled": True}
-        else:
-            result = None
-        _system_proxy_cache = (result, now + _SYSTEM_PROXY_CACHE_TTL)
-        return result
-    except Exception as exc:
-        logger.warning("获取系统默认代理配置失败: {}", exc)
-        _system_proxy_cache = (None, now + _SYSTEM_PROXY_CACHE_TTL)
-        return None
-    finally:
-        db.close()
-
-
-def resolve_ops_proxy(
-    connector_config: dict[str, Any] | None,
-) -> str | httpx.Proxy | None:
-    """
-    从 ops connector.config 中解析代理参数（含系统默认回退）
-
-    优先级：
-    1. connector_config.proxy_node_id（新格式）
-    2. connector_config.proxy（旧格式 URL 字符串）
-    3. 系统默认代理节点
-
-    Args:
-        connector_config: connector 的 config 字典
-
-    Returns:
-        httpx 可接受的代理参数（str 或 httpx.Proxy），或 None
-    """
-    if connector_config:
-        # 新格式：proxy_node_id → 通过 build_proxy_url 解析
-        node_id = connector_config.get("proxy_node_id")
-        if isinstance(node_id, str) and node_id.strip():
-            try:
-                url = build_proxy_url({"node_id": node_id.strip(), "enabled": True})
-                return _make_proxy_param(url)
-            except Exception as exc:
-                logger.warning("解析 proxy_node_id={} 失败，回退到直连: {}", node_id, exc)
-                return None
-
-        # 旧格式：直接返回 proxy URL 字符串
-        proxy = connector_config.get("proxy")
-        if isinstance(proxy, str) and proxy.strip():
-            return proxy
-
-    # 回退：系统默认代理
-    system_proxy = get_system_proxy_config()
-    if system_proxy:
-        try:
-            url = build_proxy_url(system_proxy)
-            return _make_proxy_param(url)
-        except Exception as exc:
-            logger.warning("构建系统默认代理 URL 失败: {}", exc)
-            return None
-
-    return None
-
-
-def _compute_proxy_cache_key(proxy_config: dict[str, Any] | None) -> str:
-    """
-    计算代理配置的缓存键
-
-    Args:
-        proxy_config: 代理配置字典
-
-    Returns:
-        缓存键字符串，无代理时返回 "__no_proxy__"
-    """
-    if not proxy_config:
-        return "__no_proxy__"
-
-    # enabled=False 时视为无代理（兼容旧数据）
-    if not proxy_config.get("enabled", True):
-        return "__no_proxy__"
-
-    # ProxyNode 模式：基于 node_id + 时间桶缓存，避免签名随时间变化导致 cache key 爆炸
-    node_id = proxy_config.get("node_id")
-    if isinstance(node_id, str) and node_id.strip():
-        time_bucket = int(time.time() / 120)  # 120 秒一个桶
-        return f"proxy_node:{node_id.strip()}:{time_bucket}"
-
-    # 构建代理 URL 作为缓存键的基础
-    proxy_url = build_proxy_url(proxy_config)
-    if not proxy_url:
-        return "__no_proxy__"
-
-    # 使用 MD5 哈希来避免过长的键名
-    return f"proxy:{hashlib.md5(proxy_url.encode()).hexdigest()[:16]}"
-
-
-def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
-    """
-    根据代理配置构建完整的代理 URL
-
-    Args:
-        proxy_config: 代理配置字典，支持两种模式：
-            - 手动 URL 模式: {url, username, password, enabled}
-            - ProxyNode 模式: {node_id, enabled}
-
-    Returns:
-        完整的代理 URL，如 socks5://user:pass@host:port
-        如果 enabled=False 或无配置，返回 None
-    """
-    if not proxy_config:
-        return None
-
-    # 检查 enabled 字段，默认为 True（兼容旧数据）
-    if not proxy_config.get("enabled", True):
-        return None
-
-    # ProxyNode 模式（aether-proxy 或手动节点）
-    node_id = proxy_config.get("node_id")
-    if isinstance(node_id, str) and node_id.strip():
-        node_id = node_id.strip()
-        node_info = _get_proxy_node_info(node_id)
-        if not node_info:
-            logger.warning("代理节点不可用（离线或不存在）: node_id={}", node_id)
-            raise ProxyNodeUnavailableError(f"代理节点 {node_id} 不可用", node_id=node_id)
-
-        # 手动节点：直接使用存储的代理 URL（含认证信息）
-        if node_info.get("is_manual"):
-            manual_url = node_info.get("proxy_url")
-            if not manual_url:
-                raise ProxyNodeUnavailableError(
-                    f"手动代理节点 {node_id} 缺少 proxy_url", node_id=node_id
-                )
-            username = node_info.get("username")
-            password = node_info.get("password")
-            if username:
-                parsed = urlparse(manual_url)
-                encoded_username = quote(username, safe="")
-                encoded_password = quote(password, safe="") if password else ""
-                # 使用 hostname+port 而非 netloc，避免 URL 内嵌凭据导致双重认证
-                host_part = parsed.hostname or "localhost"
-                if parsed.port:
-                    host_part = f"{host_part}:{parsed.port}"
-                if encoded_password:
-                    auth_url = (
-                        f"{parsed.scheme}://{encoded_username}:{encoded_password}@{host_part}"
-                    )
-                else:
-                    auth_url = f"{parsed.scheme}://{encoded_username}@{host_part}"
-                if parsed.path:
-                    auth_url += parsed.path
-                return auth_url
-            return manual_url
-
-        # aether-proxy 节点：使用 HMAC 认证
-        return _build_hmac_proxy_url(
-            node_info["ip"],
-            node_info["port"],
-            node_id,
-            tls_enabled=node_info.get("tls_enabled", False),
-        )
-
-    proxy_url: str | None = proxy_config.get("url")
-    if not proxy_url:
-        return None
-
-    username = proxy_config.get("username")
-    password = proxy_config.get("password")
-
-    # 只要有用户名就添加认证信息（密码可以为空）
-    if username:
-        parsed = urlparse(proxy_url)
-        # URL 编码用户名和密码，处理特殊字符（如 @, :, /）
-        encoded_username = quote(username, safe="")
-        encoded_password = quote(password, safe="") if password else ""
-        # 重新构建带认证的代理 URL
-        if encoded_password:
-            auth_proxy = f"{parsed.scheme}://{encoded_username}:{encoded_password}@{parsed.netloc}"
-        else:
-            auth_proxy = f"{parsed.scheme}://{encoded_username}@{parsed.netloc}"
-        if parsed.path:
-            auth_proxy += parsed.path
-        return auth_proxy
-
-    return proxy_url
-
-
-def resolve_proxy_info(proxy_config: dict[str, Any] | None) -> dict[str, Any] | None:
-    """
-    解析代理配置的摘要信息（用于日志和 usage 记录）
-
-    不构建实际的代理 URL，仅返回可读的代理标识信息。
-
-    Returns:
-        {"node_id": "xxx", "node_name": "proxy-01", "source": "provider"} 或
-        {"url": "socks5://host:port", "source": "provider"} 或
-        {"node_id": "xxx", "node_name": "...", "source": "system"} 或
-        None (直连)
-    """
-    source = "provider"
-    effective_config = proxy_config
-
-    # 无 provider 级代理时，尝试系统默认代理
-    if not effective_config or not effective_config.get("enabled", True):
-        effective_config = get_system_proxy_config()
-        source = "system"
-
-    if not effective_config or not effective_config.get("enabled", True):
-        return None
-
-    # ProxyNode 模式
-    node_id = effective_config.get("node_id")
-    if isinstance(node_id, str) and node_id.strip():
-        node_id = node_id.strip()
-        node_info = _get_proxy_node_info(node_id)
-        node_name = node_info.get("name", "unknown") if node_info else "offline"
-        return {"node_id": node_id, "node_name": node_name, "source": source}
-
-    # 旧格式 URL 模式
-    proxy_url = effective_config.get("url")
-    if proxy_url:
-        # 脱敏：只保留 scheme + host + port
-        try:
-            parsed = urlparse(proxy_url)
-            host_part = parsed.hostname or "unknown"
-            if parsed.port:
-                host_part = f"{host_part}:{parsed.port}"
-            safe_url = f"{parsed.scheme}://{host_part}"
-        except Exception:
-            safe_url = "unknown"
-        return {"url": safe_url, "source": source}
-
-    return None
-
-
-def get_proxy_label(proxy_info: dict[str, Any] | None) -> str:
-    """从 proxy_info 中提取简短的代理标签（用于日志）"""
-    if not proxy_info:
-        return "direct"
-    return proxy_info.get("node_name") or proxy_info.get("url") or "unknown"
-
-
-def _make_proxy_param(proxy_url: str | None) -> str | httpx.Proxy | None:
-    """
-    根据代理 URL 返回 httpx 可接受的 proxy 参数。
-
-    对于 https:// scheme 的代理 URL（TLS aether-proxy 节点），返回 httpx.Proxy
-    并附带 proxy_ssl_context（CERT_NONE，因为使用自签名证书）。
-    其他情况返回普通 URL 字符串。
-    """
-    if not proxy_url:
-        return None
-
-    # https:// 代理需要 ssl_context（自签名证书场景）
-    if proxy_url.startswith("https://"):
-        from src.utils.ssl_utils import get_proxy_ssl_context
-
-        return httpx.Proxy(url=proxy_url, ssl_context=get_proxy_ssl_context())
-
-    return proxy_url
 
 
 class HTTPClientPool:
@@ -423,6 +51,8 @@ class HTTPClientPool:
     _proxy_clients: dict[str, tuple[httpx.AsyncClient, float]] = {}
     # 代理客户端缓存上限（避免内存泄漏）
     _max_proxy_clients: int = 50
+    # 代发客户端缓存：{tls: client, plain: client}
+    _delegate_clients: dict[str, httpx.AsyncClient] = {}
 
     def __new__(cls) -> "HTTPClientPool":
         if cls._instance is None:
@@ -459,10 +89,10 @@ class HTTPClientPool:
                     follow_redirects=True,  # 跟随重定向
                 )
                 logger.info(
-                    f"全局HTTP客户端池已初始化: "
-                    f"max_connections={config.http_max_connections}, "
-                    f"keepalive={config.http_keepalive_connections}, "
-                    f"keepalive_expiry={config.http_keepalive_expiry}s"
+                    "全局HTTP客户端池已初始化: max_connections={}, keepalive={}, keepalive_expiry={}s",
+                    config.http_max_connections,
+                    config.http_keepalive_connections,
+                    config.http_keepalive_expiry,
                 )
         return cls._default_client
 
@@ -492,10 +122,10 @@ class HTTPClientPool:
                 follow_redirects=True,  # 跟随重定向
             )
             logger.info(
-                f"全局HTTP客户端池已初始化: "
-                f"max_connections={config.http_max_connections}, "
-                f"keepalive={config.http_keepalive_connections}, "
-                f"keepalive_expiry={config.http_keepalive_expiry}s"
+                "全局HTTP客户端池已初始化: max_connections={}, keepalive={}, keepalive_expiry={}s",
+                config.http_max_connections,
+                config.http_keepalive_connections,
+                config.http_keepalive_expiry,
             )
         return cls._default_client
 
@@ -526,7 +156,7 @@ class HTTPClientPool:
             default_config.update(kwargs)
 
             cls._clients[name] = httpx.AsyncClient(**default_config)  # type: ignore[arg-type]
-            logger.debug(f"创建命名HTTP客户端: {name}")
+            logger.debug("创建命名HTTP客户端: {}", name)
 
         return cls._clients[name]
 
@@ -548,9 +178,9 @@ class HTTPClientPool:
         # 异步关闭旧客户端
         try:
             await old_client.aclose()
-            logger.debug(f"淘汰代理客户端: {oldest_key}")
+            logger.debug("淘汰代理客户端: {}", oldest_key)
         except Exception as e:
-            logger.warning(f"关闭代理客户端失败: {e}")
+            logger.warning("关闭代理客户端失败: {}", e)
 
     @classmethod
     async def get_proxy_client(
@@ -574,7 +204,7 @@ class HTTPClientPool:
         if not proxy_config:
             proxy_config = get_system_proxy_config()
 
-        cache_key = _compute_proxy_cache_key(proxy_config)
+        cache_key = compute_proxy_cache_key(proxy_config)
 
         # 无代理时返回默认客户端
         if cache_key == "__no_proxy__":
@@ -588,7 +218,7 @@ class HTTPClientPool:
                 # 健康检查：如果客户端已关闭，移除并重新创建
                 if client.is_closed:
                     del cls._proxy_clients[cache_key]
-                    logger.debug(f"代理客户端已关闭，将重新创建: {cache_key}")
+                    logger.debug("代理客户端已关闭，将重新创建: {}", cache_key)
                 else:
                     # 更新最后使用时间
                     cls._proxy_clients[cache_key] = (client, time.time())
@@ -617,7 +247,7 @@ class HTTPClientPool:
 
             # 添加代理配置
             proxy_url = build_proxy_url(proxy_config) if proxy_config else None
-            proxy_param = _make_proxy_param(proxy_url)
+            proxy_param = make_proxy_param(proxy_url)
             if proxy_param:
                 client_config["proxy"] = proxy_param
 
@@ -630,7 +260,7 @@ class HTTPClientPool:
                     proxy_config.get("node_id") or proxy_config.get("url") or "unknown"
                 )
             logger.debug(
-                f"创建代理客户端(缓存): {proxy_label}, " f"缓存数量: {len(cls._proxy_clients)}"
+                "创建代理客户端(缓存): {}, 缓存数量: {}", proxy_label, len(cls._proxy_clients)
             )
 
             return client
@@ -645,7 +275,7 @@ class HTTPClientPool:
 
         for name, client in cls._clients.items():
             await client.aclose()
-            logger.debug(f"命名HTTP客户端已关闭: {name}")
+            logger.debug("命名HTTP客户端已关闭: {}", name)
 
         cls._clients.clear()
 
@@ -653,11 +283,21 @@ class HTTPClientPool:
         for cache_key, (client, _) in cls._proxy_clients.items():
             try:
                 await client.aclose()
-                logger.debug(f"代理客户端已关闭: {cache_key}")
+                logger.debug("代理客户端已关闭: {}", cache_key)
             except Exception as e:
-                logger.warning(f"关闭代理客户端失败: {e}")
+                logger.warning("关闭代理客户端失败: {}", e)
 
         cls._proxy_clients.clear()
+
+        # 关闭代发客户端缓存
+        for cache_key, client in cls._delegate_clients.items():
+            try:
+                await client.aclose()
+                logger.debug("代发客户端已关闭: {}", cache_key)
+            except Exception as e:
+                logger.warning("关闭代发客户端失败: {}", e)
+
+        cls._delegate_clients.clear()
         logger.info("所有HTTP客户端已关闭")
 
     @classmethod
@@ -732,13 +372,127 @@ class HTTPClientPool:
 
         # 添加代理配置
         proxy_url = build_proxy_url(proxy_config) if proxy_config else None
-        proxy_param = _make_proxy_param(proxy_url)
+        proxy_param = make_proxy_param(proxy_url)
         if proxy_param:
             client_config["proxy"] = proxy_param
-            logger.debug(f"创建带代理的HTTP客户端(一次性): {proxy_config.get('url', 'unknown')}")
+            logger.debug("创建带代理的HTTP客户端(一次性): {}", proxy_config.get("url", "unknown"))
 
         client_config.update(kwargs)
         return httpx.AsyncClient(**client_config)  # type: ignore[arg-type]
+
+    @classmethod
+    def create_delegate_stream_client(
+        cls,
+        delegate_config: dict[str, Any],
+        timeout: httpx.Timeout | None = None,
+    ) -> httpx.AsyncClient:
+        """
+        创建用于代发流式请求的 httpx 客户端
+
+        代发模式下不配置 proxy，直接 POST 到 proxy 的 /_aether/delegate 端点。
+        调用者需要负责关闭返回的客户端。
+        """
+        client_config: dict[str, Any] = {
+            "http2": False,
+            "follow_redirects": False,
+        }
+
+        if timeout:
+            client_config["timeout"] = timeout
+        else:
+            client_config["timeout"] = httpx.Timeout(
+                connect=config.http_connect_timeout,
+                read=config.http_read_timeout,
+                write=config.http_write_timeout,
+                pool=config.http_pool_timeout,
+            )
+
+        if delegate_config.get("tls_enabled"):
+            from src.utils.ssl_utils import get_proxy_ssl_context
+
+            client_config["verify"] = get_proxy_ssl_context()
+        else:
+            client_config["verify"] = get_ssl_context()
+
+        return httpx.AsyncClient(**client_config)
+
+    @classmethod
+    async def get_delegate_client(
+        cls,
+        delegate_config: dict[str, Any],
+    ) -> httpx.AsyncClient:
+        """
+        获取可复用的代发客户端（非流式请求用）
+
+        根据 TLS 状态缓存两个客户端（tls / plain），避免每次请求创建新客户端。
+        当 tls_enabled=True 时使用 get_proxy_ssl_context()（信任自签名证书）。
+        """
+        cache_key = "tls" if delegate_config.get("tls_enabled") else "plain"
+
+        lock = cls._get_proxy_clients_lock()
+        async with lock:
+            existing = cls._delegate_clients.get(cache_key)
+            if existing and not existing.is_closed:
+                return existing
+
+            if cache_key == "tls":
+                from src.utils.ssl_utils import get_proxy_ssl_context
+
+                verify: Any = get_proxy_ssl_context()
+            else:
+                verify = get_ssl_context()
+
+            client = httpx.AsyncClient(
+                http2=False,
+                verify=verify,
+                follow_redirects=False,
+                timeout=httpx.Timeout(
+                    connect=config.http_connect_timeout,
+                    read=config.http_read_timeout,
+                    write=config.http_write_timeout,
+                    pool=config.http_pool_timeout,
+                ),
+                limits=httpx.Limits(
+                    max_connections=config.http_max_connections,
+                    max_keepalive_connections=config.http_keepalive_connections,
+                    keepalive_expiry=config.http_keepalive_expiry,
+                ),
+            )
+            cls._delegate_clients[cache_key] = client
+            logger.debug("创建代发客户端(缓存): {}", cache_key)
+            return client
+
+    @classmethod
+    async def get_upstream_client(
+        cls,
+        delegate_cfg: dict[str, Any] | None,
+        proxy_config: dict[str, Any] | None = None,
+    ) -> httpx.AsyncClient:
+        """
+        获取可复用的上游请求客户端（自动选择代发或代理模式）
+
+        代发模式(delegate_cfg非空)：返回代发客户端
+        直连/代理模式：返回代理客户端（含系统默认代理回退）
+        """
+        if delegate_cfg:
+            return await cls.get_delegate_client(delegate_cfg)
+        return await cls.get_proxy_client(proxy_config=proxy_config)
+
+    @classmethod
+    def create_upstream_stream_client(
+        cls,
+        delegate_cfg: dict[str, Any] | None,
+        proxy_config: dict[str, Any] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> httpx.AsyncClient:
+        """
+        创建上游流式请求客户端（自动选择代发或代理模式）
+
+        调用者需负责关闭返回的客户端。
+        """
+        if delegate_cfg:
+            return cls.create_delegate_stream_client(delegate_cfg, timeout=timeout)
+        return cls.create_client_with_proxy(proxy_config=proxy_config, timeout=timeout)
 
     @classmethod
     def get_pool_stats(cls) -> dict[str, Any]:
@@ -748,6 +502,7 @@ class HTTPClientPool:
             "named_clients_count": len(cls._clients),
             "proxy_clients_count": len(cls._proxy_clients),
             "max_proxy_clients": cls._max_proxy_clients,
+            "delegate_clients_count": len(cls._delegate_clients),
         }
 
 

@@ -32,7 +32,6 @@ enum FieldKind {
     Secret,
     Number,
     Bool,
-    PortList,
     LogLevel,
 }
 
@@ -103,14 +102,6 @@ impl App {
                     help: "代理服务监听端口",
                 },
                 Field {
-                    label: "Public IP",
-                    key: "public_ip",
-                    value: String::new(),
-                    kind: FieldKind::Text,
-                    required: false,
-                    help: "节点公网 IP (留空则自动检测)",
-                },
-                Field {
                     label: "Node Name",
                     key: "node_name",
                     value: "proxy-01".into(),
@@ -119,52 +110,12 @@ impl App {
                     help: "节点名称，用于在 Aether 后台识别",
                 },
                 Field {
-                    label: "Node Region",
-                    key: "node_region",
-                    value: String::new(),
-                    kind: FieldKind::Text,
-                    required: false,
-                    help: "节点区域标识 (如 ap-northeast-1)",
-                },
-                Field {
-                    label: "Heartbeat Interval",
-                    key: "heartbeat_interval",
-                    value: "30".into(),
-                    kind: FieldKind::Number,
-                    required: true,
-                    help: "心跳上报间隔 (秒)",
-                },
-                Field {
-                    label: "Allowed Ports",
-                    key: "allowed_ports",
-                    value: "80, 443, 8080, 8443".into(),
-                    kind: FieldKind::PortList,
-                    required: true,
-                    help: "允许代理的目标端口，逗号分隔",
-                },
-                Field {
-                    label: "Timestamp Tolerance",
-                    key: "timestamp_tolerance",
-                    value: "300".into(),
-                    kind: FieldKind::Number,
-                    required: true,
-                    help: "HMAC 时间戳容差窗口 (秒)",
-                },
-                Field {
-                    label: "Enable TLS",
-                    key: "enable_tls",
-                    value: "true".into(),
-                    kind: FieldKind::Bool,
-                    required: true,
-                    help: "启用 TLS 加密 (双栈模式, 同时接受 HTTP 和 TLS)",
-                },
-                Field {
                     label: "Log Level",
                     key: "log_level",
                     value: "info".into(),
                     kind: FieldKind::LogLevel,
                     required: true,
-                    help: "日志级别 — Enter 切换: trace / debug / info / warn / error",
+                    help: "日志级别 -- Enter 切换: trace / debug / info / warn / error",
                 },
                 Field {
                     label: "Log JSON",
@@ -172,7 +123,20 @@ impl App {
                     value: "false".into(),
                     kind: FieldKind::Bool,
                     required: true,
-                    help: "是否以 JSON 格式输出日志 — Enter 切换",
+                    help: "是否以 JSON 格式输出日志 -- Enter 切换",
+                },
+                Field {
+                    label: "Install Service",
+                    key: "install_service",
+                    value: if super::service::is_available() {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                    .into(),
+                    kind: FieldKind::Bool,
+                    required: true,
+                    help: "注册为 systemd 开机启动服务 (需要 root 权限) -- Enter 切换",
                 },
             ],
             selected: 0,
@@ -202,17 +166,9 @@ impl App {
                 "management_token" => cfg.management_token.clone(),
                 "hmac_key" => cfg.hmac_key.clone(),
                 "listen_port" => cfg.listen_port.map(|v| v.to_string()),
-                "public_ip" => cfg.public_ip.clone(),
                 "node_name" => cfg.node_name.clone(),
-                "node_region" => cfg.node_region.clone(),
-                "heartbeat_interval" => cfg.heartbeat_interval.map(|v| v.to_string()),
-                "allowed_ports" => cfg.allowed_ports.as_ref().map(|p| {
-                    p.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
-                }),
-                "timestamp_tolerance" => cfg.timestamp_tolerance.map(|v| v.to_string()),
                 "log_level" => cfg.log_level.clone(),
                 "log_json" => cfg.log_json.map(|v| v.to_string()),
-                "enable_tls" => cfg.enable_tls.map(|v| v.to_string()),
                 _ => None,
             };
             if let Some(v) = val {
@@ -235,19 +191,15 @@ impl App {
             management_token: get("management_token"),
             hmac_key: get("hmac_key"),
             listen_port: get("listen_port").and_then(|v| v.parse().ok()),
-            public_ip: get("public_ip"),
+            public_ip: None,
             node_name: get("node_name"),
-            node_region: get("node_region"),
-            heartbeat_interval: get("heartbeat_interval").and_then(|v| v.parse().ok()),
-            allowed_ports: get("allowed_ports").map(|v| {
-                v.split(',')
-                    .filter_map(|s| s.trim().parse().ok())
-                    .collect()
-            }),
-            timestamp_tolerance: get("timestamp_tolerance").and_then(|v| v.parse().ok()),
+            node_region: None,
+            heartbeat_interval: None,
+            allowed_ports: None,
+            timestamp_tolerance: None,
             log_level: get("log_level"),
             log_json: get("log_json").and_then(|v| v.parse().ok()),
-            enable_tls: get("enable_tls").and_then(|v| v.parse().ok()),
+            enable_tls: None,
             tls_cert: None,
             tls_key: None,
         }
@@ -259,7 +211,7 @@ impl App {
         self.modified = false;
         self.saved_once = true;
         self.message = Some((
-            format!("✓ 已保存到 {}", self.config_path.display()),
+            format!("saved to {}", self.config_path.display()),
             Instant::now(),
             false,
         ));
@@ -304,7 +256,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Err(e) = self.save() {
-                    self.message = Some((format!("✗ {}", e), Instant::now(), true));
+                    self.message = Some((format!("error: {}", e), Instant::now(), true));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -321,16 +273,30 @@ impl App {
                 let field = &self.fields[self.selected];
                 match field.kind {
                     FieldKind::Bool => {
-                        let toggled = if field.value == "true" { "false" } else { "true" };
-                        self.fields[self.selected].value = toggled.into();
-                        self.modified = true;
+                        let toggled = if field.value == "true" {
+                            "false"
+                        } else {
+                            "true"
+                        };
+                        // Block enabling service install without root/systemd
+                        if field.key == "install_service"
+                            && toggled == "true"
+                            && !super::service::is_available()
+                        {
+                            self.message = Some((
+                                "requires root with systemd, use: sudo aether-proxy setup".into(),
+                                Instant::now(),
+                                true,
+                            ));
+                        } else {
+                            self.fields[self.selected].value = toggled.into();
+                            self.modified = true;
+                        }
                     }
                     FieldKind::LogLevel => {
-                        const LEVELS: &[&str] =
-                            &["trace", "debug", "info", "warn", "error"];
+                        const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
                         let idx = LEVELS.iter().position(|l| *l == field.value).unwrap_or(2);
-                        self.fields[self.selected].value =
-                            LEVELS[(idx + 1) % LEVELS.len()].into();
+                        self.fields[self.selected].value = LEVELS[(idx + 1) % LEVELS.len()].into();
                         self.modified = true;
                     }
                     _ => {
@@ -343,7 +309,7 @@ impl App {
             KeyCode::Tab => {
                 // Quick save shortcut
                 if let Err(e) = self.save() {
-                    self.message = Some((format!("✗ {}", e), Instant::now(), true));
+                    self.message = Some((format!("error: {}", e), Instant::now(), true));
                 }
             }
             _ => {}
@@ -354,7 +320,7 @@ impl App {
     fn handle_edit(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
-                // Cancel — discard changes to this field
+                // Cancel -- discard changes to this field
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => {
@@ -363,8 +329,7 @@ impl App {
                     self.modified = true;
                     self.mode = Mode::Normal;
                 } else {
-                    self.message =
-                        Some(("✗ 格式无效".into(), Instant::now(), true));
+                    self.message = Some(("invalid format".into(), Instant::now(), true));
                 }
             }
             KeyCode::Backspace => {
@@ -405,12 +370,6 @@ impl App {
         let buf = &self.edit_buffer;
         match kind {
             FieldKind::Number => buf.is_empty() || buf.parse::<u64>().is_ok(),
-            FieldKind::PortList => {
-                buf.is_empty()
-                    || buf
-                        .split(',')
-                        .all(|s| s.trim().is_empty() || s.trim().parse::<u16>().is_ok())
-            }
             _ => true,
         }
     }
@@ -468,7 +427,7 @@ fn render_fields(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let selected = i == app.selected;
-        let indicator = if selected { " ▸ " } else { "   " };
+        let indicator = if selected { " > " } else { "   " };
 
         let label_style = if selected {
             Style::default()
@@ -482,10 +441,7 @@ fn render_fields(f: &mut Frame, app: &mut App, area: Rect) {
 
         // Value display
         let (value_text, value_style) = if app.mode == Mode::Editing && selected {
-            (
-                app.edit_buffer.clone(),
-                Style::default().fg(Color::Yellow),
-            )
+            (app.edit_buffer.clone(), Style::default().fg(Color::Yellow))
         } else {
             field_display(field)
         };
@@ -518,9 +474,9 @@ fn render_fields(f: &mut Frame, app: &mut App, area: Rect) {
 fn field_display(field: &Field) -> (String, Style) {
     if field.value.is_empty() {
         let text = if field.required {
-            "(必填)".into()
+            "(required)".into()
         } else {
-            "—".into()
+            "-".into()
         };
         let color = if field.required {
             Color::Red
@@ -532,14 +488,14 @@ fn field_display(field: &Field) -> (String, Style) {
 
     match field.kind {
         FieldKind::Secret => (
-            "•".repeat(field.value.len().min(20)),
+            "*".repeat(field.value.len().min(20)),
             Style::default().fg(Color::White),
         ),
         FieldKind::Bool => {
             if field.value == "true" {
-                ("✓ 开启".into(), Style::default().fg(Color::Green))
+                ("[x] on".into(), Style::default().fg(Color::Green))
             } else {
-                ("✗ 关闭".into(), Style::default().fg(Color::DarkGray))
+                ("[ ] off".into(), Style::default().fg(Color::DarkGray))
             }
         }
         FieldKind::LogLevel => {
@@ -561,9 +517,9 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let help = app.fields[app.selected].help;
 
     let keybindings = if app.mode == Mode::Editing {
-        "Enter 确认  Esc 取消"
+        "Enter confirm  Esc cancel"
     } else {
-        "↑↓ 选择  Enter 编辑  ^S 保存  q 退出"
+        "Up/Down select  Enter edit  ^S save  q quit"
     };
 
     let mut status_spans: Vec<Span> = vec![Span::styled(
@@ -631,11 +587,40 @@ pub fn run(config_path: PathBuf) -> anyhow::Result<()> {
     // Post-TUI message
     if app.saved_once {
         eprintln!();
-        eprintln!("  配置已保存到 {}", config_path.display());
+        eprintln!("  Config saved to {}", config_path.display());
         eprintln!();
-        eprintln!("  启动方式:");
-        eprintln!("    aether-proxy              (自动读取 {})", config_path.display());
-        eprintln!();
+
+        let wants_service = app
+            .fields
+            .iter()
+            .find(|f| f.key == "install_service")
+            .map(|f| f.value == "true")
+            .unwrap_or(false);
+
+        if wants_service {
+            match super::service::install_service(&config_path) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("  Service install failed: {}", e);
+                    eprintln!();
+                }
+            }
+        } else {
+            // Uninstall service if it was previously installed
+            if super::service::is_installed() {
+                if let Err(e) = super::service::uninstall_service() {
+                    eprintln!("  Service uninstall failed: {}", e);
+                    eprintln!();
+                }
+            }
+
+            eprintln!("  Run with:");
+            eprintln!(
+                "    aether-proxy              (auto-reads {})",
+                config_path.display()
+            );
+            eprintln!();
+        }
     }
 
     Ok(())

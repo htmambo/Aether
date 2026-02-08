@@ -848,6 +848,16 @@ class ProxyNode(Base):
         String(128), nullable=True, comment="TLS 证书 SHA-256 指纹（hex）"
     )
 
+    # 硬件信息（注册时上报，JSON 可扩展）
+    hardware_info = Column(
+        JSON,
+        nullable=True,
+        comment="硬件信息 (cpu_cores, total_memory_mb, os_info, fd_limit, ...)",
+    )
+    estimated_max_concurrency = Column(
+        Integer, nullable=True, comment="基于硬件估算的最大并发连接数"
+    )
+
     # 管理端远程配置（通过心跳下发给 aether-proxy）
     remote_config = Column(
         JSON,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::auth;
 use crate::config::Config;
@@ -56,22 +56,28 @@ pub async fn handle_plain(
         }
     };
 
-    info!(target = %target_addr, method = %req.method(), "HTTP proxy forwarding");
+    let method = req.method().clone();
+    debug!(target = %target_addr, method = %method, "HTTP proxy forwarding");
 
     // Build outgoing request (strip proxy headers, use relative URI)
-    let path_and_query = uri
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
+    let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
 
     let mut builder = Request::builder()
         .method(req.method())
         .uri(path_and_query)
         .version(req.version());
 
-    // Copy headers, skipping proxy-specific ones
+    // Copy headers, skipping proxy-specific and forwarding-related ones
     for (name, value) in req.headers() {
-        if name == "proxy-authorization" || name == "proxy-connection" {
+        if name == "proxy-authorization"
+            || name == "proxy-connection"
+            || name == "x-forwarded-for"
+            || name == "x-forwarded-host"
+            || name == "x-forwarded-proto"
+            || name == "x-real-ip"
+            || name == "forwarded"
+            || name == "via"
+        {
             continue;
         }
         builder = builder.header(name, value);
@@ -116,7 +122,7 @@ pub async fn handle_plain(
 
     match sender.send_request(outgoing).await {
         Ok(resp) => {
-            info!(target = %target_addr, status = resp.status().as_u16(), "HTTP proxy response");
+            debug!(target = %target_addr, method = %method, status = resp.status().as_u16(), "HTTP proxy response");
             // Stream the response body directly — no buffering
             let (parts, body) = resp.into_parts();
             let body: BoxBody = body

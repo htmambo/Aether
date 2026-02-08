@@ -107,7 +107,10 @@
           >
 
           <!-- 主区域：拖拽 或 粘贴输入框（同一位置切换） -->
-          <div v-if="!importText" class="mt-3">
+          <div
+            v-if="!importText"
+            class="mt-3"
+          >
             <!-- 拖拽模式 -->
             <div
               v-if="!showManualInput"
@@ -168,7 +171,10 @@
           </div>
 
           <!-- 已有内容（文件导入后）：显示文本框 -->
-          <div v-if="importText" class="space-y-2">
+          <div
+            v-if="importText"
+            class="space-y-2"
+          >
             <div class="flex items-center justify-between">
               <span class="text-xs text-muted-foreground">{{ importFileName || '已粘贴内容' }}</span>
               <button

@@ -1,21 +1,20 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
+use hyper::rt::{Read, Write};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request};
-use hyper::rt::{Read, Write};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
-use crate::config::Config;
-use crate::proxy::{connect, plain, tls};
-use crate::runtime::SharedDynamicConfig;
+use crate::proxy::{connect, delegate, plain, tls};
+use crate::state::AppState;
 
 /// Start the proxy server.
 ///
@@ -23,20 +22,17 @@ use crate::runtime::SharedDynamicConfig;
 /// - CONNECT requests -> tunnel handler
 /// - Other HTTP requests -> plain forward proxy handler
 ///
-/// When `tls_acceptor` is provided, the server operates in dual-stack mode:
+/// When TLS is configured, the server operates in dual-stack mode:
 /// it peeks at the first byte of each connection to distinguish TLS ClientHello
 /// (0x16) from plain HTTP, and handles both on the same port.
 pub async fn run(
-    config: Arc<Config>,
-    node_id: Arc<RwLock<String>>,
-    dynamic: SharedDynamicConfig,
-    tls_acceptor: Option<TlsAcceptor>,
+    state: &Arc<AppState>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.listen_port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], state.config.listen_port));
     let listener = TcpListener::bind(addr).await?;
 
-    if tls_acceptor.is_some() {
+    if state.tls_acceptor.is_some() {
         info!(addr = %addr, "proxy server listening (HTTP+TLS dual-stack)");
     } else {
         info!(addr = %addr, "proxy server listening (HTTP only)");
@@ -53,26 +49,22 @@ pub async fn run(
                     }
                 };
 
-                info!(peer = %peer_addr, "new connection");
+                debug!(peer = %peer_addr, "new connection");
 
-                let config = Arc::clone(&config);
-                let node_id = Arc::clone(&node_id);
-                let dynamic = Arc::clone(&dynamic);
-                let tls_acceptor = tls_acceptor.clone();
+                let state = Arc::clone(state);
+                state.active_connections.fetch_add(1, Ordering::Relaxed);
 
                 tokio::task::spawn(async move {
                     // Dual-stack: peek first byte to decide TLS vs plain HTTP
-                    if let Some(acceptor) = &tls_acceptor {
+                    if let Some(ref acceptor) = state.tls_acceptor {
                         if tls::is_tls_client_hello(&stream).await {
-                            match acceptor.accept(stream).await {
+                            match acceptor.clone().accept(stream).await {
                                 Ok(tls_stream) => {
                                     debug!(peer = %peer_addr, "TLS handshake ok");
                                     serve_connection(
                                         TokioIo::new(tls_stream),
                                         peer_addr,
-                                        config,
-                                        node_id,
-                                        dynamic,
+                                        &state,
                                     )
                                     .await;
                                 }
@@ -80,6 +72,7 @@ pub async fn run(
                                     debug!(peer = %peer_addr, error = %e, "TLS handshake failed");
                                 }
                             }
+                            state.active_connections.fetch_sub(1, Ordering::Relaxed);
                             return;
                         }
                     }
@@ -88,11 +81,11 @@ pub async fn run(
                     serve_connection(
                         TokioIo::new(stream),
                         peer_addr,
-                        config,
-                        node_id,
-                        dynamic,
+                        &state,
                     )
                     .await;
+
+                    state.active_connections.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             _ = shutdown_rx.changed() => {
@@ -106,22 +99,26 @@ pub async fn run(
 }
 
 /// Serve a single HTTP/1.1 connection (works over both plain TCP and TLS).
-async fn serve_connection<I>(
-    io: I,
-    peer_addr: SocketAddr,
-    config: Arc<Config>,
-    node_id: Arc<RwLock<String>>,
-    dynamic: SharedDynamicConfig,
-) where
+async fn serve_connection<I>(io: I, peer_addr: SocketAddr, state: &Arc<AppState>)
+where
     I: Read + Write + Unpin + Send + 'static,
 {
+    let config = Arc::clone(&state.config);
+    let node_id = Arc::clone(&state.node_id);
+    let dynamic = Arc::clone(&state.dynamic);
+    let delegate_client = state.delegate_client.clone();
+
     let service = service_fn(move |req: Request<Incoming>| {
         let config = Arc::clone(&config);
         let node_id = Arc::clone(&node_id);
         let dynamic = Arc::clone(&dynamic);
+        let delegate_client = delegate_client.clone();
 
         async move {
-            type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>;
+            type BoxBody = http_body_util::combinators::BoxBody<
+                bytes::Bytes,
+                Box<dyn std::error::Error + Send + Sync>,
+            >;
 
             // Snapshot current dynamic values (may be updated by remote config)
             let current_node_id = node_id.read().unwrap().clone();
@@ -145,6 +142,18 @@ async fn serve_connection<I>(
                         .boxed()
                 });
                 Ok::<_, hyper::Error>(resp)
+            } else if req.uri().path() == "/_aether/delegate" && req.method() == hyper::Method::POST
+            {
+                let resp = delegate::handle_delegate(
+                    req,
+                    config,
+                    &current_node_id,
+                    &allowed_ports,
+                    timestamp_tolerance,
+                    &delegate_client,
+                )
+                .await;
+                Ok(resp)
             } else {
                 let resp = plain::handle_plain(
                     req,
@@ -154,7 +163,6 @@ async fn serve_connection<I>(
                     timestamp_tolerance,
                 )
                 .await;
-                // plain::handle_plain already returns BoxBody (streaming)
                 Ok(resp)
             }
         }

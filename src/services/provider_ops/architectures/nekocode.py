@@ -180,7 +180,7 @@ class NekoCodeArchitecture(ProviderArchitecture):
                 "timeout": 10,
                 "verify": get_ssl_context(),
             }
-            from src.clients.http_client import resolve_ops_proxy
+            from src.services.proxy_node.resolver import resolve_ops_proxy
 
             proxy = resolve_ops_proxy(config)
             if proxy:

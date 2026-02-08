@@ -51,7 +51,7 @@ class ProviderConnector(ABC):
         self._last_error: str | None = None
 
         # 代理配置（支持 proxy_node_id 和旧的 proxy URL）
-        from src.clients.http_client import resolve_ops_proxy
+        from src.services.proxy_node.resolver import resolve_ops_proxy
 
         self._proxy: str | httpx.Proxy | None = resolve_ops_proxy(self.config)
 

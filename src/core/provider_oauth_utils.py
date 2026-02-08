@@ -7,9 +7,10 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import jwt
 
-from src.clients.http_client import HTTPClientPool, build_proxy_url
+from src.clients.http_client import HTTPClientPool
 from src.core.logger import logger
 from src.core.provider_types import ProviderType
+from src.services.proxy_node.resolver import build_proxy_url
 
 _ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json"

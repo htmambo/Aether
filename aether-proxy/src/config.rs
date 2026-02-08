@@ -64,11 +64,19 @@ pub struct Config {
     pub enable_tls: bool,
 
     /// Path to TLS certificate PEM file
-    #[arg(long, env = "AETHER_PROXY_TLS_CERT", default_value = "aether-proxy-cert.pem")]
+    #[arg(
+        long,
+        env = "AETHER_PROXY_TLS_CERT",
+        default_value = "aether-proxy-cert.pem"
+    )]
     pub tls_cert: String,
 
     /// Path to TLS private key PEM file
-    #[arg(long, env = "AETHER_PROXY_TLS_KEY", default_value = "aether-proxy-key.pem")]
+    #[arg(
+        long,
+        env = "AETHER_PROXY_TLS_KEY",
+        default_value = "aether-proxy-key.pem"
+    )]
     pub tls_key: String,
 }
 

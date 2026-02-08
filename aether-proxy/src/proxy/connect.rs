@@ -4,7 +4,7 @@ use std::sync::Arc;
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use tokio::net::TcpStream;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::auth;
 use crate::config::Config;
@@ -53,7 +53,7 @@ pub async fn handle_connect(
         }
     };
 
-    info!(target = %target_addr, "CONNECT tunnel establishing");
+    debug!(target = %target_addr, "CONNECT tunnel establishing");
 
     // Connect to target
     let target_stream = match TcpStream::connect(target_addr).await {
@@ -65,28 +65,29 @@ pub async fn handle_connect(
     };
 
     // Respond 200 and upgrade connection to raw TCP tunnel
+    let target_display = target_addr.to_string();
     tokio::task::spawn(async move {
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
-                let mut upgraded =
-                    hyper_util::rt::TokioIo::new(upgraded);
+                let mut upgraded = hyper_util::rt::TokioIo::new(upgraded);
                 let mut target = target_stream;
 
                 match tokio::io::copy_bidirectional(&mut upgraded, &mut target).await {
                     Ok((from_client, from_target)) => {
-                        info!(
+                        debug!(
+                            target = %target_display,
                             from_client,
                             from_target,
                             "CONNECT tunnel closed"
                         );
                     }
                     Err(e) => {
-                        debug!(error = %e, "CONNECT tunnel error");
+                        debug!(target = %target_display, error = %e, "CONNECT tunnel error");
                     }
                 }
             }
             Err(e) => {
-                warn!(error = %e, "CONNECT upgrade failed");
+                warn!(target = %target_display, error = %e, "CONNECT upgrade failed");
             }
         }
     });

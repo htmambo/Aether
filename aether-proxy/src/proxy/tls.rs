@@ -25,10 +25,7 @@ pub fn ensure_self_signed_cert(cert_path: &Path, key_path: &Path) -> anyhow::Res
 
     info!("generating self-signed TLS certificate");
 
-    let mut params = CertificateParams::new(vec![
-        "localhost".into(),
-        "aether-proxy".into(),
-    ])?;
+    let mut params = CertificateParams::new(vec!["localhost".into(), "aether-proxy".into()])?;
     params.distinguished_name = rcgen::DistinguishedName::new();
     params
         .distinguished_name
@@ -65,8 +62,8 @@ pub fn build_tls_acceptor(cert_path: &Path, key_path: &Path) -> anyhow::Result<T
     let cert_file = fs::File::open(cert_path)?;
     let key_file = fs::File::open(key_path)?;
 
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut BufReader::new(cert_file))
-        .collect::<Result<Vec<_>, _>>()?;
+    let certs: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut BufReader::new(cert_file)).collect::<Result<Vec<_>, _>>()?;
 
     if certs.is_empty() {
         anyhow::bail!("no certificates found in {}", cert_path.display());
@@ -89,8 +86,7 @@ pub fn build_tls_acceptor(cert_path: &Path, key_path: &Path) -> anyhow::Result<T
 pub fn cert_sha256_fingerprint(cert_path: &Path) -> anyhow::Result<String> {
     let cert_file = fs::File::open(cert_path)?;
     let certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut BufReader::new(cert_file))
-            .collect::<Result<Vec<_>, _>>()?;
+        rustls_pemfile::certs(&mut BufReader::new(cert_file)).collect::<Result<Vec<_>, _>>()?;
 
     let cert = certs
         .first()

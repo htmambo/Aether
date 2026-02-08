@@ -1,6 +1,7 @@
 import apiClient from './client'
 
 export interface ProxyNodeRemoteConfig {
+  node_name?: string
   allowed_ports?: number[]
   log_level?: string
   heartbeat_interval?: number
@@ -19,6 +20,9 @@ export interface ProxyNode {
   proxy_url?: string
   proxy_username?: string
   proxy_password?: string  // 脱敏后的密码
+  // 硬件信息（aether-proxy 节点）
+  hardware_info: Record<string, any> | null
+  estimated_max_concurrency: number | null
   // 远程配置（aether-proxy 节点）
   remote_config: ProxyNodeRemoteConfig | null
   config_version: number

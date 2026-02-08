@@ -180,7 +180,7 @@ class RequestExecutor:
                     )
                 else:
                     # 非流式请求：标记为 success 状态
-                    from src.clients.http_client import resolve_proxy_info
+                    from src.services.proxy_node.resolver import resolve_proxy_info
 
                     _extra: dict[str, Any] = {
                         "is_cached_user": is_cached_user,
